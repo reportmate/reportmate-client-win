@@ -5,7 +5,7 @@ using System.Collections.Generic;
 namespace ReportMate.WindowsClient.Configuration;
 
 /// <summary>
-/// Configuration settings for the ReportMate Windows Client
+/// Configuration settings for ReportMate
 /// </summary>
 public class ReportMateClientConfiguration
 {
@@ -70,7 +70,7 @@ public class ReportMateClientConfiguration
     /// <summary>
     /// Custom user agent for API requests
     /// </summary>
-    public string UserAgent { get; set; } = "ReportMate-WindowsClient/1.0";
+    public string UserAgent { get; set; } = "ReportMate/1.0";
 
     /// <summary>
     /// Enable Cimian integration features

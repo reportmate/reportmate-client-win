@@ -72,7 +72,7 @@ try {
     # Check if ReportMate is installed
     if (-not (Test-Path $ReportMateExe)) {
         Write-Log "WARNING: ReportMate not installed at $ReportMateExe" "WARN"
-        Write-Log "Please install ReportMate Windows client" "WARN"
+        Write-Log "Please install ReportMate client" "WARN"
         exit 0
     }
     

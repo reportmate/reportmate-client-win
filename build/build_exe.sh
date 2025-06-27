@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# ReportMate Windows Client Build Script
+# ReportMate Build Script
 # Builds the Windows client executable for distribution
 
 set -e
@@ -21,7 +21,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}🚀 Building ReportMate Windows Client${NC}"
+echo -e "${GREEN}🚀 Building ReportMate${NC}"
 echo "=================================="
 
 # Clean previous builds
@@ -44,7 +44,7 @@ DOTNET_VERSION=$(dotnet --version)
 echo "✅ .NET SDK version: $DOTNET_VERSION"
 
 # Build the application
-echo -e "${YELLOW}🔨 Building ReportMate Windows Client...${NC}"
+echo -e "${YELLOW}🔨 Building ReportMate...${NC}"
 
 cd "$PROJECT_DIR"
 
@@ -92,7 +92,7 @@ cp "$PUBLISH_DIR/runner.exe" "$PROGRAM_FILES_PAYLOAD_DIR/"
 
 # Create version info file in Program Files
 cat > "$PROGRAM_FILES_PAYLOAD_DIR/version.txt" << EOF
-ReportMate Windows Client
+ReportMate
 Version: $(dotnet --version)
 Build Date: $(date)
 Platform: Windows x64
@@ -130,7 +130,7 @@ cd "$PUBLISH_DIR"
 
 # Create version info file
 cat > version.txt << EOF
-ReportMate Windows Client
+ReportMate
 Version: $(dotnet --version)
 Build Date: $(date)
 Platform: Windows x64

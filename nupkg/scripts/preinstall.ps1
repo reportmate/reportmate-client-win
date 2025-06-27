@@ -1,9 +1,9 @@
-# ReportMate Windows Client Pre-Installation Script
+# ReportMate Pre-Installation Script
 # Prepares the system for ReportMate installation
 
 $ErrorActionPreference = "Continue"
 
-Write-Host "ReportMate Windows Client Pre-Installation Script"
+Write-Host "ReportMate Pre-Installation Script"
 Write-Host "================================================="
 
 # Check if running as administrator
@@ -37,15 +37,6 @@ if ($ReportMateProcesses) {
     Write-Host "Stopping existing ReportMate processes..."
     $ReportMateProcesses | Stop-Process -Force
     Start-Sleep -Seconds 2
-}
-
-# Check for conflicting software (optional)
-$ConflictingProcesses = @("munki", "jamf")
-foreach ($ProcessName in $ConflictingProcesses) {
-    $Process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-    if ($Process) {
-        Write-Warning "Detected potentially conflicting software: $ProcessName"
-    }
 }
 
 # Check available disk space

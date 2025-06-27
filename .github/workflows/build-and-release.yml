@@ -1,4 +1,4 @@
-name: Build and Release ReportMate Windows Client
+name: Build and Release ReportMate
 
 on:
   push:
@@ -116,7 +116,7 @@ jobs:
         
         # Create version file in Program Files
         $version = "${{ steps.version.outputs.VERSION }}"
-        $versionContent = "ReportMate Windows Client`nVersion: $version`nBuild Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')`nPlatform: Windows x64`nCommit: $env:GITHUB_SHA"
+        $versionContent = "ReportMate`nVersion: $version`nBuild Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')`nPlatform: Windows x64`nCommit: $env:GITHUB_SHA"
         $versionContent | Out-File "nupkg/payload/Program Files/ReportMate/version.txt" -Encoding UTF8
         
         # Update version in build-info.yaml
@@ -140,6 +140,9 @@ jobs:
     - name: Create MSI installer
       shell: powershell
       run: |
+        # Ensure build output directory exists
+        New-Item -ItemType Directory -Path "build/output" -Force
+        
         # Run the MSI creation script using the nupkg payload structure
         .\build\build_msi.ps1 -Version "${{ steps.version.outputs.VERSION }}" -SourcePath "nupkg/payload" -OutputPath "build/output"
         
@@ -170,6 +173,9 @@ jobs:
     - name: Create NUPKG package
       shell: powershell
       run: |
+        # Ensure build output directory exists
+        New-Item -ItemType Directory -Path "build/output" -Force
+        
         # Install NuGet CLI if not available
         if (-not (Get-Command nuget -ErrorAction SilentlyContinue)) {
           Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile "nuget.exe"
@@ -186,6 +192,9 @@ jobs:
         if ($nupkgFile) {
           Move-Item $nupkgFile.FullName "build/output/"
           echo "Created NUPKG: $($nupkgFile.Name)"
+        } else {
+          echo "Warning: No .nupkg file found in nupkg directory"
+          Get-ChildItem -Path "nupkg" | ForEach-Object { echo "Found: $($_.Name)" }
         }
         
     - name: List build artifacts
@@ -197,7 +206,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: reportmate-windows-client-${{ steps.version.outputs.VERSION }}
+        name: reportmate-${{ steps.version.outputs.VERSION }}
         path: |
           build/output/*.msi
           build/output/*.nupkg
@@ -227,7 +236,7 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
-        name: reportmate-windows-client-${{ needs.build-and-package.outputs.version }}
+        name: reportmate-${{ needs.build-and-package.outputs.version }}
         
     - name: Test MSI installation
       shell: powershell
