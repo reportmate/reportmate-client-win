@@ -266,33 +266,32 @@ if (-not $SkipSigning) {
 # Create silent installation script
 Write-Yellow "📝 Creating deployment scripts..."
 
-$SilentInstallScript = @"
-@echo off
-REM ReportMate Windows Client Silent Installation Script
-REM For use with Group Policy or Configuration Manager
-
-echo Installing ReportMate Windows Client...
-
-REM Install silently with logging
-msiexec /i "ReportMate-WindowsClient-VERSION_PLACEHOLDER.msi" /quiet /l*v "%TEMP%\ReportMate-Install.log"
-
-if %ERRORLEVEL% EQU 0 (
-    echo Installation completed successfully
-    echo Log file: %TEMP%\ReportMate-Install.log
-) else (
-    echo Installation failed with error code %ERRORLEVEL%
-    echo Check log file: %TEMP%\ReportMate-Install.log
-    exit /b %ERRORLEVEL%
-)
-
-REM Configure API URL if provided
-if not "%REPORTMATE_API_URL%"=="" (
-    echo Configuring API URL...
-    "C:\Program Files\ReportMate\runner.exe" install --api-url "%REPORTMATE_API_URL%"
-)
-
-echo ReportMate Windows Client installation completed
-"@
+# Build the silent install script content using string concatenation instead of here-strings
+$SilentInstallScript = "@echo off`r`n"
+$SilentInstallScript += "REM ReportMate Windows Client Silent Installation Script`r`n"
+$SilentInstallScript += "REM For use with Group Policy or Configuration Manager`r`n"
+$SilentInstallScript += "`r`n"
+$SilentInstallScript += "echo Installing ReportMate Windows Client...`r`n"
+$SilentInstallScript += "`r`n"
+$SilentInstallScript += "REM Install silently with logging`r`n"
+$SilentInstallScript += "msiexec /i `"ReportMate-WindowsClient-$Version.msi`" /quiet /l*v `"%TEMP%\ReportMate-Install.log`"`r`n"
+$SilentInstallScript += "`r`n"
+$SilentInstallScript += "if %ERRORLEVEL% EQU 0 (`r`n"
+$SilentInstallScript += "    echo Installation completed successfully`r`n"
+$SilentInstallScript += "    echo Log file: %TEMP%\ReportMate-Install.log`r`n"
+$SilentInstallScript += ") else (`r`n"
+$SilentInstallScript += "    echo Installation failed with error code %ERRORLEVEL%`r`n"
+$SilentInstallScript += "    echo Check log file: %TEMP%\ReportMate-Install.log`r`n"
+$SilentInstallScript += "    exit /b %ERRORLEVEL%`r`n"
+$SilentInstallScript += ")`r`n"
+$SilentInstallScript += "`r`n"
+$SilentInstallScript += "REM Configure API URL if provided`r`n"
+$SilentInstallScript += "if not `"%REPORTMATE_API_URL%`"==`"`" (`r`n"
+$SilentInstallScript += "    echo Configuring API URL...`r`n"
+$SilentInstallScript += "    `"C:\Program Files\ReportMate\runner.exe`" install --api-url `"%REPORTMATE_API_URL%`"`r`n"
+$SilentInstallScript += ")`r`n"
+$SilentInstallScript += "`r`n"
+$SilentInstallScript += "echo ReportMate Windows Client installation completed`r`n"
 
 # Replace the placeholder with the actual version
 $SilentInstallScript = $SilentInstallScript -replace "VERSION_PLACEHOLDER", $Version
@@ -300,78 +299,76 @@ $SilentInstallScript = $SilentInstallScript -replace "VERSION_PLACEHOLDER", $Ver
 $SilentInstallScript | Out-File -FilePath (Join-Path $OutputPath "install-silent.bat") -Encoding ASCII
 
 # Create uninstallation script
-$UninstallScript = @"
-@echo off
-REM ReportMate Windows Client Uninstallation Script
-
-echo Uninstalling ReportMate Windows Client...
-
-REM Get product code from registry
-for /f "tokens=2*" %%a in ('reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" /s /f "ReportMate Windows Client" /k 2^>nul ^| find "HKEY_LOCAL_MACHINE"') do (
-    set PRODUCT_CODE=%%b
-    goto :found
-)
-
-:found
-if not "%PRODUCT_CODE%"=="" (
-    echo Found product code: %PRODUCT_CODE%
-    msiexec /x "%PRODUCT_CODE%" /quiet /l*v "%TEMP%\ReportMate-Uninstall.log"
-    echo Uninstallation completed
-) else (
-    echo ReportMate Windows Client not found in registry
-)
-"@
+# Build the uninstall script content using string concatenation instead of here-strings
+$UninstallScript = "@echo off`r`n"
+$UninstallScript += "REM ReportMate Windows Client Uninstallation Script`r`n"
+$UninstallScript += "`r`n"
+$UninstallScript += "echo Uninstalling ReportMate Windows Client...`r`n"
+$UninstallScript += "`r`n"
+$UninstallScript += "REM Get product code from registry`r`n"
+$UninstallScript += "for /f `"tokens=2*`" %%a in ('reg query `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`" /s /f `"ReportMate Windows Client`" /k 2^>nul ^| find `"HKEY_LOCAL_MACHINE`"') do (`r`n"
+$UninstallScript += "    set PRODUCT_CODE=%%b`r`n"
+$UninstallScript += "    goto :found`r`n"
+$UninstallScript += ")`r`n"
+$UninstallScript += "`r`n"
+$UninstallScript += ":found`r`n"
+$UninstallScript += "if not `"%PRODUCT_CODE%`"==`"`" (`r`n"
+$UninstallScript += "    echo Found product code: %PRODUCT_CODE%`r`n"
+$UninstallScript += "    msiexec /x `"%PRODUCT_CODE%`" /quiet /l*v `"%TEMP%\ReportMate-Uninstall.log`"`r`n"
+$UninstallScript += "    echo Uninstallation completed`r`n"
+$UninstallScript += ") else (`r`n"
+$UninstallScript += "    echo ReportMate Windows Client not found in registry`r`n"
+$UninstallScript += ")`r`n"
 
 $UninstallScript | Out-File -FilePath (Join-Path $OutputPath "uninstall.bat") -Encoding ASCII
 
 # Create PowerShell deployment script
-$PowerShellScript = @"
-# ReportMate Windows Client PowerShell Deployment Script
-# For use with PowerShell DSC or remote execution
-
-param(
-    [string]$ApiUrl = "",
-    [switch]$Uninstall = `$false
-)
-
-if (`$Uninstall) {
-    Write-Host "Uninstalling ReportMate Windows Client..."
-    
-    # Find and uninstall existing version
-    `$app = Get-WmiObject -Class Win32_Product | Where-Object { `$_.Name -like "*ReportMate*" }
-    if (`$app) {
-        `$app.Uninstall()
-        Write-Host "Uninstallation completed"
-    } else {
-        Write-Host "ReportMate Windows Client not found"
-    }
-} else {
-    Write-Host "Installing ReportMate Windows Client..."
-    
-    # Install MSI
-    `$msiPath = Join-Path `$PSScriptRoot "ReportMate-WindowsClient-VERSION_PLACEHOLDER.msi"
-    `$logPath = Join-Path `$env:TEMP "ReportMate-Install.log"
-    
-    `$process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`$msiPath", "/quiet", "/l*v", "`$logPath" -Wait -PassThru
-    
-    if (`$process.ExitCode -eq 0) {
-        Write-Host "Installation completed successfully"
-        
-        # Configure API URL if provided
-        if (`$ApiUrl) {
-            Write-Host "Configuring API URL: `$ApiUrl"
-            & "C:\Program Files\ReportMate\runner.exe" install --api-url "`$ApiUrl"
-        }
-        
-        # Test installation
-        & "C:\Program Files\ReportMate\runner.exe" test
-        
-    } else {
-        Write-Error "Installation failed with exit code: `$(`$process.ExitCode)"
-        Write-Host "Check log file: `$logPath"
-    }
-}
-"@
+# Build the PowerShell script content using string concatenation instead of here-strings
+$PowerShellScript = "# ReportMate Windows Client PowerShell Deployment Script`r`n"
+$PowerShellScript += "# For use with PowerShell DSC or remote execution`r`n"
+$PowerShellScript += "`r`n"
+$PowerShellScript += "param(`r`n"
+$PowerShellScript += "    [string]`$ApiUrl = `"`",`r`n"
+$PowerShellScript += "    [switch]`$Uninstall = `$false`r`n"
+$PowerShellScript += ")`r`n"
+$PowerShellScript += "`r`n"
+$PowerShellScript += "if (`$Uninstall) {`r`n"
+$PowerShellScript += "    Write-Host `"Uninstalling ReportMate Windows Client...`"`r`n"
+$PowerShellScript += "    `r`n"
+$PowerShellScript += "    # Find and uninstall existing version`r`n"
+$PowerShellScript += "    `$app = Get-WmiObject -Class Win32_Product | Where-Object { `$_.Name -like `"*ReportMate*`" }`r`n"
+$PowerShellScript += "    if (`$app) {`r`n"
+$PowerShellScript += "        `$app.Uninstall()`r`n"
+$PowerShellScript += "        Write-Host `"Uninstallation completed`"`r`n"
+$PowerShellScript += "    } else {`r`n"
+$PowerShellScript += "        Write-Host `"ReportMate Windows Client not found`"`r`n"
+$PowerShellScript += "    }`r`n"
+$PowerShellScript += "} else {`r`n"
+$PowerShellScript += "    Write-Host `"Installing ReportMate Windows Client...`"`r`n"
+$PowerShellScript += "    `r`n"
+$PowerShellScript += "    # Install MSI`r`n"
+$PowerShellScript += "    `$msiPath = Join-Path `$PSScriptRoot `"ReportMate-WindowsClient-$Version.msi`"`r`n"
+$PowerShellScript += "    `$logPath = Join-Path `$env:TEMP `"ReportMate-Install.log`"`r`n"
+$PowerShellScript += "    `r`n"
+$PowerShellScript += "    `$process = Start-Process -FilePath `"msiexec.exe`" -ArgumentList `"/i`", `"`$msiPath`", `"/quiet`", `"/l*v`", `"`$logPath`" -Wait -PassThru`r`n"
+$PowerShellScript += "    `r`n"
+$PowerShellScript += "    if (`$process.ExitCode -eq 0) {`r`n"
+$PowerShellScript += "        Write-Host `"Installation completed successfully`"`r`n"
+$PowerShellScript += "        `r`n"
+$PowerShellScript += "        # Configure API URL if provided`r`n"
+$PowerShellScript += "        if (`$ApiUrl) {`r`n"
+$PowerShellScript += "            Write-Host `"Configuring API URL: `$ApiUrl`"`r`n"
+$PowerShellScript += "            & `"C:\Program Files\ReportMate\runner.exe`" install --api-url `"`$ApiUrl`"`r`n"
+$PowerShellScript += "        }`r`n"
+$PowerShellScript += "        `r`n"
+$PowerShellScript += "        # Test installation`r`n"
+$PowerShellScript += "        & `"C:\Program Files\ReportMate\runner.exe`" test`r`n"
+$PowerShellScript += "        `r`n"
+$PowerShellScript += "    } else {`r`n"
+$PowerShellScript += "        Write-Error `"Installation failed with exit code: `$(`$process.ExitCode)`"`r`n"
+$PowerShellScript += "        Write-Host `"Check log file: `$logPath`"`r`n"
+$PowerShellScript += "    }`r`n"
+$PowerShellScript += "}`r`n"
 
 $PowerShellScript | Out-File -FilePath (Join-Path $OutputPath "Deploy-ReportMate.ps1") -Encoding UTF8
 
