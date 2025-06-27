@@ -136,14 +136,13 @@ Write-Output ""
 
 # Set paths
 $RootDir = $PSScriptRoot
-$BuildDir = "$RootDir/build"
 $SrcDir = "$RootDir/src"
 $NupkgDir = "$RootDir/nupkg"
 $ProgramFilesPayloadDir = "$NupkgDir/payload/Program Files/ReportMate"
 $ProgramDataPayloadDir = "$NupkgDir/payload/ProgramData/ManagedReports"
 $CimianPayloadDir = "$NupkgDir/payload/Program Files/Cimian"
-$PublishDir = "$BuildDir/publish"
-$OutputDir = "$BuildDir/output"
+$PublishDir = "$RootDir/.publish"
+$OutputDir = "$RootDir/dist"
 
 Write-Info "Root Directory: $RootDir"
 Write-Info "Output Directory: $OutputDir"
@@ -231,7 +230,7 @@ if (-not $SkipNUPKG) {
     $cimipkgLocations = @(
         (Get-Command cimipkg -ErrorAction SilentlyContinue)?.Source,
         "$RootDir/cimipkg.exe",
-        "$BuildDir/cimipkg.exe"
+        "$OutputDir/cimipkg.exe"
     )
     
     # Find the first location that exists and has content
@@ -394,29 +393,24 @@ if (-not $SkipMSI -and $wixFound) {
     Write-Step "Creating MSI installer..."
     
     try {
-        # Create WiX-compatible version (x.x.x.x format, no pre-release suffixes)
-        # WiX version constraints: major/minor < 256, build < 65536
+        # Create WiX-compatible version (YYYY.MM.DD format without pre-release suffixes)
         $wixVersion = if ($Version -match '^(\d{4})\.(\d{2})\.(\d{2})') {
-            # YYYY.MM.DD format - convert to valid WiX version  
-            # Use YY.MM.DD.0 format to stay within constraints
-            $year = [int]$Matches[1] % 100  # Last 2 digits of year (e.g., 2025 -> 25)
-            $month = [int]$Matches[2]       # Month as-is
-            $day = [int]$Matches[3]         # Day as-is
-            "$year.$month.$day.0"
+            # YYYY.MM.DD format - use as-is (within WiX constraints)
+            "$($Matches[1]).$($Matches[2]).$($Matches[3])"
         } elseif ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
-            # Standard version format - ensure constraints
-            $major = [Math]::Min([int]$Matches[1], 255)
-            $minor = [Math]::Min([int]$Matches[2], 255)  
-            $build = [Math]::Min([int]$Matches[3], 65535)
-            "$major.$minor.$build.0"
+            # Standard version format - use as-is
+            "$($Matches[1]).$($Matches[2]).$($Matches[3])"
         } else {
             # Fallback to current date-based version
             $currentDate = Get-Date
-            $year = $currentDate.Year % 100
-            "$year.$($currentDate.Month).$($currentDate.Day).0"
+            "$($currentDate.Year).$($currentDate.Month).$($currentDate.Day)"
         }
         
         Write-Verbose "Using WiX version: $wixVersion"
+        
+        # Set API URL value (ensure it's never empty for WiX)
+        $apiUrlValue = if ($ApiUrl) { $ApiUrl } else { "https://api.reportmate.com" }
+        Write-Verbose "Using API URL: $apiUrlValue"
         
         # Generate WiX source
         $wixSource = @"
@@ -457,7 +451,7 @@ if (-not $SkipMSI -and $wixFound) {
       </Directory>
     </Directory>
     
-    <Property Id="API_URL" Value="$ApiUrl" />
+    <Property Id="API_URL" Value="$apiUrlValue" />
     
     <CustomAction Id="ConfigureRegistry"
                   Execute="deferred"
@@ -596,9 +590,20 @@ if (-not $SkipNUPKG) {
                 Wait = $true
                 PassThru = $true
                 WorkingDirectory = $NupkgDir
+                RedirectStandardOutput = $true
+                RedirectStandardError = $true
             }
             
             $process = Start-Process @processArgs
+            
+            # Get output and error streams
+            $stdout = $process.StandardOutput.ReadToEnd()
+            $stderr = $process.StandardError.ReadToEnd()
+            
+            Write-Verbose "cimipkg stdout: $stdout"
+            if ($stderr) {
+                Write-Verbose "cimipkg stderr: $stderr"
+            }
             
             if ($process.ExitCode -eq 0) {
                 # Find and move generated nupkg files
@@ -618,7 +623,7 @@ if (-not $SkipNUPKG) {
                     Write-Warning "No .nupkg files found after cimipkg execution"
                 }
             } else {
-                throw "cimipkg failed with exit code: $($process.ExitCode)"
+                throw "cimipkg failed with exit code: $($process.ExitCode). Output: $stdout. Error: $stderr"
             }
         } catch {
             Write-Error "NUPKG creation failed: $_"

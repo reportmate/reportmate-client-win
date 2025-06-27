@@ -1,12 +1,15 @@
 product:
   name: "ReportMate"
-  version: "2025.06.27-fix"
+  version: "2025.06.27-test2"
   identifier: "com.github.reportmate.windows"
   developer: "ReportMate"
   description: "Windows client that integrates with Cimian and collects comprehensive device data using osquery for enterprise device management and security monitoring."
 install_location: 'C:\Program Files\ReportMate\'
 postinstall_action: "none"
 signing_certificate: ""
+
+
+
 
 
 
