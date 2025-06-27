@@ -29,35 +29,35 @@ function Write-Yellow { Write-ColorOutput Yellow $args }
 function Write-Red { Write-ColorOutput Red $args }
 function Write-Blue { Write-ColorOutput Blue $args }
 
-Write-Green "🚀 Creating ReportMate Windows Client Installer"
+Write-Green "[CREATING] ReportMate Windows Client Installer"
 Write-Output "================================================"
 
 # Check prerequisites
-Write-Yellow "📋 Checking prerequisites..."
+Write-Yellow "[CHECKING] Prerequisites..."
 
 # Check if WiX is installed
 if (-not (Get-Command "candle.exe" -ErrorAction SilentlyContinue)) {
-    Write-Red "❌ WiX Toolset not found. Please install WiX Toolset v3.11 or later"
+    Write-Red "[ERROR] WiX Toolset not found. Please install WiX Toolset v3.11 or later"
     Write-Output "Download from: https://wixtoolset.org/releases/"
     exit 1
 }
 
-Write-Green "✅ WiX Toolset found"
+Write-Green "[OK] WiX Toolset found"
 
 # Check source files
 if (-not (Test-Path $SourcePath)) {
-    Write-Red "❌ Source path not found: $SourcePath"
+    Write-Red "[ERROR] Source path not found: $SourcePath"
     Write-Output "Please run build.sh first to create the publish directory"
     exit 1
 }
 
 $ExePath = Join-Path $SourcePath "runner.exe"
 if (-not (Test-Path $ExePath)) {
-    Write-Red "❌ runner.exe not found in source path"
+    Write-Red "[ERROR] runner.exe not found in source path"
     exit 1
 }
 
-Write-Green "✅ Source files found"
+Write-Green "[OK] Source files found"
 
 # Create output directory
 if (-not (Test-Path $OutputPath)) {
@@ -65,7 +65,7 @@ if (-not (Test-Path $OutputPath)) {
 }
 
 # Generate WiX source file
-Write-Yellow "📝 Generating WiX installer source..."
+Write-Yellow "[CREATING] Generating WiX installer source..."
 
 $WixSource = @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -228,10 +228,10 @@ $WixSource = @"
 $WixFile = Join-Path $OutputPath "ReportMate.wxs"
 $WixSource | Out-File -FilePath $WixFile -Encoding UTF8
 
-Write-Green "✅ WiX source generated: $WixFile"
+Write-Green "[OK] WiX source generated: $WixFile"
 
 # Compile the installer
-Write-Yellow "🔨 Compiling MSI installer..."
+Write-Yellow "[COMPILING] Compiling MSI installer..."
 
 $WixObj = Join-Path $OutputPath "ReportMate.wixobj"
 $MsiFile = Join-Path $OutputPath "ReportMate-WindowsClient-$Version.msi"
@@ -249,22 +249,22 @@ try {
         throw "Light linking failed"
     }
     
-    Write-Green "✅ MSI installer created successfully!"
+    Write-Green "[OK] MSI installer created successfully!"
     
 } catch {
-    Write-Red "❌ Installer compilation failed: $_"
+    Write-Red "[ERROR] Installer compilation failed: $_"
     exit 1
 }
 
 # Sign the installer (if not skipped)
 if (-not $SkipSigning) {
-    Write-Yellow "🔏 Signing installer..."
+    Write-Yellow "[SIGNING] Signing installer..."
     Write-Output "Note: Code signing requires a valid certificate. Skipping for now."
     Write-Output "For production deployment, use: signtool sign /f certificate.pfx /p password $MsiFile"
 }
 
 # Create silent installation script
-Write-Yellow "📝 Creating deployment scripts..."
+Write-Yellow "[CREATING] Creating deployment scripts..."
 
 # Build the silent install script content using string concatenation instead of here-strings
 $SilentInstallScript = "@echo off`r`n"
@@ -380,21 +380,21 @@ $deployContent | Out-File -FilePath $deployScriptPath -Encoding UTF8
 
 # Display summary
 Write-Output ""
-Write-Green "🎉 Installer Creation Complete!"
+Write-Green "[COMPLETE] Installer Creation Complete!"
 Write-Output "==============================="
 Write-Output "MSI Package: $MsiFile"
 Write-Output "Size: $((Get-Item $MsiFile).Length / 1MB | ForEach-Object { [math]::Round($_, 2) }) MB"
 Write-Output ""
-Write-Blue "📦 Deployment Files Created:"
-Write-Output "• $((Get-Item $MsiFile).Name) - MSI installer package"
-Write-Output "• install-silent.bat - Silent installation script"
-Write-Output "• uninstall.bat - Uninstallation script"
-Write-Output "• Deploy-ReportMate.ps1 - PowerShell deployment script"
+Write-Blue "[FILES] Deployment Files Created:"
+Write-Output "- $((Get-Item $MsiFile).Name) - MSI installer package"
+Write-Output "- install-silent.bat - Silent installation script"
+Write-Output "- uninstall.bat - Uninstallation script"
+Write-Output "- Deploy-ReportMate.ps1 - PowerShell deployment script"
 Write-Output ""
-Write-Blue "📖 Next Steps:"
+Write-Blue "[NEXT] Next Steps:"
 Write-Output "1. Test the installer on a clean Windows machine"
 Write-Output "2. Sign the MSI for production deployment"
 Write-Output "3. Deploy via Group Policy, SCCM, or Intune"
 Write-Output "4. Configure Cimian postflight scripts"
 Write-Output ""
-Write-Green "✨ Ready for deployment!"
+Write-Green "[READY] Ready for deployment!"
