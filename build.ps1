@@ -7,7 +7,7 @@
     
 .DESCRIPTION
     One-stop build script that replicates the CI pipeline locally.
-    Builds all package types: EXE, MSI, NUPKG, and ZIP.
+    Builds all package types: EXE, NUPKG, and ZIP.
     Supports creating tags and releases when run with appropriate parameters.
     
 .PARAMETER Version
@@ -18,9 +18,6 @@
     
 .PARAMETER SkipBuild
     Skip the .NET build step
-    
-.PARAMETER SkipMSI
-    Skip MSI creation
     
 .PARAMETER SkipNUPKG
     Skip NUPKG creation
@@ -52,8 +49,8 @@
     Build specific version with API URL
     
 .EXAMPLE
-    .\build.ps1 -Clean -SkipMSI -Verbose
-    Clean build, skip MSI creation, with verbose output
+    .\build.ps1 -Clean -Verbose
+    Clean build with verbose output
     
 .EXAMPLE
     .\build.ps1 -CreateTag -CreateRelease
@@ -69,7 +66,6 @@ param(
     [ValidateSet("Release", "Debug")]
     [string]$Configuration = "Release",
     [switch]$SkipBuild = $false,
-    [switch]$SkipMSI = $false,
     [switch]$SkipNUPKG = $false,
     [switch]$SkipZIP = $false,
     [switch]$Clean = $false,
@@ -206,21 +202,6 @@ if ($CreateRelease) {
     } catch {
         Write-Warning "GitHub CLI not found - release creation will be skipped"
         $CreateRelease = $false
-    }
-}
-
-# Check WiX (for MSI)
-$wixFound = $false
-if (-not $SkipMSI) {
-    try {
-        $null = Get-Command "candle.exe" -ErrorAction Stop
-        $null = Get-Command "light.exe" -ErrorAction Stop
-        Write-Success "WiX Toolset found"
-        $wixFound = $true
-    } catch {
-        Write-Warning "WiX Toolset not found - MSI creation will be skipped"
-        Write-Info "Install from: https://wixtoolset.org/releases/"
-        $SkipMSI = $true
     }
 }
 
@@ -388,165 +369,6 @@ if (Test-Path $buildInfoPath) {
 Write-Success "Package payload prepared"
 Write-Output ""
 
-# Create MSI installer
-if (-not $SkipMSI -and $wixFound) {
-    Write-Step "Creating MSI installer..."
-    
-    try {
-        # Create WiX-compatible version (YYYY.MM.DD format without pre-release suffixes)
-        $wixVersion = if ($Version -match '^(\d{4})\.(\d{2})\.(\d{2})') {
-            # YYYY.MM.DD format - use as-is (within WiX constraints)
-            "$($Matches[1]).$($Matches[2]).$($Matches[3])"
-        } elseif ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
-            # Standard version format - use as-is
-            "$($Matches[1]).$($Matches[2]).$($Matches[3])"
-        } else {
-            # Fallback to current date-based version
-            $currentDate = Get-Date
-            "$($currentDate.Year).$($currentDate.Month).$($currentDate.Day)"
-        }
-        
-        Write-Verbose "Using WiX version: $wixVersion"
-        
-        # Set API URL value (ensure it's never empty for WiX)
-        $apiUrlValue = if ($ApiUrl) { $ApiUrl } else { "https://api.reportmate.com" }
-        Write-Verbose "Using API URL: $apiUrlValue"
-        
-        # Generate WiX source
-        $wixSource = @"
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  
-  <Product Id="*" 
-           Name="ReportMate" 
-           Language="1033" 
-           Version="$wixVersion" 
-           Manufacturer="ReportMate" 
-           UpgradeCode="12345678-1234-1234-1234-123456789012">
-    
-    <Package InstallerVersion="200" 
-             Compressed="yes" 
-             InstallScope="perMachine"
-             Platform="x64"
-             Description="ReportMate for device management and security monitoring"
-             Comments="Integrates with Cimian and uses osquery for comprehensive data collection" />
-    
-    <Condition Message="This application requires Windows 7 or later.">
-      <![CDATA[Installed OR (VersionNT >= 601)]]>
-    </Condition>
-    
-    <MajorUpgrade DowngradeErrorMessage="A newer version of ReportMate is already installed." />
-    <MediaTemplate EmbedCab="yes" />
-    
-    <Feature Id="ProductFeature" Title="ReportMate" Level="1">
-      <ComponentGroupRef Id="ProductComponents" />
-    </Feature>
-    
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="ReportMate" />
-      </Directory>
-      <Directory Id="CommonAppDataFolder">
-        <Directory Id="ManagedReportsFolder" Name="ManagedReports" />
-      </Directory>
-    </Directory>
-    
-    <Property Id="API_URL" Value="$apiUrlValue" />
-    
-    <CustomAction Id="ConfigureRegistry"
-                  Execute="deferred"
-                  Impersonate="no"
-                  Directory="INSTALLFOLDER"
-                  ExeCommand='runner.exe install --api-url "[API_URL]"'
-                  Return="ignore" />
-    
-    <InstallExecuteSequence>
-      <Custom Action="ConfigureRegistry" After="InstallFiles">NOT Installed AND API_URL</Custom>
-    </InstallExecuteSequence>
-    
-    <UI>
-      <UIRef Id="WixUI_Minimal" />
-    </UI>
-    
-  </Product>
-  
-  <Fragment>
-    <ComponentGroup Id="ProductComponents">
-      
-      <Component Id="ReportMateExe" Guid="*" Directory="INSTALLFOLDER" Win64="yes">
-        <File Id="ReportMateExe" 
-              Source="$ProgramFilesPayloadDir\runner.exe" 
-              KeyPath="yes" />
-      </Component>
-      
-      <Component Id="VersionFile" Guid="*" Directory="INSTALLFOLDER" Win64="yes">
-        <File Id="VersionFile" 
-              Source="$ProgramFilesPayloadDir\version.txt" 
-              KeyPath="yes" />
-      </Component>
-      
-      <Component Id="AppSettingsFile" Guid="*" Directory="ManagedReportsFolder" Win64="yes">
-        <File Id="AppSettings" 
-              Source="$ProgramDataPayloadDir\appsettings.yaml" 
-              KeyPath="yes" />
-      </Component>
-      
-      <Component Id="AppSettingsTemplateFile" Guid="*" Directory="ManagedReportsFolder" Win64="yes">
-        <File Id="AppSettingsTemplate" 
-              Source="$ProgramDataPayloadDir\appsettings.template.yaml" 
-              KeyPath="yes" />
-      </Component>
-      
-      <Component Id="OsqueryQueriesFile" Guid="*" Directory="ManagedReportsFolder" Win64="yes">
-        <File Id="OsqueryQueries" 
-              Source="$ProgramDataPayloadDir\queries.json" 
-              KeyPath="yes" />
-      </Component>
-      
-      <Component Id="RegistryEntries" Guid="*" Directory="INSTALLFOLDER" Win64="yes">
-        <RegistryKey Root="HKLM" Key="SOFTWARE\ReportMate">
-          <RegistryValue Name="InstallPath" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
-          <RegistryValue Name="Version" Type="string" Value="$Version" />
-          <RegistryValue Name="InstallDate" Type="string" Value="[Date]" />
-        </RegistryKey>
-      </Component>
-      
-    </ComponentGroup>
-  </Fragment>
-  
-</Wix>
-"@
-        
-        $wixFile = "$OutputDir/ReportMate.wxs"
-        $wixSource | Out-File -FilePath $wixFile -Encoding UTF8
-        
-        # Compile WiX
-        $wixObj = "$OutputDir/ReportMate.wixobj"
-        $msiFile = "$OutputDir/ReportMate-$Version.msi"
-        
-        Write-Verbose "Compiling WiX source..."
-        & candle.exe -out $wixObj $wixFile
-        if ($LASTEXITCODE -ne 0) {
-            throw "WiX compilation failed"
-        }
-        
-        Write-Verbose "Linking MSI..."
-        & light.exe -out $msiFile $wixObj -ext WixUIExtension -sw1076
-        if ($LASTEXITCODE -ne 0) {
-            throw "WiX linking failed"
-        }
-        
-        $msiSize = (Get-Item $msiFile).Length / 1MB
-        Write-Success "MSI created: ReportMate-$Version.msi ($([math]::Round($msiSize, 2)) MB)"
-        
-    } catch {
-        Write-Error "MSI creation failed: $_"
-        $SkipMSI = $true
-    }
-} else {
-    Write-Info "Skipping MSI creation"
-}
-
 Write-Output ""
 
 # Create NUPKG package
@@ -583,29 +405,21 @@ if (-not $SkipNUPKG) {
             Write-Verbose "Running cimipkg from: $cimipkgPath"
             Push-Location $NupkgDir
             
-            # Use Start-Process for better compatibility and error handling
-            $processArgs = @{
-                FilePath = $cimipkgPath
-                ArgumentList = @(".")
-                Wait = $true
-                PassThru = $true
-                WorkingDirectory = $NupkgDir
-                RedirectStandardOutput = $true
-                RedirectStandardError = $true
-            }
+            # Use Start-Process to properly handle output and avoid redirection issues
+            $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $startInfo.FileName = $cimipkgPath
+            $startInfo.Arguments = "."
+            $startInfo.WorkingDirectory = $NupkgDir
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
             
-            $process = Start-Process @processArgs
+            $process = [System.Diagnostics.Process]::Start($startInfo)
+            $process.WaitForExit()
+            $exitCode = $process.ExitCode
             
-            # Get output and error streams
-            $stdout = $process.StandardOutput.ReadToEnd()
-            $stderr = $process.StandardError.ReadToEnd()
+            Write-Verbose "cimipkg exit code: $exitCode"
             
-            Write-Verbose "cimipkg stdout: $stdout"
-            if ($stderr) {
-                Write-Verbose "cimipkg stderr: $stderr"
-            }
-            
-            if ($process.ExitCode -eq 0) {
+            if ($exitCode -eq 0) {
                 # Find and move generated nupkg files
                 $nupkgFiles = Get-ChildItem -Path "." -Filter "*.nupkg" -Recurse
                 if (-not $nupkgFiles) {
@@ -623,7 +437,7 @@ if (-not $SkipNUPKG) {
                     Write-Warning "No .nupkg files found after cimipkg execution"
                 }
             } else {
-                throw "cimipkg failed with exit code: $($process.ExitCode). Output: $stdout. Error: $stderr"
+                throw "cimipkg failed with exit code: $exitCode"
             }
         } catch {
             Write-Error "NUPKG creation failed: $_"
@@ -736,7 +550,7 @@ if ($CreateRelease -and $ghFound) {
         $outputFiles = Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue
         
         foreach ($file in $outputFiles) {
-            if ($file.Extension -in @('.msi', '.nupkg', '.zip')) {
+            if ($file.Extension -in @('.nupkg', '.zip')) {
                 $releaseFiles += $file.FullName
             }
         }
@@ -749,16 +563,10 @@ if ($CreateRelease -and $ghFound) {
 ## ReportMate $Version
 
 ### 📦 Package Types
-- **MSI Installer**: For enterprise deployment via Group Policy, SCCM, or Intune
 - **NUPKG Package**: For Chocolatey and Cimian package management  
 - **ZIP Archive**: For manual installation and testing
 
 ### 🚀 Quick Start
-
-**MSI Installation:**
-``````cmd
-msiexec /i ReportMate-$Version.msi /quiet
-``````
 
 **Chocolatey Installation:**
 ``````cmd
@@ -822,7 +630,6 @@ if ($outputFiles) {
     foreach ($file in $outputFiles) {
         $sizeKB = [math]::Round($file.Length / 1KB, 1)
         $icon = switch ($file.Extension) {
-            ".msi" { "🏗️ " }
             ".nupkg" { "📦" }
             ".zip" { "🗜️ " }
             ".exe" { "⚡" }
@@ -836,10 +643,9 @@ if ($outputFiles) {
 
 Write-Output ""
 Write-Header "Next Steps"
-Write-Info "1. Test MSI: msiexec /i `"$OutputDir/ReportMate-$Version.msi`" /quiet"
-Write-Info "2. Test NUPKG: choco install `"$OutputDir/ReportMate-$Version.nupkg`" --source=."
-Write-Info "3. Test ZIP: Extract and run install.bat as administrator"
-Write-Info "4. Deploy via Group Policy, SCCM, or Intune"
+Write-Info "1. Test NUPKG: choco install `"$OutputDir/ReportMate-$Version.nupkg`" --source=."
+Write-Info "2. Test ZIP: Extract and run install.bat as administrator"
+Write-Info "3. Deploy via Chocolatey, package management, or manual installation"
 
 if ($ApiUrl) {
     Write-Info "5. Configured API URL: $ApiUrl"

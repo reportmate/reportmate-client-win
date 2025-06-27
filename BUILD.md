@@ -11,7 +11,6 @@ This repository contains a unified PowerShell 7 build script that replicates the
 
 ### Optional (for specific package types)
 
-- **WiX Toolset 3.11+**: For MSI creation - [Download](https://wixtoolset.org/releases/)
 - **Git**: For tagging and version control
 - **GitHub CLI**: For release creation - [Download](https://cli.github.com/)
 
@@ -33,9 +32,6 @@ This repository contains a unified PowerShell 7 build script that replicates the
 ### Package-Specific Builds
 
 ```powershell
-# Skip MSI creation (useful on non-Windows or without WiX)
-.\build.ps1 -SkipMSI
-
 # Skip NUPKG creation
 .\build.ps1 -SkipNUPKG
 
@@ -43,7 +39,7 @@ This repository contains a unified PowerShell 7 build script that replicates the
 .\build.ps1 -SkipZIP
 
 # Only build executable (skip all packages)
-.\build.ps1 -SkipMSI -SkipNUPKG -SkipZIP
+.\build.ps1 -SkipNUPKG -SkipZIP
 ```
 
 ### Debug and Development
@@ -76,7 +72,6 @@ This repository contains a unified PowerShell 7 build script that replicates the
 | `Version` | String | Auto-generated (YYYY.MM.DD) | Version to build |
 | `Configuration` | String | "Release" | Build configuration (Release/Debug) |
 | `SkipBuild` | Switch | False | Skip the .NET build step |
-| `SkipMSI` | Switch | False | Skip MSI creation |
 | `SkipNUPKG` | Switch | False | Skip NUPKG creation |
 | `SkipZIP` | Switch | False | Skip ZIP creation |
 | `Clean` | Switch | False | Clean all build artifacts first |
@@ -87,21 +82,14 @@ This repository contains a unified PowerShell 7 build script that replicates the
 
 ## Package Types
 
-### MSI Installer (`ReportMate-{version}.msi`)
-
-- **Purpose**: Enterprise deployment via Group Policy, SCCM, or Intune
-- **Installation**: `msiexec /i ReportMate-{version}.msi /quiet`
-- **Requirements**: WiX Toolset
-- **Features**: Silent installation, registry configuration, uninstall support
-
-### NUPKG Package (`ReportMate-{version}.nupkg`)
+### 📦 NUPKG Package (`ReportMate-{version}.nupkg`)
 
 - **Purpose**: Chocolatey and Cimian package management
 - **Installation**: `choco install ReportMate-{version}.nupkg --source=.`
 - **Requirements**: cimipkg (auto-downloaded if missing)
 - **Features**: Chocolatey compatible, Cimian integration
 
-### ZIP Archive (`ReportMate-{version}.zip`)
+### 🗜️ ZIP Archive (`ReportMate-{version}.zip`)
 
 - **Purpose**: Manual installation and testing
 - **Installation**: Extract and run `install.bat` as administrator
@@ -122,10 +110,7 @@ This repository contains a unified PowerShell 7 build script that replicates the
 
 ### Advanced Options
 ```powershell
-# Build without MSI (if WiX not installed)
-.\build.ps1 -SkipMSI
-
-# Build without NUPKG (if cimipkg not available)
+# Skip NUPKG creation (if cimipkg not available)
 .\build.ps1 -SkipNUPKG
 
 # Build with API URL pre-configured
@@ -137,19 +122,16 @@ This repository contains a unified PowerShell 7 build script that replicates the
 
 ## Output
 
-The build script creates three package types in `build/output/`:
-
-### 📦 MSI Installer (`ReportMate-{version}.msi`)
-- **Use Case**: Enterprise deployment via Group Policy, SCCM, Intune
-- **Installation**: `msiexec /i ReportMate-{version}.msi /quiet`
-- **Features**: Silent installation, registry configuration, proper uninstall
+The build script creates two package types in `dist/`:
 
 ### 📦 NUPKG Package (`ReportMate-{version}.nupkg`)  
+
 - **Use Case**: Chocolatey and Cimian package management
 - **Installation**: `choco install ReportMate-{version}.nupkg --source=.`
 - **Features**: Dependency management, Cimian postflight integration
 
 ### 🗜️ ZIP Archive (`ReportMate-{version}.zip`)
+
 - **Use Case**: Manual installation and testing
 - **Installation**: Extract and run `install.bat` as administrator
 - **Features**: Portable deployment, no installer required
@@ -157,14 +139,13 @@ The build script creates three package types in `build/output/`:
 ## File Structure
 
 After building, the output structure is:
-```
-build/output/
-├── ReportMate-{version}.msi     # MSI installer
-├── ReportMate-{version}.nupkg   # Chocolatey package
-├── ReportMate-{version}.zip     # ZIP archive
-└── ReportMate.wxs               # WiX source (intermediate)
 
-build/publish/
+```text
+dist/
+├── ReportMate-{version}.nupkg   # Chocolatey package
+└── ReportMate-{version}.zip     # ZIP archive
+
+.publish/
 └── runner.exe                   # Self-contained executable
 ```
 
@@ -172,7 +153,7 @@ build/publish/
 
 All packages deploy the same file structure:
 
-```
+```text
 C:\Program Files\ReportMate\
 ├── runner.exe                   # Main executable
 └── version.txt                  # Version information
@@ -203,13 +184,8 @@ The unified build script replicates the GitHub Actions pipeline locally:
 
 ## Troubleshooting
 
-### WiX Toolset Issues
-```powershell
-# Skip MSI creation if WiX not installed
-.\build.ps1 -SkipMSI
-```
-
 ### cimipkg Issues
+
 ```powershell
 # The script will auto-download cimipkg, or skip if unavailable
 .\build.ps1 -SkipNUPKG
@@ -225,10 +201,8 @@ winget install Microsoft.PowerShell
 ```
 
 ### Build Verification
-```powershell
-# Test MSI installation
-msiexec /i "build/output/ReportMate-{version}.msi" /l*v install.log
 
+```powershell
 # Test executable
 & "C:\Program Files\ReportMate\runner.exe" --help
 
@@ -263,10 +237,8 @@ Test-Path "C:\ProgramData\ManagedReports\appsettings.yaml"
 ## Integration Examples
 
 ### Group Policy Deployment
-```cmd
-REM Deploy via startup script
-msiexec /i "\\domain\packages\ReportMate-2024.06.27.msi" /quiet
 
+```cmd
 REM Configure via registry
 reg add "HKLM\SOFTWARE\ReportMate" /v "ApiUrl" /t REG_SZ /d "https://api.company.com"
 ```

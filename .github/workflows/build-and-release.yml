@@ -160,17 +160,16 @@ jobs:
       with:
         name: reportmate-${{ steps.version.outputs.VERSION }}
         path: |
-          build/output/*.msi
-          build/output/*.nupkg
-          build/output/*.zip
-          build/publish/runner.exe
+          dist/*.nupkg
+          dist/*.zip
+          .publish/runner.exe
         retention-days: 30
         
     - name: List build artifacts for verification
       shell: pwsh
       run: |
         echo "Final build artifacts:"
-        Get-ChildItem "build/output" -Recurse | ForEach-Object { 
+        Get-ChildItem "dist" -Recurse | ForEach-Object { 
           $sizeKB = [math]::Round($_.Length / 1KB, 1)
           echo "  $($_.Name) ($sizeKB KB)" 
         }
@@ -193,7 +192,6 @@ jobs:
         tag_name: ${{ needs.build-and-package.outputs.tag_created != 'none' && needs.build-and-package.outputs.tag_created != 'existing' && needs.build-and-package.outputs.tag_created || needs.build-and-package.outputs.version }}
         name: ReportMate ${{ needs.build-and-package.outputs.version }}
         files: |
-          artifacts/*.msi
           artifacts/*.nupkg
           artifacts/*.zip
         generate_release_notes: true
@@ -203,16 +201,10 @@ jobs:
           ## ReportMate ${{ needs.build-and-package.outputs.version }}
           
           ### 📦 Package Types
-          - **MSI Installer**: For enterprise deployment via Group Policy, SCCM, or Intune
           - **NUPKG Package**: For Chocolatey and Cimian package management
           - **ZIP Archive**: For manual installation and testing
           
           ### 🚀 Quick Start
-          
-          **MSI Installation:**
-          ```cmd
-          msiexec /i ReportMate-${{ needs.build-and-package.outputs.version }}.msi /quiet
-          ```
           
           **Chocolatey Installation:**
           ```cmd
@@ -250,52 +242,6 @@ jobs:
       with:
         name: reportmate-${{ needs.build-and-package.outputs.version }}
         path: ./artifacts
-        
-    - name: Test MSI installation
-      shell: pwsh
-      run: |
-        $msiFile = Get-ChildItem -Path "artifacts" -Filter "*.msi" | Select-Object -First 1
-        if ($msiFile) {
-          echo "Testing MSI installation: $($msiFile.Name)"
-          
-          # Install silently
-          $process = Start-Process -FilePath "msiexec" -ArgumentList "/i", $msiFile.FullName, "/quiet", "/l*v", "install.log" -Wait -PassThru
-          
-          if ($process.ExitCode -eq 0) {
-            echo "✅ MSI installation successful"
-            
-            # Verify installation
-            if (Test-Path "C:\Program Files\ReportMate\runner.exe") {
-              echo "✅ Executable found at expected location"
-              
-              # Test executable help
-              try {
-                $output = & "C:\Program Files\ReportMate\runner.exe" --help 2>&1
-                echo "✅ Executable runs successfully"
-                echo "Help output preview: $($output[0..2] -join '; ')"
-              } catch {
-                echo "⚠️  Executable help test failed: $_"
-              }
-            } else {
-              echo "❌ Executable not found at expected location"
-            }
-            
-            # Check configuration files
-            if (Test-Path "C:\ProgramData\ManagedReports\appsettings.yaml") {
-              echo "✅ Configuration files deployed correctly"
-            } else {
-              echo "❌ Configuration files not found"
-            }
-          } else {
-            echo "❌ MSI installation failed with exit code: $($process.ExitCode)"
-            if (Test-Path "install.log") {
-              echo "Installation log:"
-              Get-Content "install.log" -Tail 20
-            }
-          }
-        } else {
-          echo "❌ No MSI file found in artifacts"
-        }
         
     - name: Test NUPKG package structure
       shell: pwsh
