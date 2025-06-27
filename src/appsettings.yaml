@@ -1,0 +1,46 @@
+# ReportMate Windows Client Configuration
+# YAML format for cross-platform compatibility
+
+Logging:
+  LogLevel:
+    Default: Information
+    Microsoft: Warning
+    Microsoft.Hosting.Lifetime: Information
+
+ReportMate:
+  # API Configuration
+  ApiUrl: ""                                    # ReportMate API endpoint (required)
+  DeviceId: ""                                  # Custom device identifier (auto-generated if empty)
+  ApiKey: ""                                    # API authentication key (optional)
+  Passphrase: ""                                # Client passphrase for restricted access/reporting (optional)
+  
+  # Collection Settings  
+  CollectionIntervalSeconds: 3600               # Data collection interval (1 hour)
+  MaxDataAgeMinutes: 30                         # Max age of cached data
+  ApiTimeoutSeconds: 300                        # API request timeout (5 minutes)
+  MaxRetryAttempts: 3                           # Max retry attempts for failed requests
+  
+  # osquery Configuration
+  OsQueryPath: "C:\\Program Files\\osquery\\osqueryi.exe"  # Path to osquery executable
+  
+  # Directory Paths (Windows)
+  DataDirectory: "C:\\ProgramData\\ManagedReports"
+  LogDirectory: "C:\\ProgramData\\ManagedReports\\logs"
+  CacheDirectory: "C:\\ProgramData\\ManagedReports\\cache"  
+  ConfigDirectory: "C:\\ProgramData\\ManagedReports\\config"
+  
+  # Client Settings
+  UserAgent: "ReportMate-WindowsClient/1.0"
+  DebugLogging: false
+  SkipCertificateValidation: false              # Only set to true for testing
+  
+  # Proxy Configuration
+  Proxy:
+    Url: ""                                     # Proxy URL (if required)
+    Username: ""                                # Proxy username
+    Password: ""                                # Proxy password  
+    BypassOnLocal: true                         # Bypass proxy for local addresses
+
+# Development Settings
+Development:
+  Enabled: false                                # Enable development mode
