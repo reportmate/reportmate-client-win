@@ -12,18 +12,18 @@ The project uses a unified package structure that supports all deployment format
 
 ```
 reportmate-client-win/
-├── src/                     # C# source code
-├── build/                   # Build scripts and tools
+├── src/                    # C# source code
+├── build/                  # Build scripts and tools
 │   ├── build_exe.sh        # Bash build script
 │   ├── build_nupkg.ps1     # PowerShell package builder
 │   ├── build_msi.ps1       # MSI installer builder
 │   └── create-installer.ps1
 ├── nupkg/                   # Package structure (populated by build)
-│   ├── build-info.yaml     # Package metadata
+│   ├── build-info.yaml      # Package metadata
 │   ├── payload/
 │   │   ├── Program Files/
 │   │   │   ├── Cimian/
-│   │   │   │   └── postflight.ps1    # Cimian integration
+│   │   │   │   └── postflight.ps1     # Cimian integration
 │   │   │   └── ReportMate/
 │   │   │       ├── runner.exe         # Main executable
 │   │   │       ├── appsettings.yaml   # Template config
@@ -108,9 +108,9 @@ After deployment, files are organized following Windows conventions:
 
 ## Configuration Management
 
-The application uses a sophisticated configuration hierarchy to support enterprise deployment and management:
+The application uses a configuration hierarchy to support enterprise deployment and management:
 
-1. **Windows Registry** (`HKLM\SOFTWARE\Policies\ReportMate`) - CSP/Group Policy managed (highest precedence)
+1. **Windows Registry** (`HKLM\SOFTWARE\Policies\ReportMate`) - CSP/MDM configuration managed (highest precedence)
 2. **Environment Variables** (prefix: `REPORTMATE_`) - Container/deployment specific
 3. **Working Configuration** (`ProgramData/ManagedReports/appsettings.yaml`) - Runtime editable
 4. **Enterprise Template Configuration** (`ProgramData/ManagedReports/appsettings.template.yaml`) - CSP/OMA-URI manageable defaults
@@ -123,10 +123,10 @@ Higher priority sources override lower priority ones, allowing flexible deployme
 For enterprise environments, configuration can be managed through:
 
 - **Configuration Service Provider (CSP)**: Deploy `appsettings.template.yaml` to `ProgramData/ManagedReports/`
-- **Group Policy**: Set registry values under `HKLM\SOFTWARE\ReportMate`
+- **MDM configuration**: Set registry values under `HKLM\SOFTWARE\ReportMate`
 - **OMA-URI**: Push configuration files and registry settings remotely
 
-All configuration files are stored in `ProgramData` (not `Program Files`) to ensure they are accessible by CSP and Group Policy management tools.
+All configuration files are stored in `ProgramData` (not `Program Files`) to ensure they are accessible by CSP and MDM configuration management tools.
 
 #### Example Complete Configuration
 
@@ -212,12 +212,13 @@ msiexec /i ReportMateClient.msi /quiet API_URL="https://api.reportmate.com"
 ```
 
 #### Cimian/Chocolatey Package
+
 ```powershell
-# Install via cimipkg for Cimian environments
-cimipkg install reportmate-windows-client.nupkg
+choco install reportmate-windows-client.nupkg
 ```
 
 #### Direct Executable
+
 ```powershell
 # Manual installation and setup
 .\runner.exe install --api-url "https://api.reportmate.com"
@@ -246,7 +247,7 @@ cimipkg install reportmate-windows-client.nupkg
 ### Enterprise Ready
 
 - **MSI Installer**: Professional Windows Installer package
-- **Group Policy Support**: Silent installation and configuration
+- **MDM configuration Support**: Silent installation and configuration
 - **Logging & Monitoring**: Comprehensive Windows Event Log integration
 - **Configuration Management**: Multiple configuration sources (Registry, JSON, Environment)
 - **Deployment Scripts**: Batch, PowerShell, and silent installation options
@@ -287,63 +288,27 @@ runner.exe install --api-url URL [--device-id ID] [--api-key KEY]
 ## Integration Examples
 
 ### Cimian Postflight Script
-The included `postflight.ps1` script automatically executes ReportMate after Cimian software updates:
+The included `postflight.ps1` script automatically executes ReportMate after Cimian runs `managedsoftwareupdate.exe`:
 
 ```powershell
 # Located at: C:\Program Files\Cimian\postflight.ps1
 & "C:\Program Files\ReportMate\runner.exe" run --force
 ```
 
-### Group Policy Deployment
+### Deploy via startup script or scheduled task
+
 ```powershell
-# Deploy via startup script or scheduled task
 schtasks /create /tn "ReportMate Data Collection" /tr "C:\Program Files\ReportMate\runner.exe run" /sc daily /st 09:00
 ```
 
 ### Manual Integration
+
 ```powershell
 # Run from any automation system
 C:\Program Files\ReportMate\runner.exe run
 ```
 
 The `nupkg/` directory serves as the canonical package structure that all build processes populate and reference.
-
-## Directory Structure
-
-ReportMate follows the same directory separation pattern as Cimian/Munki, with clear separation between executables and data files.
-
-### Package Structure (Development)
-
-The development workspace uses a unified package structure that builds to all formats:
-
-```
-reportmate-client-win/
-├── src/                           # Source code
-├── build/                         # Build scripts
-│   ├── build_exe.sh              # Cross-platform executable build
-│   ├── build_msi.ps1             # MSI installer creation
-│   └── build_nupkg.ps1           # NUPKG package creation
-├── nupkg/                        # Unified package structure
-│   ├── build-info.yaml           # Package metadata and configuration
-│   ├── payload/                  # Files to be installed (populated during build)
-│   │   ├── Program Files/
-│   │   │   ├── Cimian/
-│   │   │   │   └── postflight.ps1    # Cimian integration script
-│   │   │   └── ReportMate/
-│   │   │       ├── runner.exe         # Main executable (populated by build)
-│   │   │       ├── appsettings.yaml   # Template configuration
-│   │   │       └── version.txt        # Version information
-│   │   └── ProgramData/
-│   │       └── ManagedReports/
-│   │           ├── appsettings.yaml   # Working configuration
-│   │           └── queries.json       # OSQuery definitions
-│   └── scripts/                  # Installation scripts
-│       ├── preinstall.ps1        # Runs before installation
-│       └── postinstall.ps1       # Runs after installation
-├── .github/workflows/            # CI/CD automation
-│   └── build-and-release.yml     # Automated builds and releases
-└── README.md                     # This documentation
-```
 
 ### Windows Structure
 
@@ -399,7 +364,7 @@ ReportMate Windows Client supports three deployment formats, all built from the 
 
 ### 2. MSI Installer  
 
-- **Use Case**: Traditional Windows enterprise deployment (Group Policy, SCCM, Intune)
+- **Use Case**: Traditional Windows enterprise deployment (MDM configuration, SCCM, Intune)
 - **Benefits**: Windows Installer features, proper Add/Remove Programs integration, silent installation
 - **Installation**: `msiexec /i ReportMate-WindowsClient-1.0.0.msi /quiet`
 
@@ -509,10 +474,10 @@ This creates:
 
 #### Step 3: Deploy to Target Machines
 
-**Option A: Group Policy Deployment**
+**Option A: MDM configuration Deployment**
 
 1. Copy MSI to network share
-2. Create Group Policy Object
+2. Create MDM configuration Object
 3. Assign software installation to computer objects
 4. Configure registry settings via GPO
 
@@ -579,7 +544,7 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https:
 
 ```batch
 @echo off
-REM Group Policy or SCCM deployment
+REM MDM configuration or SCCM deployment
 msiexec /i "ReportMate-WindowsClient-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"
 "C:\Program Files\ReportMate\runner.exe" install --api-url "https://your-api.azurewebsites.net"
 ```
@@ -626,14 +591,14 @@ All configuration is stored in `HKLM:\SOFTWARE\ReportMate`:
 
 ### Enterprise Configuration via CSP/OMA-URI
 
-ReportMate Windows Client supports enterprise configuration management through Configuration Service Provider (CSP) and OMA-URI profiles, enabling centralized management via Microsoft Intune, System Center Configuration Manager (SCCM), or Group Policy.
+ReportMate Windows Client supports enterprise configuration management through Configuration Service Provider (CSP) and OMA-URI profiles, enabling centralized management via Microsoft Intune, System Center Configuration Manager (SCCM), or MDM configuration.
 
 #### Registry Configuration Paths
 
 The application reads configuration from the following Windows Registry locations:
 
 1. **Standard Registry**: `HKLM\SOFTWARE\ReportMate`
-2. **CSP/Group Policy**: `HKLM\SOFTWARE\Policies\ReportMate` (higher precedence)
+2. **CSP/MDM configuration**: `HKLM\SOFTWARE\Policies\ReportMate` (higher precedence)
 
 #### OMA-URI Configuration for Microsoft Intune
 
@@ -689,11 +654,11 @@ Data type: String
 Value: Information
 ```
 
-#### Group Policy Configuration
+#### MDM configuration Configuration
 
-**Using Group Policy Registry Editor:**
+**Using MDM configuration Registry Editor:**
 
-1. Open **Group Policy Management Console**
+1. Open **MDM configuration Management Console**
 2. Edit the desired GPO
 3. Navigate to **Computer Configuration** > **Preferences** > **Windows Settings** > **Registry**
 4. Create new registry items with the following details:
@@ -943,7 +908,7 @@ reportmate-client-win/
 - **Easy updates** - replace executable without losing configuration
 - **Secure permissions** - data directory can have restricted access
 - **Consistent with platform conventions** (Cimian/Munki pattern)
-- **Enterprise-friendly** - supports Group Policy and Configuration Profiles
+- **Enterprise-friendly** - supports MDM configuration and Configuration Profiles
 - **Clean uninstallation** - remove program files, preserve or clean data as needed
 
 ## Permissions
@@ -982,15 +947,3 @@ If you encounter issues:
 2. **Verify configuration** with `runner.exe info`
 3. **Test connectivity** with `runner.exe test --verbose`
 4. **Review the implementation documentation** for advanced scenarios
-
-## Success!
-
-Your ReportMate Windows Client is now ready for deployment! The client will:
-
-- Automatically collect comprehensive device data using osquery
-- Integrate seamlessly with Cimian's managed software update process  
-- Securely transmit data to your ReportMate API
-- Provide detailed logging for monitoring and troubleshooting
-- Scale to thousands of managed devices
-
-Welcome to enterprise-grade device management and security monitoring!
