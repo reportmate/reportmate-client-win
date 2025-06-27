@@ -274,7 +274,7 @@ REM For use with Group Policy or Configuration Manager
 echo Installing ReportMate Windows Client...
 
 REM Install silently with logging
-msiexec /i "ReportMate-WindowsClient-$Version.msi" /quiet /l*v "%TEMP%\ReportMate-Install.log"
+msiexec /i "ReportMate-WindowsClient-VERSION_PLACEHOLDER.msi" /quiet /l*v "%TEMP%\ReportMate-Install.log"
 
 if %ERRORLEVEL% EQU 0 (
     echo Installation completed successfully
@@ -293,6 +293,9 @@ if not "%REPORTMATE_API_URL%"=="" (
 
 echo ReportMate Windows Client installation completed
 "@
+
+# Replace the placeholder with the actual version
+$SilentInstallScript = $SilentInstallScript -replace "VERSION_PLACEHOLDER", $Version
 
 $SilentInstallScript | Out-File -FilePath (Join-Path $OutputPath "install-silent.bat") -Encoding ASCII
 
@@ -346,7 +349,7 @@ if (`$Uninstall) {
     Write-Host "Installing ReportMate Windows Client..."
     
     # Install MSI
-    `$msiPath = Join-Path `$PSScriptRoot "ReportMate-WindowsClient-$Version.msi"
+    `$msiPath = Join-Path `$PSScriptRoot "ReportMate-WindowsClient-VERSION_PLACEHOLDER.msi"
     `$logPath = Join-Path `$env:TEMP "ReportMate-Install.log"
     
     `$process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`$msiPath", "/quiet", "/l*v", "`$logPath" -Wait -PassThru
@@ -371,6 +374,12 @@ if (`$Uninstall) {
 "@
 
 $PowerShellScript | Out-File -FilePath (Join-Path $OutputPath "Deploy-ReportMate.ps1") -Encoding UTF8
+
+# Replace version placeholders in the generated scripts
+$deployScriptPath = Join-Path $OutputPath "Deploy-ReportMate.ps1"
+$deployContent = Get-Content $deployScriptPath -Raw
+$deployContent = $deployContent -replace "VERSION_PLACEHOLDER", $Version
+$deployContent | Out-File -FilePath $deployScriptPath -Encoding UTF8
 
 # Display summary
 Write-Output ""
