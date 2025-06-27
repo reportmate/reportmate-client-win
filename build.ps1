@@ -388,6 +388,21 @@ if (-not $SkipMSI -and $wixFound) {
     Write-Step "Creating MSI installer..."
     
     try {
+        # Create WiX-compatible version (x.x.x.x format, no pre-release suffixes)
+        $wixVersion = if ($Version -match '^(\d{4})\.(\d{2})\.(\d{2})') {
+            # YYYY.MM.DD format - convert to valid WiX version
+            "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+        } elseif ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
+            # Standard version format - use as-is with .0 build
+            "$Version.0"
+        } else {
+            # Fallback to current date-based version
+            $dateVersion = Get-Date -Format "yyyy.M.d"
+            "$dateVersion.0"
+        }
+        
+        Write-Verbose "Using WiX version: $wixVersion"
+        
         # Generate WiX source
         $wixSource = @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -396,7 +411,7 @@ if (-not $SkipMSI -and $wixFound) {
   <Product Id="*" 
            Name="ReportMate" 
            Language="1033" 
-           Version="$Version.0" 
+           Version="$wixVersion" 
            Manufacturer="ReportMate" 
            UpgradeCode="12345678-1234-1234-1234-123456789012">
     
@@ -556,11 +571,21 @@ if (-not $SkipNUPKG) {
     
     if (-not $SkipNUPKG -and $cimipkgPath) {
         try {
-            Write-Verbose "Running cimipkg..."
+            Write-Verbose "Running cimipkg from: $cimipkgPath"
             Push-Location $NupkgDir
-            & $cimipkgPath .
             
-            if ($LASTEXITCODE -eq 0) {
+            # Use Start-Process for better compatibility and error handling
+            $processArgs = @{
+                FilePath = $cimipkgPath
+                ArgumentList = @(".")
+                Wait = $true
+                PassThru = $true
+                WorkingDirectory = $NupkgDir
+            }
+            
+            $process = Start-Process @processArgs
+            
+            if ($process.ExitCode -eq 0) {
                 # Find and move generated nupkg files
                 $nupkgFiles = Get-ChildItem -Path "." -Filter "*.nupkg" -Recurse
                 if (-not $nupkgFiles) {
@@ -578,7 +603,7 @@ if (-not $SkipNUPKG) {
                     Write-Warning "No .nupkg files found after cimipkg execution"
                 }
             } else {
-                throw "cimipkg failed with exit code: $LASTEXITCODE"
+                throw "cimipkg failed with exit code: $($process.ExitCode)"
             }
         } catch {
             Write-Error "NUPKG creation failed: $_"

@@ -396,6 +396,7 @@ appsettings.Local.json
 build/output/
 build/packages/
 build/publish/
+build/legacy/
 installer/
 
 # Package payload (generated during build)
