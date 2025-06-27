@@ -188,13 +188,13 @@ jobs:
         Pop-Location
         
         # Move generated package to build output
-        $nupkgFile = Get-ChildItem -Path "nupkg" -Filter "*.nupkg" | Select-Object -First 1
+        $nupkgFile = Get-ChildItem -Path "nupkg/build" -Filter "*.nupkg" | Select-Object -First 1
         if ($nupkgFile) {
           Move-Item $nupkgFile.FullName "build/output/"
           echo "Created NUPKG: $($nupkgFile.Name)"
         } else {
-          echo "Warning: No .nupkg file found in nupkg directory"
-          Get-ChildItem -Path "nupkg" | ForEach-Object { echo "Found: $($_.Name)" }
+          echo "Warning: No .nupkg file found in nupkg/build directory"
+          Get-ChildItem -Path "nupkg" -Recurse -Filter "*.nupkg" | ForEach-Object { echo "Found NUPKG: $($_.FullName)" }
         }
         
     - name: List build artifacts
