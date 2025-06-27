@@ -112,9 +112,7 @@ $WixSource = @"
         <Directory Id="ApplicationProgramsFolder" Name="ReportMate" />
       </Directory>
       <Directory Id="CommonAppDataFolder">
-        <Directory Id="AppDataFolder" Name="ReportMate">
-          <Directory Id="AppDataLogsFolder" Name="logs" />
-        </Directory>
+        <Directory Id="ManagedReportsFolder" Name="ManagedReports" />
       </Directory>
     </Directory>
     
@@ -126,7 +124,8 @@ $WixSource = @"
     <CustomAction Id="ConfigureRegistry"
                   Execute="deferred"
                   Impersonate="no"
-                  ExeCommand='[INSTALLFOLDER]runner.exe install --api-url "[API_URL]"'
+                  Directory="INSTALLFOLDER"
+                  ExeCommand='runner.exe install --api-url "[API_URL]"'
                   Return="ignore" />
     
     <!-- Installation sequence -->
@@ -155,27 +154,27 @@ $WixSource = @"
   
   <!-- Component group for all files -->
   <Fragment>
-    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+    <ComponentGroup Id="ProductComponents">
       
-      <!-- Main executable -->
-      <Component Id="ReportMateExe" Guid="*">
+      <!-- Main executable in INSTALLFOLDER -->
+      <Component Id="ReportMateExe" Guid="*" Directory="INSTALLFOLDER">
         <File Id="ReportMateExe" 
               Source="$($SourcePath)\Program Files\ReportMate\runner.exe" 
               KeyPath="yes" />
       </Component>
       
-      <!-- Configuration files -->
-      <Component Id="ConfigFiles" Guid="*">
+      <!-- Configuration files in ProgramData\ManagedReports -->
+      <Component Id="ConfigFiles" Guid="*" Directory="ManagedReportsFolder">
         <File Id="AppSettings" 
               Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.yaml" />
-        <File Id="AppSettingsYaml" 
+        <File Id="AppSettingsTemplate" 
               Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.template.yaml" />
         <File Id="OsqueryQueries" 
               Source="$($SourcePath)\ProgramData\ManagedReports\queries.json" />
       </Component>
       
       <!-- Registry entries -->
-      <Component Id="RegistryEntries" Guid="*">
+      <Component Id="RegistryEntries" Guid="*" Directory="INSTALLFOLDER">
         <RegistryKey Root="HKLM" Key="SOFTWARE\ReportMate">
           <RegistryValue Name="InstallPath" 
                          Type="string" 
@@ -188,18 +187,6 @@ $WixSource = @"
                          Type="string" 
                          Value="[Date]" />
         </RegistryKey>
-      </Component>
-      
-      <!-- Logs directory -->
-      <Component Id="LogsDirectory" Guid="*" Directory="AppDataLogsFolder">
-        <CreateFolder />
-        <RemoveFolder Id="RemoveAppDataLogsFolder" On="uninstall" />
-        <RegistryValue Root="HKCU" 
-                       Key="SOFTWARE\ReportMate" 
-                       Name="LogsPath" 
-                       Type="string" 
-                       Value="[AppDataLogsFolder]" 
-                       KeyPath="yes" />
       </Component>
       
       <!-- Start menu shortcut -->
