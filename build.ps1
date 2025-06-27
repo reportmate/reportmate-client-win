@@ -252,12 +252,25 @@ if (-not $SkipBuild) {
     $csprojPath = "$SrcDir/ReportMate.WindowsClient.csproj"
     Write-Verbose "Updating version in: $csprojPath"
     
+    # Create .NET-compatible version (must be numeric)
+    $assemblyVersion = if ($Version -match '^(\d{4})\.(\d{2})\.(\d{2})') {
+        # YYYY.MM.DD format - convert to valid assembly version
+        "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+    } elseif ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
+        # Standard version format - use as-is with .0 build
+        "$Version.0"
+    } else {
+        # Fallback to current date-based version
+        $dateVersion = Get-Date -Format "yyyy.M.d"
+        "$dateVersion.0"
+    }
+    
     $content = Get-Content $csprojPath -Raw
-    $content = $content -replace '<AssemblyVersion>.*?</AssemblyVersion>', "<AssemblyVersion>$Version.0</AssemblyVersion>"
-    $content = $content -replace '<FileVersion>.*?</FileVersion>', "<FileVersion>$Version.0</FileVersion>"
+    $content = $content -replace '<AssemblyVersion>.*?</AssemblyVersion>', "<AssemblyVersion>$assemblyVersion</AssemblyVersion>"
+    $content = $content -replace '<FileVersion>.*?</FileVersion>', "<FileVersion>$assemblyVersion</FileVersion>"
     Set-Content $csprojPath $content -Encoding UTF8
     
-    Write-Info "Updated version to: $Version.0"
+    Write-Info "Updated assembly version to: $assemblyVersion"
     
     # Restore dependencies
     Write-Verbose "Restoring NuGet packages..."
@@ -629,33 +642,39 @@ if ($CreateTag -and $gitFound) {
     Write-Step "Creating git tag..."
     
     try {
-        # Check if tag already exists
-        $existingTag = git tag -l $Version 2>$null
-        if ($existingTag) {
-            Write-Warning "Tag $Version already exists"
+        # Only create date-based tags for YYYY.MM.DD format versions
+        if ($Version -match '^\d{4}\.\d{2}\.\d{2}$') {
+            # Check if tag already exists
+            $existingTag = git tag -l $Version 2>$null
+            if ($existingTag) {
+                Write-Warning "Tag $Version already exists"
+            } else {
+                # Ensure we have a clean working directory
+                $gitStatus = git status --porcelain
+                if ($gitStatus) {
+                    Write-Warning "Working directory has uncommitted changes:"
+                    Write-Output $gitStatus
+                    Write-Info "Committing build-related changes..."
+                    git add .
+                    git commit -m "Build version $Version"
+                }
+                
+                # Create and push tag
+                git tag $Version
+                Write-Success "Created tag: $Version"
+                
+                # Try to push tag
+                try {
+                    git push origin $Version
+                    Write-Success "Pushed tag to origin: $Version"
+                } catch {
+                    Write-Warning "Failed to push tag to origin: $_"
+                    Write-Info "You may need to push manually: git push origin $Version"
+                }
+            }
         } else {
-            # Ensure we have a clean working directory
-            $gitStatus = git status --porcelain
-            if ($gitStatus) {
-                Write-Warning "Working directory has uncommitted changes:"
-                Write-Output $gitStatus
-                Write-Info "Committing build-related changes..."
-                git add .
-                git commit -m "Build version $Version"
-            }
-            
-            # Create and push tag
-            git tag $Version
-            Write-Success "Created tag: $Version"
-            
-            # Try to push tag
-            try {
-                git push origin $Version
-                Write-Success "Pushed tag to origin: $Version"
-            } catch {
-                Write-Warning "Failed to push tag to origin: $_"
-                Write-Info "You may need to push manually: git push origin $Version"
-            }
+            Write-Warning "Version $Version does not match YYYY.MM.DD format, skipping tag creation"
+            Write-Info "Use YYYY.MM.DD format for automatic tagging (e.g., 2024.06.27)"
         }
     } catch {
         Write-Error "Failed to create git tag: $_"
