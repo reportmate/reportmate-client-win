@@ -1,6 +1,6 @@
 # ReportMate Windows Client
 
-A Windows client that integrates with Cimian and collects comprehensive device data using osquery for enterprise device management and security monitoring.
+ReportMate Client side Windows installer for gathering endpoint telemetry for monitoring dashboard using osquery.
 
 ## Overview
 
