@@ -1,10 +1,8 @@
 # ReportMate Windows Client
 
-ReportMate Client side Windows installer for gathering endpoint telemetry for monitoring dashboard using osquery.
+ReportMate Client side Windows installer for gathering endpoint telemetry for monitoring dashboard using `osquery`.
 
-## Overview
-
-ReportMate is a C# .NET 8 application designed to run as a postflight script after Cimian's managed software update process. It collects detailed device information using osquery and securely transmits it to the ReportMate API, mirroring the MunkiReport/Munki integration pattern.
+Written in C# .NET 8. Designed to run on its own or as a postflight script after Cimian's managed software update process. It collects detailed device information using `osquery` and securely transmits it to the ReportMate API.
 
 ## Directory Structure
 
