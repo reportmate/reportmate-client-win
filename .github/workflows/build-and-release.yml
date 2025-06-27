@@ -32,6 +32,11 @@ env:
   BUILD_CONFIGURATION: 'Release'
   RUNTIME_IDENTIFIER: 'win-x64'
 
+permissions:
+  contents: write
+  actions: read
+  packages: read
+
 jobs:
   build-and-package:
     runs-on: windows-latest
