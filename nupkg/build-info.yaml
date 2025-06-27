@@ -1,5 +1,5 @@
 product:
-  name: "ReportMate Windows Client"
+  name: "ReportMate"
   version: "1.0.0"
   identifier: "com.github.reportmate.windows"
   developer: "ReportMate"

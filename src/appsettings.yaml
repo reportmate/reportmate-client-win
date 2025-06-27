@@ -1,4 +1,4 @@
-# ReportMate Windows Client Configuration
+# ReportMate Configuration
 # YAML format for cross-platform compatibility
 
 Logging:
@@ -30,7 +30,7 @@ ReportMate:
   ConfigDirectory: "C:\\ProgramData\\ManagedReports\\config"
   
   # Client Settings
-  UserAgent: "ReportMate-WindowsClient/1.0"
+  UserAgent: "ReportMate/1.0"
   DebugLogging: false
   SkipCertificateValidation: false              # Only set to true for testing
   

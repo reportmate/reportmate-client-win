@@ -1,10 +1,10 @@
-# ReportMate Windows Client
+# ReportMate
 
 A Windows client that integrates with Cimian and collects comprehensive device data using osquery for enterprise device management and security monitoring.
 
 ## Overview
 
-The ReportMate Windows Client is a C# .NET 8 application designed to run as a postflight script after Cimian's managed software update process. It collects detailed device information using osquery and securely transmits it to the ReportMate API, mirroring the MunkiReport/Munki integration pattern.
+ReportMate is a C# .NET 8 application designed to run as a postflight script after Cimian's managed software update process. It collects detailed device information using osquery and securely transmits it to the ReportMate API, mirroring the MunkiReport/Munki integration pattern.
 
 ## Directory Structure
 
@@ -62,7 +62,7 @@ After deployment, files are organized following Windows conventions:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ReportMate Windows Client                    │
+│                         ReportMate                             │
 ├─────────────────────────────────────────────────────────────────┤
 │ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ │
 │ │   Program   │ │Configuration│ │ Data        │ │   osquery   │ │
@@ -354,19 +354,19 @@ ReportMate uses the following configuration priority (highest to lowest):
 
 ## Package Formats
 
-ReportMate Windows Client supports three deployment formats, all built from the same unified source structure:
+ReportMate supports three deployment formats, all built from the same unified source structure:
 
 ### 1. NUPKG Package (Recommended)
 
 - **Use Case**: Chocolatey and Cimian deployment
 - **Benefits**: Automatic dependency management, uninstall support, integration with existing package managers
-- **Installation**: `choco install ReportMate-WindowsClient` or `cimipkg install`
+- **Installation**: `choco install ReportMate` or `cimipkg install`
 
 ### 2. MSI Installer  
 
 - **Use Case**: Traditional Windows enterprise deployment (MDM configuration, SCCM, Intune)
 - **Benefits**: Windows Installer features, proper Add/Remove Programs integration, silent installation
-- **Installation**: `msiexec /i ReportMate-WindowsClient-1.0.0.msi /quiet`
+- **Installation**: `msiexec /i ReportMate-1.0.0.msi /quiet`
 
 ### 3. ZIP Archive
 
@@ -468,9 +468,9 @@ pwsh ./build/build_nupkg.ps1 -Version "1.0.0"
 ```
 
 This creates:
-- `ReportMate-WindowsClient-1.0.0.msi` - Traditional Windows installer
-- `ReportMate-WindowsClient-1.0.0.nupkg` - Chocolatey/Cimian compatible package  
-- `ReportMate-WindowsClient-1.0.0.zip` - Manual installation archive
+- `ReportMate-1.0.0.msi` - Traditional Windows installer
+- `ReportMate-1.0.0.nupkg` - Chocolatey/Cimian compatible package  
+- `ReportMate-1.0.0.zip` - Manual installation archive
 
 #### Step 3: Deploy to Target Machines
 
@@ -487,7 +487,7 @@ This creates:
 
 2. Create application with silent install command:
 
-`msiexec /i "ReportMate-WindowsClient-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"`
+`msiexec /i "ReportMate-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"`
 
 3. Deploy to device collections
 
@@ -504,17 +504,17 @@ This creates:
 
 ```powershell
 # Install via Chocolatey/Cimian
-choco install ReportMate-WindowsClient --source="path\to\package"
+choco install ReportMate --source="path\to\package"
 
 # Or install with cimipkg directly
-cimipkg install ReportMate-WindowsClient-1.0.0.nupkg
+cimipkg install ReportMate-1.0.0.nupkg
 ```
 
 #### 2. MSI Installer
 
 ```powershell
 # Download and install
-Invoke-WebRequest -Uri "https://releases.reportmate.io/ReportMate-WindowsClient-1.0.0.msi" -OutFile "reportmate.msi"
+Invoke-WebRequest -Uri "https://releases.reportmate.io/ReportMate-1.0.0.msi" -OutFile "reportmate.msi"
 msiexec /i reportmate.msi /quiet /l*v install.log
 
 # Configure
@@ -525,7 +525,7 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https:
 
 ```powershell
 # Extract ZIP to correct locations
-Expand-Archive "ReportMate-WindowsClient-1.0.0.zip" -DestinationPath "C:\Temp\ReportMate"
+Expand-Archive "ReportMate-1.0.0.zip" -DestinationPath "C:\Temp\ReportMate"
 
 # Copy binaries to Program Files
 Copy-Item "C:\Temp\ReportMate\Program Files\ReportMate\*" "C:\Program Files\ReportMate\" -Recurse -Force
@@ -545,7 +545,7 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https:
 ```batch
 @echo off
 REM MDM configuration or SCCM deployment
-msiexec /i "ReportMate-WindowsClient-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"
+msiexec /i "ReportMate-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"
 "C:\Program Files\ReportMate\runner.exe" install --api-url "https://your-api.azurewebsites.net"
 ```
 
@@ -555,8 +555,8 @@ msiexec /i "ReportMate-WindowsClient-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-i
 Configuration ReportMateClient {
     Node "localhost" {
         Package ReportMate {
-            Name = "ReportMate Windows Client"
-            Path = "\\server\share\ReportMate-WindowsClient-1.0.0.msi"
+            Name = "ReportMate"
+            Path = "\\server\share\ReportMate-1.0.0.msi"
             ProductId = "{12345678-1234-1234-1234-123456789012}"
             Ensure = "Present"
         }
@@ -591,7 +591,7 @@ All configuration is stored in `HKLM:\SOFTWARE\ReportMate`:
 
 ### Enterprise Configuration via CSP/OMA-URI
 
-ReportMate Windows Client supports enterprise configuration management through Configuration Service Provider (CSP) and OMA-URI profiles, enabling centralized management via Microsoft Intune, System Center Configuration Manager (SCCM), or MDM configuration.
+ReportMate supports enterprise configuration management through Configuration Service Provider (CSP) and OMA-URI profiles, enabling centralized management via Microsoft Intune, System Center Configuration Manager (SCCM), or MDM configuration.
 
 #### Registry Configuration Paths
 
@@ -838,7 +838,7 @@ cd build
 .\create-installer.ps1 -Version "1.0.0" -ApiUrl "https://your-api.azurewebsites.net"
 
 # Sign installer (production)
-signtool sign /f certificate.pfx /p password /t http://timestamp.digicert.com output/ReportMate-WindowsClient-1.0.0.msi
+signtool sign /f certificate.pfx /p password /t http://timestamp.digicert.com output/ReportMate-1.0.0.msi
 ```
 
 ### Project Structure

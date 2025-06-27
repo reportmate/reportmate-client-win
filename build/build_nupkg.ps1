@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# ReportMate Windows Client Package Builder
+# ReportMate Package Builder
 # Creates both MSI and NUPKG packages
 
 param(
@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "ReportMate Windows Client Package Builder" -ForegroundColor Green
+Write-Host "ReportMate Package Builder" -ForegroundColor Green
 Write-Host "=========================================" -ForegroundColor Green
 Write-Host "Version: $Version" -ForegroundColor Yellow
 Write-Host "Configuration: $Configuration" -ForegroundColor Yellow
@@ -76,7 +76,7 @@ Copy-Item "$PublishDir/runner.exe" $ProgramFilesPayloadDir -Force
 
 # Create version file in Program Files
 $versionContent = @"
-ReportMate Windows Client
+ReportMate
 Version: $Version
 Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
 Platform: Windows x64
@@ -158,7 +158,7 @@ if (-not $SkipNUPKG) {
 
 # Create ZIP archive for manual distribution
 Write-Host "Creating ZIP archive..." -ForegroundColor Yellow
-$zipPath = "$OutputDir/ReportMate-WindowsClient-$Version.zip"
+$zipPath = "$OutputDir/ReportMate-$Version.zip"
 
 # Create a temporary directory for the ZIP that includes both Program Files and ProgramData structure
 $tempZipDir = "$OutputDir/temp-zip"
@@ -194,6 +194,6 @@ if ($outputFiles) {
 
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Green
-Write-Host "1. Test installation: msiexec /i `"$OutputDir/ReportMate-WindowsClient-$Version.msi`" /quiet" -ForegroundColor Yellow
-Write-Host "2. Deploy with Chocolatey: choco install `"$OutputDir/ReportMate-WindowsClient-$Version.nupkg`"" -ForegroundColor Yellow
+Write-Host "1. Test installation: msiexec /i `"$OutputDir/ReportMate-$Version.msi`" /quiet" -ForegroundColor Yellow
+Write-Host "2. Deploy with Chocolatey: choco install `"$OutputDir/ReportMate-$Version.nupkg`"" -ForegroundColor Yellow
 Write-Host "3. Manual installation: extract ZIP and run postinstall.ps1" -ForegroundColor Yellow

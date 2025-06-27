@@ -1,5 +1,5 @@
-# ReportMate Windows Client Installer Creation Script
-# Creates an MSI installer for the ReportMate Windows Client
+# ReportMate Installer Creation Script
+# Creates an MSI installer for ReportMate
 # Requires WiX Toolset to be installed
 
 param(
@@ -29,7 +29,7 @@ function Write-Yellow { Write-ColorOutput Yellow $args }
 function Write-Red { Write-ColorOutput Red $args }
 function Write-Blue { Write-ColorOutput Blue $args }
 
-Write-Green "[CREATING] ReportMate Windows Client Installer"
+Write-Green "[CREATING] ReportMate Installer"
 Write-Output "================================================"
 
 # Check prerequisites
@@ -73,7 +73,7 @@ $WixSource = @"
   
   <!-- Product definition -->
   <Product Id="*" 
-           Name="ReportMate Windows Client" 
+           Name="ReportMate" 
            Language="1033" 
            Version="$Version" 
            Manufacturer="ReportMate" 
@@ -83,7 +83,7 @@ $WixSource = @"
              Compressed="yes" 
              InstallScope="perMachine"
              Platform="x64"
-             Description="ReportMate Windows Client for device management and security monitoring"
+             Description="ReportMate for device management and security monitoring"
              Comments="Integrates with Cimian and uses osquery for comprehensive data collection" />
     
     <!-- Installation conditions -->
@@ -92,13 +92,13 @@ $WixSource = @"
     </Condition>
     
     <!-- Upgrade logic -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of ReportMate Windows Client is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ReportMate is already installed." />
     
     <!-- Media -->
     <MediaTemplate EmbedCab="yes" />
     
     <!-- Features -->
-    <Feature Id="ProductFeature" Title="ReportMate Windows Client" Level="1">
+    <Feature Id="ProductFeature" Title="ReportMate" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
     </Feature>
     
@@ -192,7 +192,7 @@ $WixSource = @"
       <Component Id="StartMenuShortcut" Guid="*" Directory="ApplicationProgramsFolder" Win64="yes">
         <Shortcut Id="ReportMateShortcut"
                   Name="ReportMate Client"
-                  Description="ReportMate Windows Client"
+                  Description="ReportMate"
                   Target="[INSTALLFOLDER]runner.exe"
                   Arguments="info"
                   WorkingDirectory="INSTALLFOLDER" />
@@ -220,7 +220,7 @@ Write-Green "[OK] WiX source generated: $WixFile"
 Write-Yellow "[COMPILING] Compiling MSI installer..."
 
 $WixObj = Join-Path $OutputPath "ReportMate.wixobj"
-$MsiFile = Join-Path $OutputPath "ReportMate-WindowsClient-$Version.msi"
+$MsiFile = Join-Path $OutputPath "ReportMate-$Version.msi"
 
 try {
     # Compile WiX source
@@ -254,13 +254,13 @@ Write-Yellow "[CREATING] Creating deployment scripts..."
 
 # Build the silent install script content using string concatenation instead of here-strings
 $SilentInstallScript = "@echo off`r`n"
-$SilentInstallScript += "REM ReportMate Windows Client Silent Installation Script`r`n"
+$SilentInstallScript += "REM ReportMate Silent Installation Script`r`n"
 $SilentInstallScript += "REM For use with Group Policy or Configuration Manager`r`n"
 $SilentInstallScript += "`r`n"
-$SilentInstallScript += "echo Installing ReportMate Windows Client...`r`n"
+$SilentInstallScript += "echo Installing ReportMate...`r`n"
 $SilentInstallScript += "`r`n"
 $SilentInstallScript += "REM Install silently with logging`r`n"
-$SilentInstallScript += "msiexec /i `"ReportMate-WindowsClient-$Version.msi`" /quiet /l*v `"%TEMP%\ReportMate-Install.log`"`r`n"
+$SilentInstallScript += "msiexec /i `"ReportMate-$Version.msi`" /quiet /l*v `"%TEMP%\ReportMate-Install.log`"`r`n"
 $SilentInstallScript += "`r`n"
 $SilentInstallScript += "if %ERRORLEVEL% EQU 0 (`r`n"
 $SilentInstallScript += "    echo Installation completed successfully`r`n"
@@ -277,7 +277,7 @@ $SilentInstallScript += "    echo Configuring API URL...`r`n"
 $SilentInstallScript += "    `"C:\Program Files\ReportMate\runner.exe`" install --api-url `"%REPORTMATE_API_URL%`"`r`n"
 $SilentInstallScript += ")`r`n"
 $SilentInstallScript += "`r`n"
-$SilentInstallScript += "echo ReportMate Windows Client installation completed`r`n"
+$SilentInstallScript += "echo ReportMate installation completed`r`n"
 
 # Replace the placeholder with the actual version
 $SilentInstallScript = $SilentInstallScript -replace "VERSION_PLACEHOLDER", $Version
@@ -287,12 +287,12 @@ $SilentInstallScript | Out-File -FilePath (Join-Path $OutputPath "install-silent
 # Create uninstallation script
 # Build the uninstall script content using string concatenation instead of here-strings
 $UninstallScript = "@echo off`r`n"
-$UninstallScript += "REM ReportMate Windows Client Uninstallation Script`r`n"
+$UninstallScript += "REM ReportMate Uninstallation Script`r`n"
 $UninstallScript += "`r`n"
-$UninstallScript += "echo Uninstalling ReportMate Windows Client...`r`n"
+$UninstallScript += "echo Uninstalling ReportMate...`r`n"
 $UninstallScript += "`r`n"
 $UninstallScript += "REM Get product code from registry`r`n"
-$UninstallScript += "for /f `"tokens=2*`" %%a in ('reg query `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`" /s /f `"ReportMate Windows Client`" /k 2^>nul ^| find `"HKEY_LOCAL_MACHINE`"') do (`r`n"
+$UninstallScript += "for /f `"tokens=2*`" %%a in ('reg query `"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`" /s /f `"ReportMate`" /k 2^>nul ^| find `"HKEY_LOCAL_MACHINE`"') do (`r`n"
 $UninstallScript += "    set PRODUCT_CODE=%%b`r`n"
 $UninstallScript += "    goto :found`r`n"
 $UninstallScript += ")`r`n"
@@ -303,14 +303,14 @@ $UninstallScript += "    echo Found product code: %PRODUCT_CODE%`r`n"
 $UninstallScript += "    msiexec /x `"%PRODUCT_CODE%`" /quiet /l*v `"%TEMP%\ReportMate-Uninstall.log`"`r`n"
 $UninstallScript += "    echo Uninstallation completed`r`n"
 $UninstallScript += ") else (`r`n"
-$UninstallScript += "    echo ReportMate Windows Client not found in registry`r`n"
+$UninstallScript += "    echo ReportMate not found in registry`r`n"
 $UninstallScript += ")`r`n"
 
 $UninstallScript | Out-File -FilePath (Join-Path $OutputPath "uninstall.bat") -Encoding ASCII
 
 # Create PowerShell deployment script
 # Build the PowerShell script content using single quotes and careful escaping
-$PowerShellScript = '# ReportMate Windows Client PowerShell Deployment Script' + "`r`n"
+$PowerShellScript = '# ReportMate PowerShell Deployment Script' + "`r`n"
 $PowerShellScript += '# For use with PowerShell DSC or remote execution' + "`r`n"
 $PowerShellScript += "`r`n"
 $PowerShellScript += 'param(' + "`r`n"
@@ -319,7 +319,7 @@ $PowerShellScript += '    [switch]$Uninstall = $false' + "`r`n"
 $PowerShellScript += ')' + "`r`n"
 $PowerShellScript += "`r`n"
 $PowerShellScript += 'if ($Uninstall) {' + "`r`n"
-$PowerShellScript += '    Write-Host "Uninstalling ReportMate Windows Client..."' + "`r`n"
+$PowerShellScript += '    Write-Host "Uninstalling ReportMate..."' + "`r`n"
 $PowerShellScript += '    ' + "`r`n"
 $PowerShellScript += '    # Find and uninstall existing version' + "`r`n"
 $PowerShellScript += '    $app = Get-WmiObject -Class Win32_Product | Where-Object { $_.Name -like "*ReportMate*" }' + "`r`n"
@@ -327,13 +327,13 @@ $PowerShellScript += '    if ($app) {' + "`r`n"
 $PowerShellScript += '        $app.Uninstall()' + "`r`n"
 $PowerShellScript += '        Write-Host "Uninstallation completed"' + "`r`n"
 $PowerShellScript += '    } else {' + "`r`n"
-$PowerShellScript += '        Write-Host "ReportMate Windows Client not found"' + "`r`n"
+$PowerShellScript += '        Write-Host "ReportMate not found"' + "`r`n"
 $PowerShellScript += '    }' + "`r`n"
 $PowerShellScript += '} else {' + "`r`n"
-$PowerShellScript += '    Write-Host "Installing ReportMate Windows Client..."' + "`r`n"
+$PowerShellScript += '    Write-Host "Installing ReportMate..."' + "`r`n"
 $PowerShellScript += '    ' + "`r`n"
 $PowerShellScript += '    # Install MSI' + "`r`n"
-$PowerShellScript += '    $msiPath = Join-Path $PSScriptRoot "ReportMate-WindowsClient-' + $Version + '.msi"' + "`r`n"
+$PowerShellScript += '    $msiPath = Join-Path $PSScriptRoot "ReportMate-' + $Version + '.msi"' + "`r`n"
 $PowerShellScript += '    $logPath = Join-Path $env:TEMP "ReportMate-Install.log"' + "`r`n"
 $PowerShellScript += '    ' + "`r`n"
 $PowerShellScript += '    $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "$msiPath", "/quiet", "/l*v", "$logPath" -Wait -PassThru' + "`r`n"

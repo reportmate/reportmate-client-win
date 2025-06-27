@@ -1,4 +1,4 @@
-# ReportMate Windows Client Post-Installation Script
+# ReportMate Post-Installation Script
 # Configures the ReportMate client after installation
 
 param(
@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-Write-Host "ReportMate Windows Client Post-Installation Script"
+Write-Host "ReportMate Post-Installation Script"
 Write-Host "=================================================="
 
 # Create registry key if it doesn't exist

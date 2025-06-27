@@ -9,10 +9,10 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishTrimmed>true</PublishTrimmed>
     <AssemblyName>runner</AssemblyName>
-    <AssemblyTitle>ReportMate Windows Client</AssemblyTitle>
+    <AssemblyTitle>ReportMate</AssemblyTitle>
     <AssemblyDescription>Windows client for ReportMate device management and security monitoring</AssemblyDescription>
     <AssemblyCompany>ReportMate</AssemblyCompany>
-    <AssemblyProduct>ReportMate Windows Client</AssemblyProduct>
+    <AssemblyProduct>ReportMate</AssemblyProduct>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>

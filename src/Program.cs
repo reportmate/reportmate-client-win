@@ -15,7 +15,7 @@ using System.Threading.Tasks;
 namespace ReportMate.WindowsClient;
 
 /// <summary>
-/// ReportMate Windows Client - Collects device data using osquery and sends to ReportMate API
+/// ReportMate - Collects device data using osquery and sends to ReportMate API
 /// Designed to run as a postflight script after Cimian managed software updates
 /// </summary>
 public class Program
@@ -34,7 +34,7 @@ public class Program
             _serviceProvider = ConfigureServices(configuration);
             _logger = _serviceProvider.GetRequiredService<ILogger<Program>>();
 
-            _logger.LogInformation("ReportMate Windows Client v{Version} starting", 
+            _logger.LogInformation("ReportMate v{Version} starting", 
                 System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
 
             // Create and configure command line interface
@@ -137,7 +137,7 @@ public class Program
             client.BaseAddress = new Uri(apiUrl);
             client.Timeout = TimeSpan.FromMinutes(5);
             client.DefaultRequestHeaders.Add("User-Agent", 
-                $"ReportMate-WindowsClient/{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
+                $"ReportMate/{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
         });
 
         // Register services
@@ -152,7 +152,7 @@ public class Program
 
     private static RootCommand ConfigureCommandLine()
     {
-        var rootCommand = new RootCommand("ReportMate Windows Client - Device data collection and reporting");
+        var rootCommand = new RootCommand("ReportMate - Device data collection and reporting");
 
         // Default command - run data collection
         var runCommand = new Command("run", "Run data collection and send to API (default)")
@@ -267,7 +267,7 @@ public class Program
             var deviceInfo = await deviceInfoService.GetBasicDeviceInfoAsync();
             var config = await configService.GetCurrentConfigurationAsync();
             
-            Console.WriteLine("=== ReportMate Windows Client Information ===");
+            Console.WriteLine("=== ReportMate Information ===");
             Console.WriteLine($"Version: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
             Console.WriteLine($"Device ID: {deviceInfo.DeviceId}");
             Console.WriteLine($"Computer Name: {deviceInfo.ComputerName}");

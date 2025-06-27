@@ -227,7 +227,7 @@ public class ApiService : IApiService
     private void ConfigureHttpClient()
     {
         // Set user agent
-        var userAgent = _configuration["ReportMate:UserAgent"] ?? "ReportMate-WindowsClient/1.0";
+        var userAgent = _configuration["ReportMate:UserAgent"] ?? "ReportMate/1.0";
         _httpClient.DefaultRequestHeaders.Add("User-Agent", userAgent);
 
         // Set API key if provided
