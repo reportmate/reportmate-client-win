@@ -1,0 +1,280 @@
+name: Build and Release ReportMate Windows Client
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+      create_release:
+        description: 'Create GitHub release'
+        type: boolean
+        default: false
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_PATH: 'src/ReportMate.WindowsClient.csproj'
+  BUILD_CONFIGURATION: 'Release'
+  RUNTIME_IDENTIFIER: 'win-x64'
+
+jobs:
+  build-and-package:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: Cache NuGet packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+          
+    - name: Get version
+      id: version
+      shell: powershell
+      run: |
+        if ($env:GITHUB_REF -match '^refs/tags/v(.+)$') {
+          $version = $matches[1]
+        } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+          $version = "${{ github.event.inputs.version }}"
+        } else {
+          $version = "1.0.0-dev.$($env:GITHUB_RUN_NUMBER)"
+        }
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "Building version: $version"
+        
+    - name: Update version in project files
+      shell: powershell
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        
+        # Update .csproj version
+        $csprojPath = "src/ReportMate.WindowsClient.csproj"
+        $content = Get-Content $csprojPath -Raw
+        $content = $content -replace '<AssemblyVersion>.*?</AssemblyVersion>', "<AssemblyVersion>$version.0</AssemblyVersion>"
+        $content = $content -replace '<FileVersion>.*?</FileVersion>', "<FileVersion>$version.0</FileVersion>"
+        Set-Content $csprojPath $content
+        
+        # Update package build-info.yaml
+        $buildInfoPath = "nupkg/build-info.yaml"
+        $content = Get-Content $buildInfoPath -Raw
+        $content = $content -replace 'version: ".*?"', "version: `"$version`""
+        Set-Content $buildInfoPath $content
+        
+        echo "Updated version to: $version"
+        
+    - name: Restore dependencies
+      run: dotnet restore src/ReportMate.WindowsClient.csproj
+      
+    - name: Build application
+      run: dotnet build src/ReportMate.WindowsClient.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
+      
+    - name: Publish self-contained executable
+      run: |
+        dotnet publish src/ReportMate.WindowsClient.csproj `
+          --configuration ${{ env.BUILD_CONFIGURATION }} `
+          --runtime win-x64 `
+          --self-contained true `
+          --output build/publish `
+          -p:PublishSingleFile=true `
+          -p:PublishTrimmed=true
+          
+    - name: Prepare package payload
+      shell: powershell
+      run: |
+        # Ensure payload directories exist
+        New-Item -ItemType Directory -Path "nupkg/payload/Program Files/ReportMate" -Force
+        New-Item -ItemType Directory -Path "nupkg/payload/ProgramData/ManagedReports" -Force
+        New-Item -ItemType Directory -Path "nupkg/payload/Program Files/Cimian" -Force
+        
+        # Copy binaries to Program Files/ReportMate (no config files)
+        Copy-Item "build/publish/runner.exe" "nupkg/payload/Program Files/ReportMate/"
+        
+        # Copy working files to ProgramData/ManagedReports  
+        Copy-Item "src/appsettings.yaml" "nupkg/payload/ProgramData/ManagedReports/"
+        Copy-Item "src/osquery-queries.json" "nupkg/payload/ProgramData/ManagedReports/queries.json"
+        
+        # Create enterprise template configuration (CSP/OMA-URI manageable)
+        Copy-Item "src/appsettings.yaml" "nupkg/payload/ProgramData/ManagedReports/appsettings.template.yaml"
+        
+        # Create version file in Program Files
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $versionContent = "ReportMate Windows Client`nVersion: $version`nBuild Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')`nPlatform: Windows x64`nCommit: $env:GITHUB_SHA"
+        $versionContent | Out-File "nupkg/payload/Program Files/ReportMate/version.txt" -Encoding UTF8
+        
+        # Update version in build-info.yaml
+        $buildInfoPath = "nupkg/build-info.yaml"
+        $content = Get-Content $buildInfoPath -Raw
+        $content = $content -replace 'version: ".*?"', "version: `"$version`""
+        Set-Content $buildInfoPath $content
+        
+        echo "Package payload prepared"
+        
+    - name: Setup WiX Toolset
+      run: |
+        # Download and install WiX 3.11.2
+        Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311.exe" -OutFile "wix311.exe"
+        Start-Process -FilePath "wix311.exe" -ArgumentList "/quiet" -Wait
+        
+        # Add WiX to PATH
+        $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+        echo "$wixPath" >> $env:GITHUB_PATH
+        
+    - name: Create MSI installer
+      shell: powershell
+      run: |
+        # Run the MSI creation script using the nupkg payload structure
+        .\build\build_msi.ps1 -Version "${{ steps.version.outputs.VERSION }}" -SourcePath "nupkg/payload" -OutputPath "build/output"
+        
+    - name: Download cimipkg
+      shell: powershell
+      run: |
+        # Download latest cimipkg release
+        $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/windowsadmins/cimian-pkg/releases/latest"
+        $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*amd64*" } | Select-Object -First 1 -ExpandProperty browser_download_url
+        
+        if (-not $downloadUrl) {
+          $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1 -ExpandProperty browser_download_url
+        }
+        
+        if ($downloadUrl) {
+          Invoke-WebRequest -Uri $downloadUrl -OutFile "cimipkg.exe"
+          echo "Downloaded cimipkg from: $downloadUrl"
+        } else {
+          echo "No suitable cimipkg binary found, will build from source"
+          # Fallback: build from source if Go is available
+          go version
+          git clone https://github.com/windowsadmins/cimian-pkg.git cimian-pkg-src
+          cd cimian-pkg-src
+          go build -o ../cimipkg.exe .
+          cd ..
+        }
+        
+    - name: Create NUPKG package
+      shell: powershell
+      run: |
+        # Install NuGet CLI if not available
+        if (-not (Get-Command nuget -ErrorAction SilentlyContinue)) {
+          Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile "nuget.exe"
+          $env:PATH += ";$(Get-Location)"
+        }
+        
+        # Run cimipkg to create .nupkg
+        Push-Location nupkg
+        .\cimipkg.exe .
+        Pop-Location
+        
+        # Move generated package to build output
+        $nupkgFile = Get-ChildItem -Path "nupkg" -Filter "*.nupkg" | Select-Object -First 1
+        if ($nupkgFile) {
+          Move-Item $nupkgFile.FullName "build/output/"
+          echo "Created NUPKG: $($nupkgFile.Name)"
+        }
+        
+    - name: List build artifacts
+      shell: powershell
+      run: |
+        echo "Build artifacts:"
+        Get-ChildItem "build/output" -Recurse | ForEach-Object { echo $_.FullName }
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: reportmate-windows-client-${{ steps.version.outputs.VERSION }}
+        path: |
+          build/output/*.msi
+          build/output/*.nupkg
+          build/output/*.zip
+          build/publish/runner.exe
+          
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          build/output/*.msi
+          build/output/*.nupkg
+          build/output/*.zip
+        generate_release_notes: true
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+  test-package:
+    needs: build-and-package
+    runs-on: windows-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: reportmate-windows-client-${{ needs.build-and-package.outputs.version }}
+        
+    - name: Test MSI installation
+      shell: powershell
+      run: |
+        $msiFile = Get-ChildItem -Filter "*.msi" | Select-Object -First 1
+        if ($msiFile) {
+          echo "Testing MSI installation: $($msiFile.Name)"
+          
+          # Install silently
+          Start-Process -FilePath "msiexec" -ArgumentList "/i", $msiFile.FullName, "/quiet", "/l*v", "install.log" -Wait
+          
+          # Verify installation
+          if (Test-Path "C:\Program Files\ReportMate\runner.exe") {
+            echo "✅ MSI installation successful"
+            
+            # Test executable
+            $result = & "C:\Program Files\ReportMate\runner.exe" --help
+            echo "✅ Executable runs successfully"
+          } else {
+            echo "❌ MSI installation failed"
+            Get-Content "install.log" -ErrorAction SilentlyContinue
+            exit 1
+          }
+        }
+        
+    - name: Test NUPKG package
+      shell: powershell
+      run: |
+        $nupkgFile = Get-ChildItem -Filter "*.nupkg" | Select-Object -First 1
+        if ($nupkgFile) {
+          echo "Testing NUPKG package: $($nupkgFile.Name)"
+          
+          # Install Chocolatey if not available
+          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          }
+          
+          # Install package
+          choco install $nupkgFile.FullName --source="'.'" --force --yes
+          
+          # Verify installation
+          if (Test-Path "C:\Program Files\ReportMate\runner.exe") {
+            echo "✅ NUPKG installation successful"
+          } else {
+            echo "❌ NUPKG installation failed"
+            exit 1
+          }
+        }
