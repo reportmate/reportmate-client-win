@@ -232,12 +232,18 @@ if (-not $SkipNUPKG) {
         (Get-Command cimipkg -ErrorAction SilentlyContinue)?.Source,
         "$RootDir/cimipkg.exe",
         "$BuildDir/cimipkg.exe"
-    ) | Where-Object { $_ -and (Test-Path $_) }
+    )
     
-    if ($cimipkgLocations) {
-        $cimipkgPath = $cimipkgLocations[0]
-        Write-Success "cimipkg found: $cimipkgPath"
-    } else {
+    # Find the first location that exists and has content
+    foreach ($location in $cimipkgLocations) {
+        if ($location -and (Test-Path $location -ErrorAction SilentlyContinue)) {
+            $cimipkgPath = $location
+            Write-Success "cimipkg found: $cimipkgPath"
+            break
+        }
+    }
+    
+    if (-not $cimipkgPath) {
         Write-Warning "cimipkg not found - will attempt to download"
     }
 }
@@ -389,16 +395,25 @@ if (-not $SkipMSI -and $wixFound) {
     
     try {
         # Create WiX-compatible version (x.x.x.x format, no pre-release suffixes)
+        # WiX version constraints: major/minor < 256, build < 65536
         $wixVersion = if ($Version -match '^(\d{4})\.(\d{2})\.(\d{2})') {
-            # YYYY.MM.DD format - convert to valid WiX version
-            "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+            # YYYY.MM.DD format - convert to valid WiX version  
+            # Use YY.MM.DD.0 format to stay within constraints
+            $year = [int]$Matches[1] % 100  # Last 2 digits of year (e.g., 2025 -> 25)
+            $month = [int]$Matches[2]       # Month as-is
+            $day = [int]$Matches[3]         # Day as-is
+            "$year.$month.$day.0"
         } elseif ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
-            # Standard version format - use as-is with .0 build
-            "$Version.0"
+            # Standard version format - ensure constraints
+            $major = [Math]::Min([int]$Matches[1], 255)
+            $minor = [Math]::Min([int]$Matches[2], 255)  
+            $build = [Math]::Min([int]$Matches[3], 65535)
+            "$major.$minor.$build.0"
         } else {
             # Fallback to current date-based version
-            $dateVersion = Get-Date -Format "yyyy.M.d"
-            "$dateVersion.0"
+            $currentDate = Get-Date
+            $year = $currentDate.Year % 100
+            "$year.$($currentDate.Month).$($currentDate.Day).0"
         }
         
         Write-Verbose "Using WiX version: $wixVersion"

@@ -392,11 +392,8 @@ appsettings.Local.json
 # Logs
 *.log
 
-# Build artifacts specific to this project
-build/output/
-build/packages/
-build/publish/
-build/legacy/
+# Build artifacts specific to this project (entire folder is generated)
+build/
 installer/
 
 # Package payload (generated during build)
