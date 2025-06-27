@@ -51,7 +51,7 @@ if (-not (Test-Path $SourcePath)) {
     exit 1
 }
 
-$ExePath = Join-Path $SourcePath "runner.exe"
+$ExePath = Join-Path $SourcePath "Program Files/ReportMate/runner.exe"
 if (-not (Test-Path $ExePath)) {
     Write-Red "[ERROR] runner.exe not found in source path"
     exit 1
@@ -160,18 +160,18 @@ $WixSource = @"
       <!-- Main executable -->
       <Component Id="ReportMateExe" Guid="*">
         <File Id="ReportMateExe" 
-              Source="$($SourcePath)\runner.exe" 
+              Source="$($SourcePath)\Program Files\ReportMate\runner.exe" 
               KeyPath="yes" />
       </Component>
       
       <!-- Configuration files -->
       <Component Id="ConfigFiles" Guid="*">
         <File Id="AppSettings" 
-              Source="$($SourcePath)\appsettings.json" />
+              Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.yaml" />
         <File Id="AppSettingsYaml" 
-              Source="$($SourcePath)\appsettings.yaml" />
+              Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.template.yaml" />
         <File Id="OsqueryQueries" 
-              Source="$($SourcePath)\osquery-queries.json" />
+              Source="$($SourcePath)\ProgramData\ManagedReports\queries.json" />
       </Component>
       
       <!-- Registry entries -->
