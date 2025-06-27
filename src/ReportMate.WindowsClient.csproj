@@ -13,8 +13,8 @@
     <AssemblyDescription>Windows client for ReportMate device management and security monitoring</AssemblyDescription>
     <AssemblyCompany>ReportMate</AssemblyCompany>
     <AssemblyProduct>ReportMate</AssemblyProduct>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>2025.06.27.0</AssemblyVersion>
+    <FileVersion>2025.06.27.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
@@ -50,4 +50,5 @@
   </ItemGroup>
 
 </Project>
+
 
