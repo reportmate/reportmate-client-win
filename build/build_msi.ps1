@@ -137,18 +137,7 @@ $WixSource = @"
     <!-- UI for configuration -->
     <UI>
       <UIRef Id="WixUI_Minimal" />
-      <Publish Dialog="ExitDialog"
-               Control="Finish" 
-               Event="DoAction" 
-               Value="LaunchApplication">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
     </UI>
-    
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch ReportMate Configuration" />
-    <Property Id="WixShellExecTarget" Value="[#ReportMateExe]" />
-    <CustomAction Id="LaunchApplication"
-                  BinaryKey="WixCA"
-                  DllEntry="WixShellExec"
-                  Impersonate="yes" />
     
   </Product>
   
