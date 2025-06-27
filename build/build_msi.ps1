@@ -274,7 +274,7 @@ REM For use with Group Policy or Configuration Manager
 echo Installing ReportMate Windows Client...
 
 REM Install silently with logging
-msiexec /i "$((Get-Item $MsiFile).Name)" /quiet /l*v "%TEMP%\ReportMate-Install.log"
+msiexec /i "ReportMate-WindowsClient-$Version.msi" /quiet /l*v "%TEMP%\ReportMate-Install.log"
 
 if %ERRORLEVEL% EQU 0 (
     echo Installation completed successfully
@@ -346,7 +346,7 @@ if (`$Uninstall) {
     Write-Host "Installing ReportMate Windows Client..."
     
     # Install MSI
-    `$msiPath = Join-Path `$PSScriptRoot "$((Get-Item $MsiFile).Name)"
+    `$msiPath = Join-Path `$PSScriptRoot "ReportMate-WindowsClient-$Version.msi"
     `$logPath = Join-Path `$env:TEMP "ReportMate-Install.log"
     
     `$process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`$msiPath", "/quiet", "/l*v", "`$logPath" -Wait -PassThru
