@@ -82,6 +82,7 @@ $WixSource = @"
     <Package InstallerVersion="200" 
              Compressed="yes" 
              InstallScope="perMachine"
+             Platform="x64"
              Description="ReportMate Windows Client for device management and security monitoring"
              Comments="Integrates with Cimian and uses osquery for comprehensive data collection" />
     
@@ -146,33 +147,33 @@ $WixSource = @"
     <ComponentGroup Id="ProductComponents">
       
       <!-- Main executable in INSTALLFOLDER -->
-      <Component Id="ReportMateExe" Guid="*" Directory="INSTALLFOLDER">
+      <Component Id="ReportMateExe" Guid="*" Directory="INSTALLFOLDER" Win64="yes">
         <File Id="ReportMateExe" 
               Source="$($SourcePath)\Program Files\ReportMate\runner.exe" 
               KeyPath="yes" />
       </Component>
       
       <!-- Configuration files in ProgramData\ManagedReports -->
-      <Component Id="AppSettingsFile" Guid="*" Directory="ManagedReportsFolder">
+      <Component Id="AppSettingsFile" Guid="*" Directory="ManagedReportsFolder" Win64="yes">
         <File Id="AppSettings" 
               Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.yaml" 
               KeyPath="yes" />
       </Component>
       
-      <Component Id="AppSettingsTemplateFile" Guid="*" Directory="ManagedReportsFolder">
+      <Component Id="AppSettingsTemplateFile" Guid="*" Directory="ManagedReportsFolder" Win64="yes">
         <File Id="AppSettingsTemplate" 
               Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.template.yaml" 
               KeyPath="yes" />
       </Component>
       
-      <Component Id="OsqueryQueriesFile" Guid="*" Directory="ManagedReportsFolder">
+      <Component Id="OsqueryQueriesFile" Guid="*" Directory="ManagedReportsFolder" Win64="yes">
         <File Id="OsqueryQueries" 
               Source="$($SourcePath)\ProgramData\ManagedReports\queries.json" 
               KeyPath="yes" />
       </Component>
       
       <!-- Registry entries -->
-      <Component Id="RegistryEntries" Guid="*" Directory="INSTALLFOLDER">
+      <Component Id="RegistryEntries" Guid="*" Directory="INSTALLFOLDER" Win64="yes">
         <RegistryKey Root="HKLM" Key="SOFTWARE\ReportMate">
           <RegistryValue Name="InstallPath" 
                          Type="string" 
@@ -188,7 +189,7 @@ $WixSource = @"
       </Component>
       
       <!-- Start menu shortcut -->
-      <Component Id="StartMenuShortcut" Guid="*" Directory="ApplicationProgramsFolder">
+      <Component Id="StartMenuShortcut" Guid="*" Directory="ApplicationProgramsFolder" Win64="yes">
         <Shortcut Id="ReportMateShortcut"
                   Name="ReportMate Client"
                   Description="ReportMate Windows Client"
