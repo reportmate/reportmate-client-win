@@ -153,13 +153,22 @@ $WixSource = @"
       </Component>
       
       <!-- Configuration files in ProgramData\ManagedReports -->
-      <Component Id="ConfigFiles" Guid="*" Directory="ManagedReportsFolder">
+      <Component Id="AppSettingsFile" Guid="*" Directory="ManagedReportsFolder">
         <File Id="AppSettings" 
-              Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.yaml" />
+              Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.yaml" 
+              KeyPath="yes" />
+      </Component>
+      
+      <Component Id="AppSettingsTemplateFile" Guid="*" Directory="ManagedReportsFolder">
         <File Id="AppSettingsTemplate" 
-              Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.template.yaml" />
+              Source="$($SourcePath)\ProgramData\ManagedReports\appsettings.template.yaml" 
+              KeyPath="yes" />
+      </Component>
+      
+      <Component Id="OsqueryQueriesFile" Guid="*" Directory="ManagedReportsFolder">
         <File Id="OsqueryQueries" 
-              Source="$($SourcePath)\ProgramData\ManagedReports\queries.json" />
+              Source="$($SourcePath)\ProgramData\ManagedReports\queries.json" 
+              KeyPath="yes" />
       </Component>
       
       <!-- Registry entries -->
