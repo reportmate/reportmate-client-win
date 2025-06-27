@@ -178,7 +178,7 @@ jobs:
         
         # Run cimipkg to create .nupkg
         Push-Location nupkg
-        .\cimipkg.exe .
+        ..\cimipkg.exe .
         Pop-Location
         
         # Move generated package to build output
