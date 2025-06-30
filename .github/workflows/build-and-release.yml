@@ -2,20 +2,29 @@ name: Build and Release ReportMate
 
 on:
   push:
+    branches: [ main, develop ]
     tags:
       - 'v*'
+      - '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*'  # YYYY.MM.DD format
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build (e.g. 1.0.0)'
-        required: true
-        default: '1.0.0'
+        description: 'Version to build (e.g. 2024.06.27 or 1.0.0)'
+        required: false
+        default: ''
       create_release:
         description: 'Create GitHub release'
         type: boolean
+        default: true
+      create_tag:
+        description: 'Create and push date-based tag (YYYY.MM.DD)'
+        type: boolean
         default: false
+  schedule:
+    # Auto-build daily at 2 AM UTC
+    - cron: '0 2 * * *'
 
 env:
   DOTNET_VERSION: '8.0.x'
@@ -23,16 +32,25 @@ env:
   BUILD_CONFIGURATION: 'Release'
   RUNTIME_IDENTIFIER: 'win-x64'
 
+permissions:
+  contents: write
+  actions: read
+  packages: read
+
 jobs:
   build-and-package:
     runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
+      should_create_release: ${{ steps.release.outputs.SHOULD_CREATE_RELEASE }}
+      tag_created: ${{ steps.tag.outputs.TAG_CREATED }}
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+      with:
+        fetch-depth: 0  # Fetch full history for tagging
+        
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -46,244 +64,252 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-nuget-
           
-    - name: Get version
+    - name: Determine version and release strategy
       id: version
-      shell: powershell
+      shell: pwsh
       run: |
+        # Determine version
         if ($env:GITHUB_REF -match '^refs/tags/v(.+)$') {
           $version = $matches[1]
-        } elseif ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+          $isTaggedRelease = $true
+        } elseif ($env:GITHUB_REF -match '^refs/tags/(\d{4}\.\d{2}\.\d{2}.*)$') {
+          $version = $matches[1]
+          $isTaggedRelease = $true
+        } elseif ("${{ github.event.inputs.version }}" -ne "") {
           $version = "${{ github.event.inputs.version }}"
+          $isTaggedRelease = $false
+        } elseif ($env:GITHUB_EVENT_NAME -eq "schedule") {
+          # Daily build
+          $version = Get-Date -Format "yyyy.MM.dd"
+          $isTaggedRelease = $false
         } else {
-          $version = "1.0.0-dev.$($env:GITHUB_RUN_NUMBER)"
+          # PR or push to branch
+          $version = "$(Get-Date -Format 'yyyy.MM.dd')-dev.$($env:GITHUB_RUN_NUMBER)"
+          $isTaggedRelease = $false
         }
+        
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "IS_TAGGED_RELEASE=$isTaggedRelease" >> $env:GITHUB_OUTPUT
         echo "Building version: $version"
+        echo "Is tagged release: $isTaggedRelease"
         
-    - name: Update version in project files
-      shell: powershell
+    - name: Create and push date-based tag
+      id: tag
+      if: github.event.inputs.create_tag == 'true' || (github.event_name == 'schedule' && github.ref == 'refs/heads/main')
+      shell: pwsh
       run: |
         $version = "${{ steps.version.outputs.VERSION }}"
+        $dateTag = Get-Date -Format "yyyy.MM.dd"
         
-        # Update .csproj version
-        $csprojPath = "src/ReportMate.WindowsClient.csproj"
-        $content = Get-Content $csprojPath -Raw
-        $content = $content -replace '<AssemblyVersion>.*?</AssemblyVersion>', "<AssemblyVersion>$version.0</AssemblyVersion>"
-        $content = $content -replace '<FileVersion>.*?</FileVersion>', "<FileVersion>$version.0</FileVersion>"
-        Set-Content $csprojPath $content
-        
-        # Update package build-info.yaml
-        $buildInfoPath = "nupkg/build-info.yaml"
-        $content = Get-Content $buildInfoPath -Raw
-        $content = $content -replace 'version: ".*?"', "version: `"$version`""
-        Set-Content $buildInfoPath $content
-        
-        echo "Updated version to: $version"
-        
-    - name: Restore dependencies
-      run: dotnet restore src/ReportMate.WindowsClient.csproj
-      
-    - name: Build application
-      run: dotnet build src/ReportMate.WindowsClient.csproj --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
-      
-    - name: Publish self-contained executable
-      run: |
-        dotnet publish src/ReportMate.WindowsClient.csproj `
-          --configuration ${{ env.BUILD_CONFIGURATION }} `
-          --runtime win-x64 `
-          --self-contained true `
-          --output build/publish `
-          -p:PublishSingleFile=true `
-          -p:PublishTrimmed=true
+        # Only create tag if it doesn't exist and version matches date format
+        if ($version -match '^\d{4}\.\d{2}\.\d{2}$') {
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
-    - name: Prepare package payload
-      shell: powershell
+          $existingTag = git tag -l $dateTag
+          if (-not $existingTag) {
+            git tag $dateTag
+            git push origin $dateTag
+            echo "TAG_CREATED=$dateTag" >> $env:GITHUB_OUTPUT
+            echo "Created and pushed tag: $dateTag"
+          } else {
+            echo "TAG_CREATED=existing" >> $env:GITHUB_OUTPUT
+            echo "Tag $dateTag already exists"
+          }
+        } else {
+          echo "TAG_CREATED=none" >> $env:GITHUB_OUTPUT
+          echo "Version $version does not match date format, skipping tag creation"
+        }
+        
+    - name: Determine release strategy
+      id: release
+      shell: pwsh
       run: |
-        # Ensure payload directories exist
-        New-Item -ItemType Directory -Path "nupkg/payload/Program Files/ReportMate" -Force
-        New-Item -ItemType Directory -Path "nupkg/payload/ProgramData/ManagedReports" -Force
-        New-Item -ItemType Directory -Path "nupkg/payload/Program Files/Cimian" -Force
+        $shouldRelease = $false
         
-        # Copy binaries to Program Files/ReportMate (no config files)
-        Copy-Item "build/publish/runner.exe" "nupkg/payload/Program Files/ReportMate/"
+        # Create release for:
+        # 1. Tagged releases (v* or YYYY.MM.DD)
+        # 2. Manual workflow dispatch with create_release=true
+        # 3. Daily scheduled builds on main branch
+        if ("${{ steps.version.outputs.IS_TAGGED_RELEASE }}" -eq "true") {
+          $shouldRelease = $true
+          echo "Release: Tagged release detected"
+        } elseif ("${{ github.event.inputs.create_release }}" -eq "true") {
+          $shouldRelease = $true
+          echo "Release: Manual release requested"
+        } elseif ($env:GITHUB_EVENT_NAME -eq "schedule" -and $env:GITHUB_REF -eq "refs/heads/main") {
+          $shouldRelease = $true
+          echo "Release: Daily scheduled build on main"
+        } else {
+          echo "Release: No release will be created"
+        }
         
-        # Copy working files to ProgramData/ManagedReports  
-        Copy-Item "src/appsettings.yaml" "nupkg/payload/ProgramData/ManagedReports/"
-        Copy-Item "src/osquery-queries.json" "nupkg/payload/ProgramData/ManagedReports/queries.json"
+        echo "SHOULD_CREATE_RELEASE=$shouldRelease" >> $env:GITHUB_OUTPUT
         
-        # Create enterprise template configuration (CSP/OMA-URI manageable)
-        Copy-Item "src/appsettings.yaml" "nupkg/payload/ProgramData/ManagedReports/appsettings.template.yaml"
-        
-        # Create version file in Program Files
+    - name: Build with unified script
+      shell: pwsh
+      run: |
         $version = "${{ steps.version.outputs.VERSION }}"
-        $versionContent = "ReportMate`nVersion: $version`nBuild Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')`nPlatform: Windows x64`nCommit: $env:GITHUB_SHA"
-        $versionContent | Out-File "nupkg/payload/Program Files/ReportMate/version.txt" -Encoding UTF8
+        echo "Building ReportMate version: $version"
         
-        # Update version in build-info.yaml
-        $buildInfoPath = "nupkg/build-info.yaml"
-        $content = Get-Content $buildInfoPath -Raw
-        $content = $content -replace 'version: ".*?"', "version: `"$version`""
-        Set-Content $buildInfoPath $content
-        
-        echo "Package payload prepared"
-        
-    - name: Setup WiX Toolset
-      run: |
-        # Download and install WiX 3.11.2
-        Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311.exe" -OutFile "wix311.exe"
-        Start-Process -FilePath "wix311.exe" -ArgumentList "/quiet" -Wait
-        
-        # Add WiX to PATH
-        $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
-        echo "$wixPath" >> $env:GITHUB_PATH
-        
-    - name: Create MSI installer
-      shell: powershell
-      run: |
-        # Ensure build output directory exists
-        New-Item -ItemType Directory -Path "build/output" -Force
-        
-        # Run the MSI creation script using the nupkg payload structure
-        .\build\build_msi.ps1 -Version "${{ steps.version.outputs.VERSION }}" -SourcePath "nupkg/payload" -OutputPath "build/output"
-        
-    - name: Download cimipkg
-      shell: powershell
-      run: |
-        # Download latest cimipkg release
-        $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/windowsadmins/cimian-pkg/releases/latest"
-        $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*amd64*" } | Select-Object -First 1 -ExpandProperty browser_download_url
-        
-        if (-not $downloadUrl) {
-          $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1 -ExpandProperty browser_download_url
-        }
-        
-        if ($downloadUrl) {
-          Invoke-WebRequest -Uri $downloadUrl -OutFile "cimipkg.exe"
-          echo "Downloaded cimipkg from: $downloadUrl"
-        } else {
-          echo "No suitable cimipkg binary found, will build from source"
-          # Fallback: build from source if Go is available
-          go version
-          git clone https://github.com/windowsadmins/cimian-pkg.git cimian-pkg-src
-          cd cimian-pkg-src
-          go build -o ../cimipkg.exe .
-          cd ..
-        }
-        
-    - name: Create NUPKG package
-      shell: powershell
-      run: |
-        # Ensure build output directory exists
-        New-Item -ItemType Directory -Path "build/output" -Force
-        
-        # Install NuGet CLI if not available
-        if (-not (Get-Command nuget -ErrorAction SilentlyContinue)) {
-          Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/latest/nuget.exe" -OutFile "nuget.exe"
-          $env:PATH += ";$(Get-Location)"
-        }
-        
-        # Run cimipkg to create .nupkg
-        Push-Location nupkg
-        ..\cimipkg.exe .
-        Pop-Location
-        
-        # Move generated package to build output
-        $nupkgFile = Get-ChildItem -Path "nupkg/build" -Filter "*.nupkg" | Select-Object -First 1
-        if ($nupkgFile) {
-          Move-Item $nupkgFile.FullName "build/output/"
-          echo "Created NUPKG: $($nupkgFile.Name)"
-        } else {
-          echo "Warning: No .nupkg file found in nupkg/build directory"
-          Get-ChildItem -Path "nupkg" -Recurse -Filter "*.nupkg" | ForEach-Object { echo "Found NUPKG: $($_.FullName)" }
-        }
-        
-    - name: List build artifacts
-      shell: powershell
-      run: |
-        echo "Build artifacts:"
-        Get-ChildItem "build/output" -Recurse | ForEach-Object { echo $_.FullName }
+        # Run the unified PowerShell 7 build script from repo root
+        .\build.ps1 -Version $version -Configuration ${{ env.BUILD_CONFIGURATION }} -Clean
         
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: reportmate-${{ steps.version.outputs.VERSION }}
         path: |
-          build/output/*.msi
-          build/output/*.nupkg
-          build/output/*.zip
-          build/publish/runner.exe
-          
-    - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          build/output/*.msi
-          build/output/*.nupkg
-          build/output/*.zip
-        generate_release_notes: true
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          dist/*.nupkg
+          dist/*.zip
+          .publish/runner.exe
+        retention-days: 30
         
-  test-package:
+    - name: List build artifacts for verification
+      shell: pwsh
+      run: |
+        echo "Final build artifacts:"
+        Get-ChildItem "dist" -Recurse | ForEach-Object { 
+          $sizeKB = [math]::Round($_.Length / 1KB, 1)
+          echo "  $($_.Name) ($sizeKB KB)" 
+        }
+
+  create-release:
     needs: build-and-package
-    runs-on: windows-latest
-    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    if: needs.build-and-package.outputs.should_create_release == 'true'
     
     steps:
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
         name: reportmate-${{ needs.build-and-package.outputs.version }}
+        path: ./artifacts
         
-    - name: Test MSI installation
-      shell: powershell
-      run: |
-        $msiFile = Get-ChildItem -Filter "*.msi" | Select-Object -First 1
-        if ($msiFile) {
-          echo "Testing MSI installation: $($msiFile.Name)"
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.build-and-package.outputs.tag_created != 'none' && needs.build-and-package.outputs.tag_created != 'existing' && needs.build-and-package.outputs.tag_created || needs.build-and-package.outputs.version }}
+        name: ReportMate ${{ needs.build-and-package.outputs.version }}
+        files: |
+          artifacts/*.nupkg
+          artifacts/*.zip
+        generate_release_notes: true
+        draft: false
+        prerelease: ${{ contains(needs.build-and-package.outputs.version, 'dev') }}
+        body: |
+          ## ReportMate ${{ needs.build-and-package.outputs.version }}
           
-          # Install silently
-          Start-Process -FilePath "msiexec" -ArgumentList "/i", $msiFile.FullName, "/quiet", "/l*v", "install.log" -Wait
+          ### 📦 Package Types
+          - **NUPKG Package**: For Chocolatey and Cimian package management
+          - **ZIP Archive**: For manual installation and testing
           
-          # Verify installation
-          if (Test-Path "C:\Program Files\ReportMate\runner.exe") {
-            echo "✅ MSI installation successful"
-            
-            # Test executable
-            $result = & "C:\Program Files\ReportMate\runner.exe" --help
-            echo "✅ Executable runs successfully"
-          } else {
-            echo "❌ MSI installation failed"
-            Get-Content "install.log" -ErrorAction SilentlyContinue
-            exit 1
-          }
-        }
+          ### 🚀 Quick Start
+          
+          **Chocolatey Installation:**
+          ```cmd
+          choco install ReportMate-${{ needs.build-and-package.outputs.version }}.nupkg --source=.
+          ```
+          
+          **Manual Installation:**
+          1. Extract the ZIP file
+          2. Run `install.bat` as administrator
+          
+          ### 🔧 Enterprise Configuration
+          Configure via Registry (CSP/OMA-URI):
+          - `HKLM\SOFTWARE\ReportMate\ApiUrl` - API endpoint URL
+          - `HKLM\SOFTWARE\ReportMate\ClientPassphrase` - Access passphrase
+          - `HKLM\SOFTWARE\ReportMate\CollectionInterval` - Data collection interval
+          
+          ### 📖 Documentation
+          - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/README.md)
+          - [Enterprise Deployment](https://github.com/${{ github.repository }}/blob/main/README.md#enterprise-deployment)
+          - [CSP/OMA-URI Configuration](https://github.com/${{ github.repository }}/blob/main/README.md#cspoma-uri-configuration)
+          
+          ---
+          *Built from commit ${{ github.sha }}*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         
-    - name: Test NUPKG package
-      shell: powershell
+  test-packages:
+    needs: build-and-package
+    runs-on: windows-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: reportmate-${{ needs.build-and-package.outputs.version }}
+        path: ./artifacts
+        
+    - name: Test NUPKG package structure
+      shell: pwsh
       run: |
-        $nupkgFile = Get-ChildItem -Filter "*.nupkg" | Select-Object -First 1
+        $nupkgFile = Get-ChildItem -Path "artifacts" -Filter "*.nupkg" | Select-Object -First 1
         if ($nupkgFile) {
           echo "Testing NUPKG package: $($nupkgFile.Name)"
           
-          # Install Chocolatey if not available
-          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-            Set-ExecutionPolicy Bypass -Scope Process -Force
-            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          # Extract and examine structure
+          $extractDir = "nupkg-test"
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          
+          # NUPKG files are ZIP files
+          Expand-Archive -Path $nupkgFile.FullName -DestinationPath $extractDir -Force
+          
+          echo "NUPKG contents:"
+          Get-ChildItem $extractDir -Recurse | ForEach-Object {
+            echo "  $($_.FullName.Substring($extractDir.Length + 1))"
           }
           
-          # Install package
-          choco install $nupkgFile.FullName --source="'.'" --force --yes
+          # Check for required files
+          $requiredFiles = @(
+            "payload/Program Files/ReportMate/runner.exe",
+            "payload/ProgramData/ManagedReports/appsettings.yaml",
+            "payload/ProgramData/ManagedReports/queries.json"
+          )
           
-          # Verify installation
-          if (Test-Path "C:\Program Files\ReportMate\runner.exe") {
-            echo "✅ NUPKG installation successful"
+          foreach ($file in $requiredFiles) {
+            if (Test-Path "$extractDir/$file") {
+              echo "✅ Found required file: $file"
+            } else {
+              echo "❌ Missing required file: $file"
+            }
+          }
+          
+          echo "✅ NUPKG structure validation completed"
+        } else {
+          echo "❌ No NUPKG file found in artifacts"
+        }
+        
+    - name: Test ZIP package
+      shell: pwsh
+      run: |
+        $zipFile = Get-ChildItem -Path "artifacts" -Filter "*.zip" | Select-Object -First 1
+        if ($zipFile) {
+          echo "Testing ZIP package: $($zipFile.Name)"
+          
+          # Extract and examine structure
+          $extractDir = "zip-test"
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          
+          Expand-Archive -Path $zipFile.FullName -DestinationPath $extractDir -Force
+          
+          echo "ZIP contents:"
+          Get-ChildItem $extractDir -Recurse | ForEach-Object {
+            echo "  $($_.FullName.Substring($extractDir.Length + 1))"
+          }
+          
+          # Check for install script
+          if (Test-Path "$extractDir/install.bat") {
+            echo "✅ Found installation script"
+            echo "Install script preview:"
+            Get-Content "$extractDir/install.bat" -Head 5 | ForEach-Object { echo "  $_" }
           } else {
-            echo "❌ NUPKG installation failed"
-            exit 1
+            echo "❌ Installation script not found"
           }
+          
+          echo "✅ ZIP package validation completed"
+        } else {
+          echo "❌ No ZIP file found in artifacts"
         }

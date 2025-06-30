@@ -4,31 +4,61 @@ ReportMate Client side Windows installer for gathering endpoint telemetry for mo
 
 Written in C# .NET 8. Designed to run on its own or as a postflight script after Cimian's managed software update process. It collects detailed device information using `osquery` and securely transmits it to the ReportMate API.
 
+## Quick Start
+
+### Building ReportMate
+
+The project includes a unified PowerShell 7 build script that handles all package types:
+
+```powershell
+# Simple build with auto-generated date version
+.\build.ps1
+
+# Build specific version
+.\build.ps1 -Version "2024.06.27"
+
+# Clean build for release
+.\build.ps1 -Clean -Version "2024.06.27" -ApiUrl "https://api.reportmate.com"
+```
+
+**📋 Prerequisites:**
+- PowerShell 7+ ([Download](https://github.com/PowerShell/PowerShell/releases))
+- .NET 8.0 SDK ([Download](https://dotnet.microsoft.com/download))
+- WiX Toolset v3.11 for MSI creation ([Download](https://wixtoolset.org/releases/))
+
+**📦 Output:** Three deployment packages in `build/output/`
+- `ReportMate-{version}.msi` - Enterprise MSI installer
+- `ReportMate-{version}.nupkg` - Chocolatey/Cimian package  
+- `ReportMate-{version}.zip` - Manual installation archive
+
+See [BUILD.md](BUILD.md) for detailed build instructions and troubleshooting.
+
 ## Directory Structure
 
-The project uses a unified package structure that supports all deployment formats (EXE, MSI, NUPKG):
+The project uses a unified package structure that supports all deployment formats:
 
 ```
 reportmate-client-win/
 ├── src/                    # C# source code
-├── build/                  # Build scripts and tools
-│   ├── build_exe.sh        # Bash build script
-│   ├── build_nupkg.ps1     # PowerShell package builder
-│   ├── build_msi.ps1       # MSI installer builder
-│   └── create-installer.ps1
-├── nupkg/                   # Package structure (populated by build)
-│   ├── build-info.yaml      # Package metadata
+├── build/                  # Build outputs and legacy scripts
+│   ├── output/            # Generated packages (MSI, NUPKG, ZIP)
+│   ├── publish/           # .NET publish output
+│   └── legacy/            # Legacy build scripts (deprecated)
+├── build.ps1              # 🚀 Unified build script (PowerShell 7)
+├── BUILD.md               # Detailed build documentation
+├── nupkg/                 # Package structure (populated by build)
+│   ├── build-info.yaml   # Package metadata
 │   ├── payload/
 │   │   ├── Program Files/
 │   │   │   ├── Cimian/
 │   │   │   │   └── postflight.ps1     # Cimian integration
 │   │   │   └── ReportMate/
 │   │   │       ├── runner.exe         # Main executable
-│   │   │       ├── appsettings.yaml   # Template config
 │   │   │       └── version.txt        # Build info
 │   │   └── ProgramData/
 │   │       └── ManagedReports/
 │   │           ├── appsettings.yaml   # Working config
+│   │           ├── appsettings.template.yaml  # Enterprise template
 │   │           └── queries.json       # OSQuery definitions
 │   └── scripts/
 │       ├── preinstall.ps1   # Pre-installation script
