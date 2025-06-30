@@ -11,6 +11,8 @@ using NetEscapades.Configuration.Yaml;
 using System;
 using System.IO;
 using System.Threading.Tasks;
+using Serilog;
+using Serilog.Extensions.Logging;
 
 namespace ReportMate.WindowsClient;
 
@@ -106,21 +108,42 @@ public class Program
     {
         var services = new ServiceCollection();
 
+        // Configure Serilog first
+        var logDirectory = configuration["ReportMate:LogDirectory"] ?? @"C:\ProgramData\ManagedReports\logs";
+        Directory.CreateDirectory(logDirectory);
+        
+        var loggerConfig = new LoggerConfiguration()
+            .MinimumLevel.Information()
+            .WriteTo.Console()
+            .WriteTo.File(
+                Path.Combine(logDirectory, "reportmate-.log"),
+                rollingInterval: RollingInterval.Day,
+                retainedFileCountLimit: 30,
+                fileSizeLimitBytes: 10 * 1024 * 1024, // 10MB
+                shared: true)
+            .Enrich.WithProperty("Application", "ReportMate")
+            .Enrich.WithProperty("Version", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown");
+
+        // Add Windows Event Log in production
+        if (!configuration.GetValue<bool>("Development:Enabled"))
+        {
+            try
+            {
+                loggerConfig.WriteTo.EventLog("ReportMate", "Application", manageEventSource: true);
+            }
+            catch
+            {
+                // Ignore if event log cannot be configured
+            }
+        }
+
+        Log.Logger = loggerConfig.CreateLogger();
+
         // Configure logging
         services.AddLogging(builder =>
         {
-            builder.AddConfiguration(configuration.GetSection("Logging"));
-            builder.AddConsole();
-            
-            // Add Windows Event Log in production
-            if (!configuration.GetValue<bool>("Development:Enabled"))
-            {
-                builder.AddEventLog(settings =>
-                {
-                    settings.SourceName = "ReportMate";
-                    settings.LogName = "Application";
-                });
-            }
+            builder.ClearProviders();
+            builder.AddSerilog(Log.Logger);
         });
 
         // Register configuration
@@ -132,12 +155,15 @@ public class Program
         services.AddHttpClient<IApiService, ApiService>((serviceProvider, client) =>
         {
             var config = serviceProvider.GetRequiredService<IConfiguration>();
-            var apiUrl = config["ReportMate:ApiUrl"] ?? throw new InvalidOperationException("API URL not configured");
+            var apiUrl = config["ReportMate:ApiUrl"];
             
-            client.BaseAddress = new Uri(apiUrl);
-            client.Timeout = TimeSpan.FromMinutes(5);
-            client.DefaultRequestHeaders.Add("User-Agent", 
-                $"ReportMate/{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
+            if (!string.IsNullOrEmpty(apiUrl))
+            {
+                client.BaseAddress = new Uri(apiUrl);
+                client.Timeout = TimeSpan.FromMinutes(5);
+                client.DefaultRequestHeaders.Add("User-Agent", 
+                    $"ReportMate/{System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
+            }
         });
 
         // Register services
