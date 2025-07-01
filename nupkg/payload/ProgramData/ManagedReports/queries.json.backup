@@ -1,0 +1,61 @@
+{
+  "system_info": "SELECT hostname, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory FROM system_info;",
+  
+  "os_version": "SELECT name, version, build, platform, arch FROM os_version;",
+  
+  "hardware_info": "SELECT vendor, model, version, serial, hardware_vendor, hardware_model, hardware_version, hardware_serial FROM system_info;",
+  
+  "memory_info": "SELECT device, device_type, size, form_factor, configured_clock_speed FROM memory_devices WHERE size > 0;",
+  
+  "disk_info": "SELECT device, model, size, type FROM disk_info;",
+  
+  "network_interfaces": "SELECT interface, mac, ip, mask, broadcast, type, mtu FROM interface_details WHERE interface NOT LIKE 'lo%';",
+  
+  "installed_programs": "SELECT name, version, publisher, install_date FROM programs WHERE name IS NOT NULL;",
+  
+  "services": "SELECT name, display_name, status, start_type, path FROM services WHERE status = 'RUNNING';",
+  
+  "startup_items": "SELECT name, path, source, status, username FROM startup_items;",
+  
+  "windows_crashes": "SELECT datetime, module, path, pid FROM windows_crashes WHERE datetime > datetime('now', '-7 days');",
+  
+  "patches": "SELECT csname, hotfix_id, description, installed_on FROM patches ORDER BY installed_on DESC LIMIT 50;",
+  
+  "bitlocker_info": "SELECT device_id, drive_letter, conversion_status, protection_status, lock_status, encryption_method FROM bitlocker_info;",
+  
+  "windows_security_center": "SELECT domain, antivirus, antispyware, firewall, autoupdate, uac FROM windows_security_center;",
+  
+  "tpm_info": "SELECT activated, enabled, owned, manufacturer_version, manufacturer_full_version, manufacturer_info, tpm_version_major, tpm_version_minor FROM tpm_info;",
+  
+  "firewall_rules": "SELECT name, direction, action, protocol, local_port, remote_port, enabled FROM windows_firewall_rules WHERE enabled = 1 LIMIT 100;",
+  
+  "certificates": "SELECT common_name, subject, issuer, not_valid_before, not_valid_after, key_algorithm, key_usage, sha1 FROM certificates WHERE path = 'CurrentUser/My' OR path = 'LocalMachine/My' LIMIT 50;",
+  
+  "logged_in_users": "SELECT user, host, time, pid FROM logged_in_users;",
+  
+  "user_groups": "SELECT uid, gid, username, description FROM user_groups WHERE username IS NOT NULL;",
+  
+  "processes": "SELECT pid, name, path, cmdline, cwd, parent, threads, disk_bytes_read, disk_bytes_written FROM processes WHERE name NOT LIKE 'svchost%' LIMIT 100;",
+  
+  "listening_ports": "SELECT pid, port, protocol, family, address, path FROM listening_ports WHERE port != 0;",
+  
+  "scheduled_tasks": "SELECT name, action, path, enabled, state, last_run_time, next_run_time FROM scheduled_tasks WHERE enabled = 1 LIMIT 50;",
+  
+  "registry_security": "SELECT key, name, type, data FROM registry WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System%' AND name IN ('EnableLUA', 'ConsentPromptBehaviorAdmin', 'PromptOnSecureDesktop');",
+  
+  "windows_defender": "SELECT anti_virus, anti_spyware, real_time_protection, on_access_protection, network_protection, behavior_monitor, ioav_protection, nis_enabled, nis_engine_version, nis_signature_version FROM windows_security_products WHERE type = 'Antivirus';",
+  
+  "usb_devices": "SELECT vendor, model, serial, removable, size FROM usb_devices WHERE removable = 1;",
+  
+  "browser_plugins": "SELECT name, version, description, path FROM browser_plugins WHERE browser = 'chrome' OR browser = 'firefox' OR browser = 'edge' LIMIT 30;",
+  
+  "event_logs_system": "SELECT datetime, source, provider_name, eventid, level, data FROM windows_events WHERE channel = 'System' AND level <= 3 AND datetime > datetime('now', '-24 hours') ORDER BY datetime DESC LIMIT 20;",
+  
+  "event_logs_security": "SELECT datetime, source, provider_name, eventid, level, data FROM windows_events WHERE channel = 'Security' AND eventid IN (4624, 4625, 4648, 4672, 4720, 4732, 4756) AND datetime > datetime('now', '-24 hours') ORDER BY datetime DESC LIMIT 20;",
+  
+  "wmi_cli_event_consumers": "SELECT name, command_line_template FROM wmi_cli_event_consumers;",
+  
+  "autoexec": "SELECT name, path, source FROM autoexec;",
+  
+  "file_events": "SELECT action, target_path, md5, sha1, atime, mtime, ctime FROM file_events WHERE action = 'CREATED' AND target_path LIKE '%\\Startup\\%' LIMIT 10;"
+}

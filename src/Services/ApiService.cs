@@ -52,10 +52,24 @@ public class ApiService : IApiService
         {
             _logger.LogInformation("Sending device data to ReportMate API");
 
+            // Extract device info for registration
+            var deviceInfo = deviceData.GetValueOrDefault("device") as DeviceInfo;
+            var deviceId = deviceInfo?.SerialNumber ?? deviceInfo?.DeviceId ?? "unknown";
+
+            // First, register the device if we have device info
+            if (deviceInfo != null && !string.IsNullOrEmpty(deviceId) && deviceId != "unknown")
+            {
+                var registrationSuccess = await RegisterDeviceAsync(deviceInfo);
+                if (!registrationSuccess)
+                {
+                    _logger.LogWarning("Device registration failed, but will continue with data transmission");
+                }
+            }
+
             // Add metadata
             var payload = new
             {
-                device = deviceData.GetValueOrDefault("device"),
+                device = deviceId,
                 kind = "device_data",
                 timestamp = DateTime.UtcNow.ToString("O"),
                 payload = new
@@ -297,6 +311,47 @@ public class ApiService : IApiService
 
         _logger.LogDebug("HTTP client configured with BaseAddress: {BaseAddress}, timeout: {Timeout}s, User-Agent: {UserAgent}", 
             _httpClient.BaseAddress, timeoutSeconds, userAgent);
+    }
+
+    private async Task<bool> RegisterDeviceAsync(DeviceInfo deviceInfo)
+    {
+        try
+        {
+            _logger.LogInformation("Registering device: {DeviceId} ({Name})", deviceInfo.SerialNumber ?? deviceInfo.DeviceId, deviceInfo.ComputerName);
+
+            var registrationPayload = new
+            {
+                id = deviceInfo.SerialNumber ?? deviceInfo.DeviceId,
+                serialNumber = deviceInfo.SerialNumber,
+                name = deviceInfo.ComputerName,
+                hostname = deviceInfo.ComputerName,
+                manufacturer = deviceInfo.Manufacturer,
+                model = deviceInfo.Model,
+                domain = deviceInfo.Domain,
+                operatingSystem = deviceInfo.OperatingSystem,
+                totalMemoryGB = deviceInfo.TotalMemoryGB,
+                clientVersion = deviceInfo.ClientVersion
+            };
+
+            var response = await _httpClient.PostAsJsonAsync("/api/device", registrationPayload, _jsonOptions);
+
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("Device registration successful");
+                return true;
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("Device registration failed with status {StatusCode}: {Error}", response.StatusCode, errorContent);
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during device registration");
+            return false;
+        }
     }
 }
 

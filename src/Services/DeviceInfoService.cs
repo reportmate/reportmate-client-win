@@ -42,9 +42,13 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
+            // Get hardware serial number first - this is the unique device identifier
+            var serialNumber = await GetHardwareSerialNumberAsync();
+            
             var deviceInfo = new DeviceInfo
             {
-                DeviceId = _configuration["ReportMate:DeviceId"] ?? Environment.MachineName,
+                DeviceId = _configuration["ReportMate:DeviceId"] ?? serialNumber ?? Environment.MachineName,
+                SerialNumber = serialNumber ?? "UNKNOWN-" + Environment.MachineName,
                 ComputerName = Environment.MachineName,
                 Domain = Environment.UserDomainName,
                 OperatingSystem = GetOperatingSystemInfo(),
@@ -437,12 +441,82 @@ public class DeviceInfoService : IDeviceInfoService
         
         return null;
     }
+
+    private async Task<string?> GetHardwareSerialNumberAsync()
+    {
+        try
+        {
+            // Try to get the BIOS serial number first (most reliable for physical machines)
+            using var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BIOS");
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                var serial = obj["SerialNumber"]?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                {
+                    _logger.LogDebug("Found BIOS serial number: {Serial}", serial);
+                    return serial;
+                }
+            }
+
+            // Fallback to motherboard serial number
+            using var mbSearcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard");
+            foreach (ManagementObject obj in mbSearcher.Get())
+            {
+                var serial = obj["SerialNumber"]?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                {
+                    _logger.LogDebug("Found motherboard serial number: {Serial}", serial);
+                    return serial;
+                }
+            }
+
+            // Fallback to computer system UUID
+            using var csSearcher = new ManagementObjectSearcher("SELECT UUID FROM Win32_ComputerSystemProduct");
+            foreach (ManagementObject obj in csSearcher.Get())
+            {
+                var uuid = obj["UUID"]?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(uuid) && !IsGenericSerial(uuid))
+                {
+                    _logger.LogDebug("Found computer system UUID: {UUID}", uuid);
+                    return uuid;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not retrieve hardware serial number");
+        }
+
+        _logger.LogWarning("Could not find a valid hardware serial number, will use machine name");
+        return null;
+    }
+
+    private bool IsGenericSerial(string serial)
+    {
+        // Filter out common generic/placeholder serial numbers
+        var genericSerials = new[]
+        {
+            "To be filled by O.E.M.",
+            "System Serial Number",
+            "INVALID",
+            "Default string",
+            "Not Specified",
+            "None",
+            "N/A",
+            "0123456789",
+            "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
+        };
+
+        return genericSerials.Any(g => string.Equals(serial, g, StringComparison.OrdinalIgnoreCase)) ||
+               serial.All(c => c == '0' || c == 'F' || c == '-');
+    }
 }
 
 // Data transfer objects
 public class DeviceInfo
 {
     public string DeviceId { get; set; } = string.Empty;
+    public string SerialNumber { get; set; } = string.Empty;
     public string ComputerName { get; set; } = string.Empty;
     public string Domain { get; set; } = string.Empty;
     public string OperatingSystem { get; set; } = string.Empty;
