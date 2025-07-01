@@ -39,6 +39,15 @@
     
 .PARAMETER Verbose
     Enable verbose output for debugging
+
+.PARAMETER Sign
+    Force code signing of the executable
+
+.PARAMETER NoSign
+    Disable auto-signing even if enterprise cert is found
+
+.PARAMETER Thumbprint
+    Override auto-detection with specific certificate thumbprint
     
 .EXAMPLE
     .\build.ps1
@@ -59,6 +68,14 @@
 .EXAMPLE
     .\build.ps1 -Version "2024.06.27" -CreateTag -CreateRelease -ApiUrl "https://api.reportmate.com"
     Full production build with tagging and release
+
+.EXAMPLE
+    .\build.ps1 -Sign
+    Build with forced code signing
+
+.EXAMPLE
+    .\build.ps1 -NoSign
+    Build without code signing (even if cert is available)
 #>
 
 param(
@@ -72,7 +89,10 @@ param(
     [string]$ApiUrl = "",
     [switch]$CreateTag = $false,
     [switch]$CreateRelease = $false,
-    [switch]$Verbose = $false
+    [switch]$Verbose = $false,
+    [switch]$Sign,
+    [switch]$NoSign,
+    [string]$Thumbprint
 )
 
 # Ensure we're using PowerShell 7+
@@ -108,16 +128,167 @@ function Write-Info { Write-ColorOutput Cyan "ℹ️  $($args -join ' ')" }
 function Write-Header { Write-ColorOutput Magenta "🚀 $($args -join ' ')" }
 function Write-Step { Write-ColorOutput Yellow "🔄 $($args -join ' ')" }
 
+# ──────────────────────────  SIGNING FUNCTIONS  ──────────────────────────
+# Friendly name (CN) of the enterprise code-signing certificate you push with Intune
+$Global:EnterpriseCertCN = 'EmilyCarrU Intune Windows Enterprise Certificate'
+
+function Get-SigningCertThumbprint {
+    [OutputType([string])]
+    param()
+
+    Get-ChildItem Cert:\CurrentUser\My |
+        Where-Object {
+            $_.Subject -like "*CN=$Global:EnterpriseCertCN*" -and
+            $_.NotAfter -gt (Get-Date) -and
+            $_.HasPrivateKey
+        } |
+        Sort-Object NotAfter -Descending |
+        Select-Object -First 1 -ExpandProperty Thumbprint
+}
+
+# Function to ensure signtool is available
+function Test-SignTool {
+    # helper to prepend path only once
+    function Add-ToPath([string]$dir) {
+        if (-not [string]::IsNullOrWhiteSpace($dir) -and
+            -not ($env:Path -split ';' | Where-Object { $_ -ieq $dir })) {
+            $env:Path = "$dir;$env:Path"
+        }
+    }
+
+    # already reachable?
+    if (Get-Command signtool.exe -EA SilentlyContinue) { return }
+
+    # harvest possible SDK roots
+    $roots = @(
+        "${env:ProgramFiles}\Windows Kits\10\bin",
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    )
+
+    # add KitsRoot10 from the registry (covers non-standard installs)
+    try {
+        $kitsRoot = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' `
+                     -EA Stop).KitsRoot10
+        if ($kitsRoot) { $roots += (Join-Path $kitsRoot 'bin') }
+    } catch { }
+
+    $roots = $roots | Where-Object { Test-Path $_ } | Select-Object -Unique
+
+    # scan every root for any architecture's signtool.exe
+    foreach ($root in $roots) {
+        $exe = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -EA SilentlyContinue |
+               Sort-Object LastWriteTime -Desc | Select-Object -First 1
+        if ($exe) {
+            Add-ToPath $exe.Directory.FullName
+            Write-Success "signtool discovered at $($exe.FullName)"
+            return
+        }
+    }
+
+    # graceful failure
+    Write-Error @"
+signtool.exe not found.
+
+Install **any** Windows 10/11 SDK _or_ Visual Studio Build Tools  
+(choose a workload that includes **Windows SDK Signing Tools**),  
+then run the build again.
+"@
+    exit 1
+}
+
+function signPackage {
+    <#
+      .SYNOPSIS  Authenticode-signs an EXE/MSI/... with our enterprise cert.
+      .PARAMETER FilePath     – the file you want to sign
+      .PARAMETER Thumbprint   – SHA-1 thumbprint of the cert (defaults to $env:SIGN_THUMB)
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string]$Thumbprint = $env:SIGN_THUMB
+    )
+
+    $tsaList = @(
+        'http://timestamp.digicert.com',
+        'http://timestamp.sectigo.com',
+        'http://timestamp.entrust.net/TSS/RFC3161sha2TS'
+    )
+
+    foreach ($tsa in $tsaList) {
+        Write-Info "Signing '$FilePath' using $tsa ..."
+        & signtool.exe sign `
+            /sha1  $Thumbprint `
+            /fd    SHA256 `
+            /tr    $tsa `
+            /td    SHA256 `
+            /v `
+            "$FilePath"
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "signtool succeeded with $tsa"
+            return
+        }
+        Write-Warning "signtool failed with $tsa (exit $LASTEXITCODE)"
+    }
+
+    throw "signtool failed with all timestamp authorities."
+}
+
 # Generate version if not provided (YYYY.MM.DD format)
 if (-not $Version) {
     $Version = Get-Date -Format "yyyy.MM.dd"
     Write-Info "Auto-generated version: $Version"
 }
 
+# ──────────────────────────  SIGNING DECISION  ─────────────────
+# Auto-detect enterprise certificate if available
+$autoDetectedThumbprint = $null
+if (-not $Sign -and -not $NoSign -and -not $Thumbprint) {
+    try {
+        $autoDetectedThumbprint = Get-SigningCertThumbprint
+        if ($autoDetectedThumbprint) {
+            Write-Info "Auto-detected enterprise certificate $autoDetectedThumbprint - will sign binaries for security."
+            $Sign = $true
+            $Thumbprint = $autoDetectedThumbprint
+        } else {
+            Write-Warning "No enterprise certificate found - binaries will be unsigned (may be blocked by Defender)."
+        }
+    }
+    catch {
+        Write-Warning "Could not check for enterprise certificates: $_"
+    }
+}
+
+if ($NoSign) {
+    Write-Info "NoSign parameter specified - skipping all signing."
+    $Sign = $false
+}
+
+if ($Sign) {
+    Test-SignTool
+    if (-not $Thumbprint) {
+        $Thumbprint = Get-SigningCertThumbprint
+        if (-not $Thumbprint) {
+            Write-Error "No valid '$Global:EnterpriseCertCN' certificate with a private key found – aborting."
+            exit 1
+        }
+        Write-Info "Auto-selected signing cert $Thumbprint"
+    } else {
+        Write-Info "Using signing certificate $Thumbprint"
+    }
+    $env:SIGN_THUMB = $Thumbprint   # used by the signPackage function
+} else {
+    Write-Info "Build will be unsigned."
+}
+
 Write-Header "ReportMate Unified Build Script"
 Write-Header "====================================="
 Write-Info "Version: $Version"
 Write-Info "Configuration: $Configuration"
+if ($Sign) {
+    Write-Info "🔒 Code signing: ENABLED (Cert: $($Thumbprint.Substring(0,8))...)"
+} else {
+    Write-Info "🔓 Code signing: DISABLED"
+}
 Write-Info "PowerShell: $($PSVersionTable.PSVersion)"
 Write-Info "Platform: $($PSVersionTable.Platform)"
 
@@ -282,6 +453,19 @@ if (-not $SkipBuild) {
         Write-Success "Build completed successfully"
         $exeSize = (Get-Item "$PublishDir/runner.exe").Length / 1MB
         Write-Info "Executable size: $([math]::Round($exeSize, 2)) MB"
+        
+        # ─────────────── SIGN THE EXECUTABLE ───────────────
+        if ($Sign) {
+            Write-Step "Signing runner.exe..."
+            try {
+                signPackage -FilePath "$PublishDir/runner.exe"
+                Write-Success "Signed runner.exe ✔"
+            }
+            catch {
+                Write-Error "Failed to sign runner.exe: $_"
+                exit 1
+            }
+        }
     } else {
         Write-Error "Build failed with exit code: $LASTEXITCODE"
         exit $LASTEXITCODE

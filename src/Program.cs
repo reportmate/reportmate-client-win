@@ -56,8 +56,17 @@ public class Program
         }
         catch (Exception ex)
         {
-            // Fallback logging when DI container fails
-            Console.WriteLine($"FATAL ERROR: {ex.Message}");
+            // Fallback logging when DI container fails - log to event log only
+            try
+            {
+                using var eventLog = new System.Diagnostics.EventLog("Application");
+                eventLog.Source = "ReportMate";
+                eventLog.WriteEntry($"FATAL ERROR: {ex.Message}", System.Diagnostics.EventLogEntryType.Error);
+            }
+            catch
+            {
+                // If we can't even log to event log, just exit silently
+            }
             Environment.ExitCode = 1;
             return 1;
         }
@@ -113,14 +122,15 @@ public class Program
         Directory.CreateDirectory(logDirectory);
         
         var loggerConfig = new LoggerConfiguration()
-            .MinimumLevel.Information()
-            .WriteTo.Console()
-            .WriteTo.File(
-                Path.Combine(logDirectory, "reportmate-.log"),
-                rollingInterval: RollingInterval.Day,
-                retainedFileCountLimit: 30,
-                fileSizeLimitBytes: 10 * 1024 * 1024, // 10MB
-                shared: true)
+            .MinimumLevel.Information();
+
+        // Only log to file and event log in production - never to console
+        loggerConfig.WriteTo.File(
+            Path.Combine(logDirectory, "reportmate-.log"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 30,
+            fileSizeLimitBytes: 10 * 1024 * 1024, // 10MB
+            shared: true)
             .Enrich.WithProperty("Application", "ReportMate")
             .Enrich.WithProperty("Version", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown");
 
@@ -135,6 +145,11 @@ public class Program
             {
                 // Ignore if event log cannot be configured
             }
+        }
+        else
+        {
+            // Only add console logging in development mode
+            loggerConfig.WriteTo.Console();
         }
 
         Log.Logger = loggerConfig.CreateLogger();
