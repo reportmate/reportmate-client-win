@@ -19,11 +19,18 @@ public class WindowsRegistryConfigurationProvider : ConfigurationProvider
     {
         try
         {
+            System.Diagnostics.Debug.WriteLine("=== REGISTRY CONFIGURATION LOADING ===");
+            System.Diagnostics.Debug.WriteLine("Priority: Registry (CSP/Group Policy) > Registry (Standard) > YAML");
+            
             // First load from standard registry location
+            System.Diagnostics.Debug.WriteLine($"Loading from standard registry: {REGISTRY_KEY_PATH}");
             LoadFromRegistryKey(REGISTRY_KEY_PATH);
             
             // Then load from CSP/Group Policy location (higher precedence)
+            System.Diagnostics.Debug.WriteLine($"Loading from CSP/Group Policy registry: {CSP_REGISTRY_KEY_PATH}");
             LoadFromRegistryKey(CSP_REGISTRY_KEY_PATH);
+            
+            System.Diagnostics.Debug.WriteLine("Registry configuration loading completed");
         }
         catch (Exception ex)
         {
@@ -39,8 +46,11 @@ public class WindowsRegistryConfigurationProvider : ConfigurationProvider
             using var key = Registry.LocalMachine.OpenSubKey(keyPath, false);
             if (key == null)
             {
+                System.Diagnostics.Debug.WriteLine($"Registry key not found: {keyPath}");
                 return;
             }
+
+            System.Diagnostics.Debug.WriteLine($"Found registry key: {keyPath}");
 
             // Map registry values to configuration keys
             var mappings = new Dictionary<string, string>
@@ -70,6 +80,7 @@ public class WindowsRegistryConfigurationProvider : ConfigurationProvider
                 var value = key.GetValue(mapping.Key);
                 if (value != null)
                 {
+                    System.Diagnostics.Debug.WriteLine($"Registry value found: {mapping.Key} = {value}");
                     Data[mapping.Value] = value.ToString()!;
                 }
             }
@@ -81,6 +92,7 @@ public class WindowsRegistryConfigurationProvider : ConfigurationProvider
             var lastRun = key.GetValue("LastRunTime");
             if (lastRun != null && DateTime.TryParse(lastRun.ToString(), out var lastRunTime))
             {
+                System.Diagnostics.Debug.WriteLine($"Last run time from registry: {lastRunTime}");
                 Data["ReportMate:LastRunTime"] = lastRunTime.ToString("O");
             }
         }

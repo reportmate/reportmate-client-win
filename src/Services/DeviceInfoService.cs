@@ -1,3 +1,4 @@
+#nullable enable
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
@@ -7,6 +8,8 @@ using System.Linq;
 using System.Management;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Win32;
+using System.Diagnostics;
 
 namespace ReportMate.WindowsClient.Services;
 
@@ -42,12 +45,59 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
-            // Get hardware serial number first - this is the unique device identifier
-            var serialNumber = await GetHardwareSerialNumberAsync();
+            _logger.LogInformation("=== STARTING GetBasicDeviceInfoAsync ===");
             
+            // Get hardware serial number first - this is the unique device identifier
+            _logger.LogInformation("Step 1: Getting hardware serial number...");
+            var serialNumber = await GetHardwareSerialNumberAsync();
+            _logger.LogInformation("Hardware serial number result: '{SerialNumber}'", serialNumber ?? "NULL");
+            
+            // CRITICAL: Use serial number as DeviceId unless explicitly overridden in config
+            var configDeviceId = _configuration["ReportMate:DeviceId"];
+            _logger.LogInformation("Config DeviceId value: '{ConfigDeviceId}'", configDeviceId ?? "NULL");
+            
+            // STRICT SERIAL NUMBER ENFORCEMENT v2025.7.1.6
+            _logger.LogInformation("=== DEVICE ID SELECTION LOGIC v2025.7.1.6 ===");
+            _logger.LogInformation("🎯 TARGET SERIAL: 0F33V9G25083HJ");
+            _logger.LogInformation("📋 POLICY: Serial number MUST be used as DeviceId unless config override");
+            _logger.LogInformation("🔍 Available options:");
+            _logger.LogInformation("   Config override: '{ConfigDeviceId}'", configDeviceId ?? "NONE");
+            _logger.LogInformation("   Hardware serial: '{SerialNumber}'", serialNumber ?? "NONE");
+            _logger.LogInformation("   Machine name fallback: '{MachineName}'", Environment.MachineName);
+            
+            // Serial number should be the primary device identifier
+            var deviceId = !string.IsNullOrWhiteSpace(configDeviceId) ? configDeviceId : serialNumber ?? Environment.MachineName;
+            
+            _logger.LogInformation("=== DEVICE ID DECISION ===");
+            _logger.LogInformation("Final DeviceId selection: '{DeviceId}' (source: {Source})", 
+                deviceId, 
+                !string.IsNullOrWhiteSpace(configDeviceId) ? "config_override" : 
+                serialNumber != null ? "hardware_serial" : "machine_name_fallback");
+            
+            // CRITICAL VALIDATION: Ensure device ID is what we expect
+            if (deviceId == "0F33V9G25083HJ")
+            {
+                _logger.LogInformation("✅ SUCCESS: Device ID matches target laptop serial number!");
+                _logger.LogInformation("✅ EXPECTED: Dashboard URL will be /device/0F33V9G25083HJ");
+            }
+            else
+            {
+                _logger.LogWarning("⚠️  MISMATCH: Device ID '{DeviceId}' does not match expected '0F33V9G25083HJ'", deviceId);
+                _logger.LogWarning("⚠️  DASHBOARD: Events will appear at /device/{DeviceId}", deviceId);
+                _logger.LogWarning("⚠️  IMPACT: This might not be the target laptop or serial detection failed");
+            }
+            
+            // Ensure we have a valid device ID
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                _logger.LogError("CRITICAL: No valid device ID could be determined!");
+                throw new InvalidOperationException("No valid device ID could be determined");
+            }
+            
+            _logger.LogInformation("Step 2: Creating DeviceInfo object...");
             var deviceInfo = new DeviceInfo
             {
-                DeviceId = _configuration["ReportMate:DeviceId"] ?? serialNumber ?? Environment.MachineName,
+                DeviceId = deviceId,  // This should be the serial number in most cases
                 SerialNumber = serialNumber ?? "UNKNOWN-" + Environment.MachineName,
                 ComputerName = Environment.MachineName,
                 Domain = Environment.UserDomainName,
@@ -56,7 +106,11 @@ public class DeviceInfoService : IDeviceInfoService
                 ClientVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0"
             };
 
+            _logger.LogInformation("DeviceInfo created - DeviceId: '{DeviceId}', SerialNumber: '{SerialNumber}', ComputerName: '{ComputerName}'", 
+                deviceInfo.DeviceId, deviceInfo.SerialNumber, deviceInfo.ComputerName);
+
             // Try to get additional info from WMI
+            _logger.LogInformation("Step 3: Getting additional WMI information...");
             try
             {
                 using var searcher = new ManagementObjectSearcher("SELECT Manufacturer, Model, TotalPhysicalMemory FROM Win32_ComputerSystem");
@@ -69,14 +123,27 @@ public class DeviceInfoService : IDeviceInfoService
                     {
                         deviceInfo.TotalMemoryGB = Math.Round(memory / (1024.0 * 1024.0 * 1024.0), 2);
                     }
+                    
+                    _logger.LogInformation("WMI Data - Manufacturer: '{Manufacturer}', Model: '{Model}', Memory: {Memory}GB", 
+                        deviceInfo.Manufacturer, deviceInfo.Model, deviceInfo.TotalMemoryGB);
                     break;
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Could not retrieve additional device info from WMI");
+                _logger.LogWarning(ex, "Could not retrieve additional device info from WMI");
             }
 
+            _logger.LogInformation("=== GetBasicDeviceInfoAsync COMPLETED SUCCESSFULLY ===");
+            _logger.LogInformation("Final Device Summary:");
+            _logger.LogInformation("  Device ID: {DeviceId}", deviceInfo.DeviceId);
+            _logger.LogInformation("  Serial Number: {SerialNumber}", deviceInfo.SerialNumber);
+            _logger.LogInformation("  Computer Name: {ComputerName}", deviceInfo.ComputerName);
+            _logger.LogInformation("  Operating System: {OperatingSystem}", deviceInfo.OperatingSystem);
+            _logger.LogInformation("  Manufacturer: {Manufacturer}", deviceInfo.Manufacturer);
+            _logger.LogInformation("  Model: {Model}", deviceInfo.Model);
+            _logger.LogInformation("  Memory: {Memory}GB", deviceInfo.TotalMemoryGB);
+            
             return deviceInfo;
         }
         catch (Exception ex)
@@ -293,7 +360,7 @@ public class DeviceInfoService : IDeviceInfoService
         }
     }
 
-    private async Task<List<DiskInfo>> GetDiskInfoAsync()
+    private Task<List<DiskInfo>> GetDiskInfoAsync()
     {
         var diskInfoList = new List<DiskInfo>();
 
@@ -329,10 +396,10 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogWarning(ex, "Error getting disk information");
         }
 
-        return diskInfoList;
+        return Task.FromResult(diskInfoList);
     }
 
-    private async Task<bool> CheckWindowsDefenderAsync()
+    private Task<bool> CheckWindowsDefenderAsync()
     {
         try
         {
@@ -340,7 +407,7 @@ public class DeviceInfoService : IDeviceInfoService
             using var searcher = new ManagementObjectSearcher(@"root\Microsoft\Windows\Defender", "SELECT AntivirusEnabled FROM MSFT_MpComputerStatus");
             foreach (ManagementObject obj in searcher.Get())
             {
-                return obj["AntivirusEnabled"] != null && (bool)obj["AntivirusEnabled"];
+                return Task.FromResult(obj["AntivirusEnabled"] != null && (bool)obj["AntivirusEnabled"]);
             }
         }
         catch (Exception ex)
@@ -348,10 +415,10 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogDebug(ex, "Could not check Windows Defender status");
         }
         
-        return false;
+        return Task.FromResult(false);
     }
 
-    private async Task<bool> CheckFirewallStatusAsync()
+    private Task<bool> CheckFirewallStatusAsync()
     {
         try
         {
@@ -359,7 +426,7 @@ public class DeviceInfoService : IDeviceInfoService
             using var searcher = new ManagementObjectSearcher("SELECT EnabledDomainProfile FROM Win32_FirewallProfile WHERE ProfileName='Domain'");
             foreach (ManagementObject obj in searcher.Get())
             {
-                return obj["EnabledDomainProfile"] != null && (bool)obj["EnabledDomainProfile"];
+                return Task.FromResult(obj["EnabledDomainProfile"] != null && (bool)obj["EnabledDomainProfile"]);
             }
         }
         catch (Exception ex)
@@ -367,7 +434,7 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogDebug(ex, "Could not check firewall status");
         }
         
-        return false;
+        return Task.FromResult(false);
     }
 
     private bool CheckUacStatus()
@@ -385,7 +452,7 @@ public class DeviceInfoService : IDeviceInfoService
         }
     }
 
-    private async Task<bool> CheckBitLockerStatusAsync()
+    private Task<bool> CheckBitLockerStatusAsync()
     {
         try
         {
@@ -393,7 +460,7 @@ public class DeviceInfoService : IDeviceInfoService
             foreach (ManagementObject obj in searcher.Get())
             {
                 var status = obj["ProtectionStatus"];
-                return status != null && (uint)status == 1; // 1 = Protection On
+                return Task.FromResult(status != null && (uint)status == 1); // 1 = Protection On
             }
         }
         catch (Exception ex)
@@ -401,17 +468,17 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogDebug(ex, "Could not check BitLocker status");
         }
         
-        return false;
+        return Task.FromResult(false);
     }
 
-    private async Task<bool> CheckTpmStatusAsync()
+    private Task<bool> CheckTpmStatusAsync()
     {
         try
         {
             using var searcher = new ManagementObjectSearcher(@"root\cimv2\security\microsofttpm", "SELECT IsEnabled_InitialValue FROM Win32_Tpm");
             foreach (ManagementObject obj in searcher.Get())
             {
-                return obj["IsEnabled_InitialValue"] != null && (bool)obj["IsEnabled_InitialValue"];
+                return Task.FromResult(obj["IsEnabled_InitialValue"] != null && (bool)obj["IsEnabled_InitialValue"]);
             }
         }
         catch (Exception ex)
@@ -419,10 +486,10 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogDebug(ex, "Could not check TPM status");
         }
         
-        return false;
+        return Task.FromResult(false);
     }
 
-    private async Task<DateTime?> GetLastUpdateCheckAsync()
+    private Task<DateTime?> GetLastUpdateCheckAsync()
     {
         try
         {
@@ -431,7 +498,7 @@ public class DeviceInfoService : IDeviceInfoService
             
             if (!string.IsNullOrEmpty(lastCheck) && DateTime.TryParseExact(lastCheck, "yyyy-MM-dd HH:mm:ss", null, System.Globalization.DateTimeStyles.None, out var date))
             {
-                return date;
+                return Task.FromResult<DateTime?>(date);
             }
         }
         catch (Exception ex)
@@ -439,56 +506,365 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogDebug(ex, "Could not get last update check time");
         }
         
-        return null;
+        return Task.FromResult<DateTime?>(null);
     }
 
-    private async Task<string?> GetHardwareSerialNumberAsync()
+    private Task<string?> GetHardwareSerialNumberAsync()
     {
         try
         {
-            // Try to get the BIOS serial number first (most reliable for physical machines)
-            using var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BIOS");
-            foreach (ManagementObject obj in searcher.Get())
+            // COMPREHENSIVE SERIAL NUMBER DETECTION v2025.7.1.5
+            _logger.LogError("*** ENHANCED SERIAL DETECTION v2025.7.1.5 - TARGET: 0F33V9G25083HJ ***");
+            _logger.LogInformation("=== HARDWARE SERIAL NUMBER DETECTION STARTING ===");
+            _logger.LogInformation("🎯 TARGET: Serial number '0F33V9G25083HJ' for laptop registration");
+            _logger.LogInformation("🖥️ Current Machine: {MachineName}", Environment.MachineName);
+            _logger.LogInformation("🏢 Domain: {Domain}", Environment.UserDomainName);
+            _logger.LogInformation("👤 User: {User}", Environment.UserName);
+            
+            // Method 1: PowerShell WMI query (most reliable for problematic WMI environments)
+            _logger.LogInformation("=== METHOD 1: PowerShell WMI Query ===");
+            try
             {
-                var serial = obj["SerialNumber"]?.ToString()?.Trim();
-                if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                var powerShellSerial = GetSerialViaPowerShell();
+                _logger.LogInformation("PowerShell result: '{Serial}'", powerShellSerial ?? "NULL");
+                
+                if (!string.IsNullOrEmpty(powerShellSerial) && !IsGenericSerial(powerShellSerial))
                 {
-                    _logger.LogDebug("Found BIOS serial number: {Serial}", serial);
-                    return serial;
+                    _logger.LogInformation("✅ USING PowerShell-detected serial: {Serial}", powerShellSerial);
+                    _logger.LogInformation("✅ TARGET CHECK: {TargetMatch}", 
+                        string.Equals(powerShellSerial, "0F33V9G25083HJ", StringComparison.OrdinalIgnoreCase) ? "MATCH!" : "No match");
+                    return Task.FromResult<string?>(powerShellSerial);
+                }
+                else
+                {
+                    _logger.LogWarning("❌ PowerShell serial rejected - empty: {Empty}, generic: {Generic}", 
+                        string.IsNullOrEmpty(powerShellSerial), 
+                        powerShellSerial != null && IsGenericSerial(powerShellSerial));
                 }
             }
-
-            // Fallback to motherboard serial number
-            using var mbSearcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard");
-            foreach (ManagementObject obj in mbSearcher.Get())
+            catch (Exception ex)
             {
-                var serial = obj["SerialNumber"]?.ToString()?.Trim();
-                if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                _logger.LogWarning(ex, "PowerShell method failed, continuing to WMI methods...");
+            }
+            
+            // Method 2: Enhanced WMI BIOS query with connection options
+            _logger.LogInformation("=== METHOD 2: Enhanced WMI BIOS Query ===");
+            try
+            {
+                var options = new ConnectionOptions
                 {
-                    _logger.LogDebug("Found motherboard serial number: {Serial}", serial);
-                    return serial;
+                    Impersonation = ImpersonationLevel.Impersonate,
+                    Authentication = AuthenticationLevel.Connect,
+                    EnablePrivileges = true
+                };
+
+                var scope = new ManagementScope(@"\\.\root\cimv2", options);
+                scope.Connect();
+                _logger.LogInformation("WMI scope connected successfully");
+
+                var query = new ObjectQuery("SELECT Manufacturer, SerialNumber, Version, Name, ReleaseDate FROM Win32_BIOS");
+                using var searcher = new ManagementObjectSearcher(scope, query);
+                
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    var manufacturer = obj["Manufacturer"]?.ToString()?.Trim();
+                    var serial = obj["SerialNumber"]?.ToString()?.Trim();
+                    var version = obj["Version"]?.ToString()?.Trim();
+                    var name = obj["Name"]?.ToString()?.Trim();
+                    var releaseDate = obj["ReleaseDate"]?.ToString()?.Trim();
+                    
+                    _logger.LogInformation("BIOS Details:");
+                    _logger.LogInformation("  Manufacturer: '{Manufacturer}'", manufacturer);
+                    _logger.LogInformation("  Name: '{Name}'", name);
+                    _logger.LogInformation("  Version: '{Version}'", version);
+                    _logger.LogInformation("  Serial Number: '{Serial}'", serial);
+                    _logger.LogInformation("  Release Date: '{ReleaseDate}'", releaseDate);
+                    
+                    if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                    {
+                        _logger.LogInformation("✅ USING Enhanced BIOS serial: {Serial}", serial);
+                        _logger.LogInformation("✅ TARGET CHECK: {TargetMatch}", 
+                            string.Equals(serial, "0F33V9G25083HJ", StringComparison.OrdinalIgnoreCase) ? "MATCH!" : "No match");
+                        return Task.FromResult<string?>(serial);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("❌ Enhanced BIOS serial rejected - empty: {Empty}, generic: {Generic}", 
+                            string.IsNullOrEmpty(serial), 
+                            serial != null && IsGenericSerial(serial));
+                    }
+                    break; // Only check first BIOS entry
                 }
             }
-
-            // Fallback to computer system UUID
-            using var csSearcher = new ManagementObjectSearcher("SELECT UUID FROM Win32_ComputerSystemProduct");
-            foreach (ManagementObject obj in csSearcher.Get())
+            catch (Exception ex)
             {
-                var uuid = obj["UUID"]?.ToString()?.Trim();
-                if (!string.IsNullOrEmpty(uuid) && !IsGenericSerial(uuid))
+                _logger.LogWarning(ex, "Enhanced WMI BIOS query failed, trying basic BIOS query...");
+            }
+
+            // Method 3: Basic WMI BIOS query
+            _logger.LogInformation("=== METHOD 3: Basic WMI BIOS Query ===");
+            try
+            {
+                using var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BIOS");
+                foreach (ManagementObject obj in searcher.Get())
                 {
-                    _logger.LogDebug("Found computer system UUID: {UUID}", uuid);
-                    return uuid;
+                    var serial = obj["SerialNumber"]?.ToString()?.Trim();
+                    _logger.LogInformation("Basic BIOS serial: '{Serial}'", serial);
+                    
+                    if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                    {
+                        _logger.LogInformation("✅ USING Basic BIOS serial: {Serial}", serial);
+                        _logger.LogInformation("✅ TARGET CHECK: {TargetMatch}", 
+                            string.Equals(serial, "0F33V9G25083HJ", StringComparison.OrdinalIgnoreCase) ? "MATCH!" : "No match");
+                        return Task.FromResult<string?>(serial);
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Basic BIOS query failed, trying ComputerSystemProduct...");
+            }
+
+            // Method 4: Win32_ComputerSystemProduct
+            _logger.LogInformation("=== METHOD 4: ComputerSystemProduct Query ===");
+            try
+            {
+                using var cspSearcher = new ManagementObjectSearcher("SELECT Name, Vendor, Version, SerialNumber, UUID, IdentifyingNumber FROM Win32_ComputerSystemProduct");
+                foreach (ManagementObject obj in cspSearcher.Get())
+                {
+                    var name = obj["Name"]?.ToString()?.Trim();
+                    var vendor = obj["Vendor"]?.ToString()?.Trim();
+                    var version = obj["Version"]?.ToString()?.Trim();
+                    var serial = obj["SerialNumber"]?.ToString()?.Trim();
+                    var uuid = obj["UUID"]?.ToString()?.Trim();
+                    var identifyingNumber = obj["IdentifyingNumber"]?.ToString()?.Trim();
+                    
+                    _logger.LogInformation("ComputerSystemProduct Details:");
+                    _logger.LogInformation("  Name: '{Name}'", name);
+                    _logger.LogInformation("  Vendor: '{Vendor}'", vendor);
+                    _logger.LogInformation("  Version: '{Version}'", version);
+                    _logger.LogInformation("  Serial Number: '{Serial}'", serial);
+                    _logger.LogInformation("  UUID: '{UUID}'", uuid);
+                    _logger.LogInformation("  Identifying Number: '{IdentifyingNumber}'", identifyingNumber);
+                    
+                    // Try SerialNumber first
+                    if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                    {
+                        _logger.LogInformation("✅ USING ComputerSystemProduct serial: {Serial}", serial);
+                        _logger.LogInformation("✅ TARGET CHECK: {TargetMatch}", 
+                            string.Equals(serial, "0F33V9G25083HJ", StringComparison.OrdinalIgnoreCase) ? "MATCH!" : "No match");
+                        return Task.FromResult<string?>(serial);
+                    }
+                    
+                    // Try IdentifyingNumber as fallback
+                    if (!string.IsNullOrEmpty(identifyingNumber) && !IsGenericSerial(identifyingNumber))
+                    {
+                        _logger.LogInformation("✅ USING ComputerSystemProduct IdentifyingNumber: {IdentifyingNumber}", identifyingNumber);
+                        _logger.LogInformation("✅ TARGET CHECK: {TargetMatch}", 
+                            string.Equals(identifyingNumber, "0F33V9G25083HJ", StringComparison.OrdinalIgnoreCase) ? "MATCH!" : "No match");
+                        return Task.FromResult<string?>(identifyingNumber);
+                    }
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ComputerSystemProduct query failed, trying motherboard...");
+            }
+
+            // Method 5: Motherboard serial
+            _logger.LogInformation("=== METHOD 5: Motherboard Serial Query ===");
+            try
+            {
+                using var mbSearcher = new ManagementObjectSearcher("SELECT SerialNumber, Product, Manufacturer FROM Win32_BaseBoard");
+                foreach (ManagementObject obj in mbSearcher.Get())
+                {
+                    var serial = obj["SerialNumber"]?.ToString()?.Trim();
+                    var product = obj["Product"]?.ToString()?.Trim();
+                    var manufacturer = obj["Manufacturer"]?.ToString()?.Trim();
+                    
+                    _logger.LogInformation("Motherboard Details:");
+                    _logger.LogInformation("  Manufacturer: '{Manufacturer}'", manufacturer);
+                    _logger.LogInformation("  Product: '{Product}'", product);
+                    _logger.LogInformation("  Serial Number: '{Serial}'", serial);
+                    
+                    if (!string.IsNullOrEmpty(serial) && !IsGenericSerial(serial))
+                    {
+                        _logger.LogInformation("✅ USING Motherboard serial: {Serial}", serial);
+                        _logger.LogInformation("✅ TARGET CHECK: {TargetMatch}", 
+                            string.Equals(serial, "0F33V9G25083HJ", StringComparison.OrdinalIgnoreCase) ? "MATCH!" : "No match");
+                        return Task.FromResult<string?>(serial);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Motherboard query failed, trying system UUID...");
+            }
+
+            // Method 6: Computer system UUID
+            _logger.LogInformation("=== METHOD 6: Computer System UUID ===");
+            try
+            {
+                using var csSearcher = new ManagementObjectSearcher("SELECT UUID FROM Win32_ComputerSystemProduct");
+                foreach (ManagementObject obj in csSearcher.Get())
+                {
+                    var uuid = obj["UUID"]?.ToString()?.Trim();
+                    _logger.LogInformation("Computer System UUID: '{UUID}'", uuid);
+                    
+                    if (!string.IsNullOrEmpty(uuid) && !IsGenericSerial(uuid))
+                    {
+                        _logger.LogInformation("✅ USING Computer System UUID: {UUID}", uuid);
+                        return Task.FromResult<string?>(uuid);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "UUID query failed, trying registry...");
+            }
+
+            // Method 7: Registry machine GUID
+            _logger.LogInformation("=== METHOD 7: Registry Machine GUID ===");
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography");
+                var machineGuid = key?.GetValue("MachineGuid")?.ToString();
+                
+                if (!string.IsNullOrEmpty(machineGuid))
+                {
+                    _logger.LogInformation("✅ USING Registry machine GUID: {MachineGuid}", machineGuid);
+                    return Task.FromResult<string?>(machineGuid);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Registry query failed");
+            }
+
+            _logger.LogError("❌ CRITICAL: No hardware serial number found using any method");
+            _logger.LogError("❌ EXPECTATION: Should have found '0F33V9G25083HJ'");
+            _logger.LogError("❌ IMPACT: Device identification will fall back to machine name");
+            
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ EXCEPTION: Serial number detection failed");
+        }
+
+        _logger.LogError("🚨 FALLBACK: No valid hardware serial number found from any source");
+        return Task.FromResult<string?>(null);
+    }
+
+    /// <summary>
+    /// Get hardware serial number via PowerShell as fallback for WMI issues
+    /// </summary>
+    private string? GetSerialViaPowerShell()
+    {
+        try
+        {
+            _logger.LogInformation("=== PowerShell Serial Detection ===");
+            _logger.LogInformation("Attempting comprehensive PowerShell WMI queries...");
+            
+            // Method 1: BIOS Serial Number
+            _logger.LogInformation("PowerShell Method 1: BIOS SerialNumber");
+            var biosSerial = ExecutePowerShellCommand("Get-WmiObject -Class Win32_BIOS | Select-Object -ExpandProperty SerialNumber");
+            _logger.LogInformation("BIOS Serial via PowerShell: '{Serial}'", biosSerial ?? "NULL");
+            
+            if (!string.IsNullOrEmpty(biosSerial) && !IsGenericSerial(biosSerial))
+            {
+                _logger.LogInformation("✅ PowerShell BIOS serial accepted: {Serial}", biosSerial);
+                return biosSerial;
+            }
+
+            // Method 2: ComputerSystemProduct Serial Number
+            _logger.LogInformation("PowerShell Method 2: ComputerSystemProduct SerialNumber");
+            var cspSerial = ExecutePowerShellCommand("Get-WmiObject -Class Win32_ComputerSystemProduct | Select-Object -ExpandProperty SerialNumber");
+            _logger.LogInformation("ComputerSystemProduct Serial via PowerShell: '{Serial}'", cspSerial ?? "NULL");
+            
+            if (!string.IsNullOrEmpty(cspSerial) && !IsGenericSerial(cspSerial))
+            {
+                _logger.LogInformation("✅ PowerShell ComputerSystemProduct serial accepted: {Serial}", cspSerial);
+                return cspSerial;
+            }
+
+            // Method 3: ComputerSystemProduct IdentifyingNumber
+            _logger.LogInformation("PowerShell Method 3: ComputerSystemProduct IdentifyingNumber");
+            var identifyingNumber = ExecutePowerShellCommand("Get-WmiObject -Class Win32_ComputerSystemProduct | Select-Object -ExpandProperty IdentifyingNumber");
+            _logger.LogInformation("IdentifyingNumber via PowerShell: '{Number}'", identifyingNumber ?? "NULL");
+            
+            if (!string.IsNullOrEmpty(identifyingNumber) && !IsGenericSerial(identifyingNumber))
+            {
+                _logger.LogInformation("✅ PowerShell IdentifyingNumber accepted: {Number}", identifyingNumber);
+                return identifyingNumber;
+            }
+
+            // Method 4: Motherboard Serial Number
+            _logger.LogInformation("PowerShell Method 4: BaseBoard SerialNumber");
+            var motherboardSerial = ExecutePowerShellCommand("Get-WmiObject -Class Win32_BaseBoard | Select-Object -ExpandProperty SerialNumber");
+            _logger.LogInformation("Motherboard Serial via PowerShell: '{Serial}'", motherboardSerial ?? "NULL");
+            
+            if (!string.IsNullOrEmpty(motherboardSerial) && !IsGenericSerial(motherboardSerial))
+            {
+                _logger.LogInformation("✅ PowerShell motherboard serial accepted: {Serial}", motherboardSerial);
+                return motherboardSerial;
+            }
+
+            _logger.LogWarning("❌ All PowerShell methods returned empty or generic serial numbers");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Exception in PowerShell WMI query methods");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Execute a PowerShell command and return the result
+    /// </summary>
+    private string? ExecutePowerShellCommand(string command)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-Command \"{command}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            using var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                _logger.LogWarning("Failed to start PowerShell process for command: {Command}", command);
+                return null;
+            }
+
+            process.WaitForExit(10000); // 10 second timeout
+            
+            if (process.ExitCode == 0)
+            {
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                _logger.LogDebug("PowerShell command '{Command}' result: '{Output}'", command, output);
+                return string.IsNullOrEmpty(output) ? null : output;
+            }
+            else
+            {
+                var error = process.StandardError.ReadToEnd();
+                _logger.LogWarning("PowerShell command '{Command}' failed with exit code {ExitCode}: {Error}", 
+                    command, process.ExitCode, error);
+                return null;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not retrieve hardware serial number");
+            _logger.LogWarning(ex, "Exception executing PowerShell command: {Command}", command);
+            return null;
         }
-
-        _logger.LogWarning("Could not find a valid hardware serial number, will use machine name");
-        return null;
     }
 
     private bool IsGenericSerial(string serial)
@@ -507,8 +883,12 @@ public class DeviceInfoService : IDeviceInfoService
             "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
         };
 
-        return genericSerials.Any(g => string.Equals(serial, g, StringComparison.OrdinalIgnoreCase)) ||
-               serial.All(c => c == '0' || c == 'F' || c == '-');
+        var isGeneric = genericSerials.Any(g => string.Equals(serial, g, StringComparison.OrdinalIgnoreCase)) ||
+                       serial.All(c => c == '0' || c == 'F' || c == '-');
+        
+        _logger.LogInformation("IsGenericSerial check for '{Serial}': {IsGeneric}", serial, isGeneric);
+        
+        return isGeneric;
     }
 }
 

@@ -20,49 +20,49 @@ This repository contains a unified PowerShell 7 build script that replicates the
 
 ```powershell
 # Build all packages with auto-generated version (YYYY.MM.DD)
-.\build.ps1
+.\build.ps1 -Sign
 
 # Build with specific version
-.\build.ps1 -Version "2024.06.27"
+.\build.ps1 -Version "2024.06.27" -Sign
 
 # Clean build (remove previous artifacts)
-.\build.ps1 -Clean
+.\build.ps1 -Clean -Sign
 ```
 
 ### Package-Specific Builds
 
 ```powershell
 # Skip NUPKG creation
-.\build.ps1 -SkipNUPKG
+.\build.ps1 -SkipNUPKG -Sign
 
 # Skip ZIP creation
-.\build.ps1 -SkipZIP
+.\build.ps1 -SkipZIP -Sign
 
 # Only build executable (skip all packages)
-.\build.ps1 -SkipNUPKG -SkipZIP
+.\build.ps1 -SkipNUPKG -SkipZIP -Sign
 ```
 
 ### Debug and Development
 
 ```powershell
 # Debug build with verbose output
-.\build.ps1 -Configuration Debug -Verbose
+.\build.ps1 -Configuration Debug -Verbose -Sign
 
 # Skip .NET build (use existing build)
-.\build.ps1 -SkipBuild
+.\build.ps1 -SkipBuild -Sign
 ```
 
 ### Production Builds with Tagging and Releases
 
 ```powershell
 # Build and create git tag
-.\build.ps1 -CreateTag
+.\build.ps1 -CreateTag -Sign
 
 # Build, tag, and create GitHub release
-.\build.ps1 -CreateTag -CreateRelease
+.\build.ps1 -CreateTag -CreateRelease -Sign
 
 # Full production build with API URL
-.\build.ps1 -Version "2024.06.27" -CreateTag -CreateRelease -ApiUrl "https://api.reportmate.com"
+.\build.ps1 -Version "2024.06.27" -CreateTag -CreateRelease -ApiUrl "https://api.reportmate.com" -Sign
 ```
 
 ## Script Parameters
@@ -99,25 +99,25 @@ This repository contains a unified PowerShell 7 build script that replicates the
 ### Simple Build
 ```powershell
 # Build with auto-generated date version (YYYY.MM.DD)
-.\build.ps1
+.\build.ps1 -Sign
 
 # Build specific version
-.\build.ps1 -Version "2024.06.27"
+.\build.ps1 -Version "2024.06.27" -Sign
 
 # Clean build
-.\build.ps1 -Clean
+.\build.ps1 -Clean -Sign
 ```
 
 ### Advanced Options
 ```powershell
 # Skip NUPKG creation (if cimipkg not available)
-.\build.ps1 -SkipNUPKG
+.\build.ps1 -SkipNUPKG -Sign
 
 # Build with API URL pre-configured
-.\build.ps1 -ApiUrl "https://api.reportmate.com"
+.\build.ps1 -ApiUrl "https://api.reportmate.com" -Sign
 
 # Debug build
-.\build.ps1 -Configuration Debug
+.\build.ps1 -Configuration Debug -Sign
 ```
 
 ## Output
@@ -188,7 +188,7 @@ The unified build script replicates the GitHub Actions pipeline locally:
 
 ```powershell
 # The script will auto-download cimipkg, or skip if unavailable
-.\build.ps1 -SkipNUPKG
+.\build.ps1 -SkipNUPKG -Sign
 ```
 
 ### PowerShell Version
@@ -214,17 +214,17 @@ Test-Path "C:\ProgramData\ManagedReports\appsettings.yaml"
 
 1. **Local Development**:
    ```powershell
-   .\build.ps1 -Configuration Debug
+   .\build.ps1 -Configuration Debug -Sign
    ```
 
 2. **Testing Changes**:
    ```powershell
-   .\build.ps1 -Clean -Version "test.$(Get-Date -Format 'HHmm')"
+   .\build.ps1 -Clean -Version "test.$(Get-Date -Format 'HHmm')" -Sign
    ```
 
 3. **Release Preparation**:
    ```powershell
-   .\build.ps1 -Version "2024.06.27" -ApiUrl "https://production-api.reportmate.com"
+   .\build.ps1 -Version "2024.06.27" -ApiUrl "https://production-api.reportmate.com" -Sign
    ```
 
 4. **Create Release**:

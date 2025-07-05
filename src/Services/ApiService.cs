@@ -7,7 +7,10 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using System.Text.Json.Serialization.Metadata;
+using ReportMate.WindowsClient.Models;
 
 namespace ReportMate.WindowsClient.Services;
 
@@ -19,8 +22,8 @@ public interface IApiService
 {
     Task<bool> SendDeviceDataAsync(Dictionary<string, object> deviceData);
     Task<bool> TestConnectivityAsync();
-    Task<ApiResponse<T>> GetAsync<T>(string endpoint);
-    Task<ApiResponse<T>> PostAsync<T>(string endpoint, object data);
+    Task<bool> RegisterDeviceAsync(DeviceInfo deviceInfo);
+    Task<bool> IsDeviceRegisteredAsync(string deviceId);
 }
 
 public class ApiService : IApiService
@@ -40,7 +43,8 @@ public class ApiService : IApiService
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             WriteIndented = false,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+            TypeInfoResolver = ReportMateJsonContext.Default
         };
 
         ConfigureHttpClient();
@@ -50,38 +54,96 @@ public class ApiService : IApiService
     {
         try
         {
-            _logger.LogInformation("Sending device data to ReportMate API");
+            _logger.LogInformation("=== DEVICE DATA TRANSMISSION STARTING ===");
+            _logger.LogInformation("Preparing device data for transmission to ReportMate API...");
 
-            // Extract device info for registration
-            var deviceInfo = deviceData.GetValueOrDefault("device") as DeviceInfo;
-            var deviceId = deviceInfo?.SerialNumber ?? deviceInfo?.DeviceId ?? "unknown";
-
-            // First, register the device if we have device info
-            if (deviceInfo != null && !string.IsNullOrEmpty(deviceId) && deviceId != "unknown")
+            // Extract device info for registration - handle both DeviceInfo object and JSON string
+            DeviceInfo? deviceInfo = null;
+            var deviceValue = deviceData.GetValueOrDefault("device");
+            
+            _logger.LogInformation("Device value type: {Type}", deviceValue?.GetType().FullName);
+            
+            if (deviceValue is DeviceInfo directDeviceInfo)
             {
-                var registrationSuccess = await RegisterDeviceAsync(deviceInfo);
-                if (!registrationSuccess)
+                deviceInfo = directDeviceInfo;
+                _logger.LogInformation("✅ Device info found as DeviceInfo object");
+                _logger.LogInformation("   DeviceId: {DeviceId}", deviceInfo.DeviceId);
+                _logger.LogInformation("   SerialNumber: {SerialNumber}", deviceInfo.SerialNumber);
+                _logger.LogInformation("   ComputerName: {ComputerName}", deviceInfo.ComputerName);
+            }
+            else if (deviceValue is string deviceJsonString)
+            {
+                _logger.LogInformation("Device value is string, attempting JSON parse. String length: {Length}", deviceJsonString.Length);
+                try
                 {
-                    _logger.LogWarning("Device registration failed, but will continue with data transmission");
+                    deviceInfo = System.Text.Json.JsonSerializer.Deserialize(deviceJsonString, ReportMateJsonContext.Default.DeviceInfo);
+                    _logger.LogInformation("✅ Device info parsed from JSON - DeviceId: {DeviceId}, SerialNumber: {SerialNumber}", 
+                        deviceInfo?.DeviceId, deviceInfo?.SerialNumber);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "❌ Failed to deserialize device info from JSON string");
                 }
             }
-
-            // Add metadata
-            var payload = new
+            else
             {
-                device = deviceId,
-                kind = "device_data",
-                timestamp = DateTime.UtcNow.ToString("O"),
-                payload = new
-                {
-                    system = deviceData.GetValueOrDefault("system"),
-                    security = deviceData.GetValueOrDefault("security"),
-                    osquery = deviceData.GetValueOrDefault("osquery"),
-                    collection_timestamp = deviceData.GetValueOrDefault("collection_timestamp"),
-                    client_version = deviceData.GetValueOrDefault("client_version"),
-                    collection_type = deviceData.GetValueOrDefault("collection_type", "comprehensive")
+                _logger.LogError("❌ Device info has unexpected type: {Type}", deviceValue?.GetType().FullName);
+            }
+
+            // Use DeviceId which should be the serial number (0F33V9G25083HJ)
+            var deviceId = deviceInfo?.DeviceId ?? deviceInfo?.SerialNumber ?? Environment.MachineName;
+            
+            _logger.LogInformation("=== TRANSMISSION DETAILS ===");
+            _logger.LogInformation("Target Device ID: {DeviceId} (this should be the serial number)", deviceId);
+            _logger.LogInformation("Serial Number: {SerialNumber}", deviceInfo?.SerialNumber);
+            _logger.LogInformation("Computer Name: {ComputerName}", deviceInfo?.ComputerName ?? "Unknown");
+            _logger.LogInformation("Expected Dashboard URL: /device/{DeviceId}", deviceId);
+
+            // Analyze payload composition
+            _logger.LogInformation("=== PAYLOAD ANALYSIS ===");
+            if (deviceData.ContainsKey("device")) _logger.LogInformation("✅ Device data included");
+            if (deviceData.ContainsKey("system")) _logger.LogInformation("✅ System data included");
+            if (deviceData.ContainsKey("security")) _logger.LogInformation("✅ Security data included");
+            if (deviceData.ContainsKey("osquery")) _logger.LogInformation("✅ OSQuery data included");
+            if (deviceData.ContainsKey("reportmate_client")) _logger.LogInformation("✅ ReportMate client metadata included");
+            if (deviceData.ContainsKey("environment")) _logger.LogInformation("✅ Environment context included");
+
+            // Create the payload as a proper dictionary for JSON serialization
+            _logger.LogInformation("Creating API payload for /api/ingest...");
+            var payload = new Dictionary<string, object>
+            {
+                { "device", deviceId }, // THIS IS CRITICAL - must be serial number 0F33V9G25083HJ
+                { "kind", "device_data" },
+                { "ts", DateTime.UtcNow.ToString("O") },
+                { "payload", new Dictionary<string, object>
+                    {
+                        // Include device info for auto-registration
+                        { "device", deviceInfo ?? new object() },
+                        { "system", deviceData.GetValueOrDefault("system") ?? new object() },
+                        { "security", deviceData.GetValueOrDefault("security") ?? new object() },
+                        { "osquery", deviceData.GetValueOrDefault("osquery") ?? new object() },
+                        { "collection_timestamp", deviceData.GetValueOrDefault("collection_timestamp") ?? DateTime.UtcNow.ToString("O") },
+                        { "client_version", deviceData.GetValueOrDefault("client_version") ?? "2025.7.1.3" },
+                        { "collection_type", deviceData.GetValueOrDefault("collection_type", "comprehensive") },
+                        { "managed_installs_system", "Cimian" }, // Windows uses Cimian
+                        { "source", "runner.exe" }
+                    }
                 }
             };
+
+            // Add passphrase to payload if configured
+            var passphrase = _configuration["ReportMate:Passphrase"];
+            if (!string.IsNullOrEmpty(passphrase))
+            {
+                payload["passphrase"] = passphrase;
+                _logger.LogInformation("✅ Client passphrase included in payload");
+            }
+            else
+            {
+                _logger.LogInformation("⚠️  No client passphrase configured - requests may be rejected if authentication is required");
+            }
+
+            _logger.LogInformation("Payload created with device ID: {DeviceId}", payload["device"]);
 
             var maxRetries = _configuration.GetValue<int>("ReportMate:MaxRetryAttempts", 3);
             var retryDelay = TimeSpan.FromSeconds(1);
@@ -90,41 +152,57 @@ public class ApiService : IApiService
             {
                 try
                 {
-                    _logger.LogDebug("Sending data to API (attempt {Attempt}/{MaxRetries})", attempt, maxRetries);
+                    _logger.LogInformation("=== API TRANSMISSION ATTEMPT {Attempt}/{MaxRetries} ===", attempt, maxRetries);
 
-                    var response = await _httpClient.PostAsJsonAsync("/api/events", payload, _jsonOptions);
+                    // Use the ReportMateJsonContext for proper trim-safe JSON serialization
+                    var jsonContent = JsonSerializer.Serialize(payload, ReportMateJsonContext.Default.DictionaryStringObject);
+                    var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+                    
+                    var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
+                    _logger.LogInformation("Sending POST to /api/ingest...");
+                    _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
+                    _logger.LogInformation("Device ID in payload: {DeviceId}", payload["device"]);
+
+                    var response = await _httpClient.PostAsync("/api/ingest", httpContent);
+                    _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
 
                     if (response.IsSuccessStatusCode)
                     {
-                        _logger.LogInformation("Successfully sent device data to API");
+                        var responseContent = await response.Content.ReadAsStringAsync();
+                        _logger.LogInformation("✅ SUCCESS: Device data sent to ReportMate API");
+                        _logger.LogInformation("✅ Data should now be visible in dashboard at /device/{DeviceId}", deviceId);
+                        _logger.LogInformation("API Response: {Response}", responseContent);
                         return true;
                     }
                     else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         // Special handling for 404 - API endpoint not deployed yet
-                        _logger.LogWarning("API endpoint /api/events not found (404). This is unexpected as the endpoint should be available.");
+                        _logger.LogWarning("❌ API endpoint /api/ingest not found (404). This is unexpected as the endpoint should be available.");
                         _logger.LogInformation("DATA READY FOR TRANSMISSION - Would have sent the following payload:");
-                        _logger.LogInformation("Payload size: {PayloadSize} bytes", JsonSerializer.Serialize(payload, _jsonOptions).Length);
-                        _logger.LogInformation("Device: {Device}", payload.device);
-                        _logger.LogInformation("Kind: {Kind}", payload.kind);
-                        _logger.LogInformation("Timestamp: {Timestamp}", payload.timestamp);
+                        _logger.LogInformation("Payload size: {PayloadSize} bytes", jsonContent.Length);
+                        _logger.LogInformation("Device: {Device}", payload["device"]);
+                        _logger.LogInformation("Kind: {Kind}", payload["kind"]);
+                        _logger.LogInformation("Timestamp: {Timestamp}", payload["timestamp"]);
                         
                         // Log a sample of the actual data being collected
-                        if (payload.payload?.system != null)
+                        if (payload.TryGetValue("payload", out var innerPayload) && innerPayload is Dictionary<string, object> innerDict)
                         {
-                            _logger.LogInformation("✅ System data collected and ready");
-                        }
-                        if (payload.payload?.security != null)
-                        {
-                            _logger.LogInformation("✅ Security data collected and ready");
-                        }
-                        if (payload.payload?.osquery != null)
-                        {
-                            _logger.LogInformation("✅ OSQuery data collected and ready");
+                            if (innerDict.ContainsKey("system"))
+                            {
+                                _logger.LogInformation("✅ System data collected and ready");
+                            }
+                            if (innerDict.ContainsKey("security"))
+                            {
+                                _logger.LogInformation("✅ Security data collected and ready");
+                            }
+                            if (innerDict.ContainsKey("osquery"))
+                            {
+                                _logger.LogInformation("✅ OSQuery data collected and ready");
+                            }
                         }
                         
                         _logger.LogInformation("🎯 SUCCESS: ReportMate client is fully functional and ready to send data!");
-                        _logger.LogInformation("📡 Once the /api/events endpoint is available, this machine will automatically start reporting.");
+                        _logger.LogInformation("📡 Once the /api/ingest endpoint is available, this machine will automatically start reporting.");
                         
                         // Return true since the client is working correctly
                         return true;
@@ -177,8 +255,8 @@ public class ApiService : IApiService
         {
             _logger.LogInformation("Testing API connectivity");
 
-            // Try to get the events endpoint with a HEAD request first
-            var request = new HttpRequestMessage(HttpMethod.Head, "/api/events");
+            // Try to get the ingest endpoint with a HEAD request first
+            var request = new HttpRequestMessage(HttpMethod.Head, "/api/ingest");
             var response = await _httpClient.SendAsync(request);
             
             if (response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
@@ -199,73 +277,127 @@ public class ApiService : IApiService
         }
     }
 
-    public async Task<ApiResponse<T>> GetAsync<T>(string endpoint)
+    public async Task<bool> RegisterDeviceAsync(DeviceInfo deviceInfo)
     {
         try
         {
-            _logger.LogDebug("GET request to: {Endpoint}", endpoint);
+            _logger.LogInformation("=== DEVICE REGISTRATION STARTING ===");
+            _logger.LogInformation("Registering device: {DeviceId} ({Name})", deviceInfo.DeviceId, deviceInfo.ComputerName);
+            _logger.LogInformation("This will create a 'New Client' event in ReportMate");
 
-            var response = await _httpClient.GetAsync(endpoint);
-            var content = await response.Content.ReadAsStringAsync();
-
-            if (response.IsSuccessStatusCode)
+            // Create a "new_client" event through the ingest endpoint
+            var registrationPayload = new Dictionary<string, object>
             {
-                var data = JsonSerializer.Deserialize<T>(content, _jsonOptions);
-                return new ApiResponse<T> { Success = true, Data = data };
+                { "device", deviceInfo.DeviceId }, // Use DeviceId as serial number
+                { "kind", "new_client" },
+                { "ts", DateTime.UtcNow.ToString("O") },
+                { "payload", new Dictionary<string, object>
+                    {
+                        { "message", "Device registered as new client" },
+                        { "source", "runner.exe" },
+                        { "device_id", deviceInfo.DeviceId },
+                        { "name", deviceInfo.ComputerName },
+                        { "model", deviceInfo.Model },
+                        { "os", deviceInfo.OperatingSystem },
+                        { "manufacturer", deviceInfo.Manufacturer },
+                        { "memory", deviceInfo.TotalMemoryGB },
+                        { "client_version", deviceInfo.ClientVersion },
+                        { "platform", "windows" },
+                        { "managed_installs_system", "Cimian" },
+                        { "domain", deviceInfo.Domain },
+                        { "registration_time", DateTime.UtcNow.ToString("O") }
+                    }
+                }
+            };
+
+            // Add passphrase to payload if configured
+            var passphrase = _configuration["ReportMate:Passphrase"];
+            if (!string.IsNullOrEmpty(passphrase))
+            {
+                registrationPayload["passphrase"] = passphrase;
+                _logger.LogInformation("✅ Client passphrase included in registration payload");
             }
             else
             {
-                _logger.LogWarning("GET request failed: {StatusCode} - {Content}", response.StatusCode, content);
-                return new ApiResponse<T> 
-                { 
-                    Success = false, 
-                    Error = $"HTTP {response.StatusCode}: {content}" 
-                };
+                _logger.LogInformation("⚠️  No client passphrase configured - registration may be rejected if authentication is required");
+            }
+
+            _logger.LogInformation("Registration payload created:");
+            _logger.LogInformation("  Device ID: {DeviceId}", deviceInfo.DeviceId);
+            _logger.LogInformation("  Computer Name: {ComputerName}", deviceInfo.ComputerName);
+            _logger.LogInformation("  Manufacturer: {Manufacturer}", deviceInfo.Manufacturer);
+            _logger.LogInformation("  Model: {Model}", deviceInfo.Model);
+            _logger.LogInformation("  OS: {OperatingSystem}", deviceInfo.OperatingSystem);
+
+            var jsonContent = JsonSerializer.Serialize(registrationPayload, _jsonOptions);
+            var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+
+            _logger.LogInformation("Sending registration request to /api/ingest...");
+            var response = await _httpClient.PostAsync("/api/ingest", httpContent);
+
+            _logger.LogInformation("Registration response: {StatusCode}", response.StatusCode);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                _logger.LogInformation("✅ Device {DeviceId} registered successfully", deviceInfo.DeviceId);
+                _logger.LogInformation("✅ New Client event should be visible in dashboard at /device/{DeviceId}", deviceInfo.DeviceId);
+                _logger.LogInformation("Response: {Response}", responseContent);
+                return true;
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogError("❌ Device registration failed with status {StatusCode}: {Error}", 
+                    response.StatusCode, errorContent);
+                return false;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in GET request to {Endpoint}", endpoint);
-            return new ApiResponse<T> 
-            { 
-                Success = false, 
-                Error = ex.Message 
-            };
+            _logger.LogError(ex, "❌ Error registering device: {DeviceId}", deviceInfo.DeviceId);
+            return false;
         }
     }
 
-    public async Task<ApiResponse<T>> PostAsync<T>(string endpoint, object data)
+    public async Task<bool> IsDeviceRegisteredAsync(string deviceId)
     {
         try
         {
-            _logger.LogDebug("POST request to: {Endpoint}", endpoint);
+            _logger.LogInformation("=== DEVICE REGISTRATION CHECK ===");
+            _logger.LogInformation("Checking if device is registered: {DeviceId}", deviceId);
+            _logger.LogInformation("API endpoint: GET /api/device/{DeviceId}", deviceId);
 
-            var response = await _httpClient.PostAsJsonAsync(endpoint, data, _jsonOptions);
-            var content = await response.Content.ReadAsStringAsync();
+            var response = await _httpClient.GetAsync($"/api/device/{deviceId}");
+            _logger.LogInformation("Registration check response: {StatusCode}", response.StatusCode);
 
             if (response.IsSuccessStatusCode)
             {
-                var responseData = JsonSerializer.Deserialize<T>(content, _jsonOptions);
-                return new ApiResponse<T> { Success = true, Data = responseData };
+                var responseContent = await response.Content.ReadAsStringAsync();
+                _logger.LogInformation("✅ Device {DeviceId} is registered", deviceId);
+                _logger.LogDebug("Device info: {DeviceInfo}", responseContent);
+                return true;
+            }
+            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogInformation("❌ Device {DeviceId} is not registered (404 Not Found)", deviceId);
+                _logger.LogInformation("   Device needs to be registered before sending data");
+                return false;
             }
             else
             {
-                _logger.LogWarning("POST request failed: {StatusCode} - {Content}", response.StatusCode, content);
-                return new ApiResponse<T> 
-                { 
-                    Success = false, 
-                    Error = $"HTTP {response.StatusCode}: {content}" 
-                };
+                var errorContent = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("⚠️  Error checking device registration status {StatusCode}: {Error}", 
+                    response.StatusCode, errorContent);
+                _logger.LogWarning("   Assuming device is not registered due to API error");
+                return false;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error in POST request to {Endpoint}", endpoint);
-            return new ApiResponse<T> 
-            { 
-                Success = false, 
-                Error = ex.Message 
-            };
+            _logger.LogError(ex, "❌ Error checking device registration: {DeviceId}", deviceId);
+            _logger.LogError("   Assuming device is not registered due to exception");
+            return false;
         }
     }
 
@@ -311,47 +443,6 @@ public class ApiService : IApiService
 
         _logger.LogDebug("HTTP client configured with BaseAddress: {BaseAddress}, timeout: {Timeout}s, User-Agent: {UserAgent}", 
             _httpClient.BaseAddress, timeoutSeconds, userAgent);
-    }
-
-    private async Task<bool> RegisterDeviceAsync(DeviceInfo deviceInfo)
-    {
-        try
-        {
-            _logger.LogInformation("Registering device: {DeviceId} ({Name})", deviceInfo.SerialNumber ?? deviceInfo.DeviceId, deviceInfo.ComputerName);
-
-            var registrationPayload = new
-            {
-                id = deviceInfo.SerialNumber ?? deviceInfo.DeviceId,
-                serialNumber = deviceInfo.SerialNumber,
-                name = deviceInfo.ComputerName,
-                hostname = deviceInfo.ComputerName,
-                manufacturer = deviceInfo.Manufacturer,
-                model = deviceInfo.Model,
-                domain = deviceInfo.Domain,
-                operatingSystem = deviceInfo.OperatingSystem,
-                totalMemoryGB = deviceInfo.TotalMemoryGB,
-                clientVersion = deviceInfo.ClientVersion
-            };
-
-            var response = await _httpClient.PostAsJsonAsync("/api/device", registrationPayload, _jsonOptions);
-
-            if (response.IsSuccessStatusCode)
-            {
-                _logger.LogInformation("Device registration successful");
-                return true;
-            }
-            else
-            {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                _logger.LogWarning("Device registration failed with status {StatusCode}: {Error}", response.StatusCode, errorContent);
-                return false;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during device registration");
-            return false;
-        }
     }
 }
 

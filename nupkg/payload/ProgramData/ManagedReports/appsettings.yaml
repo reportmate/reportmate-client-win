@@ -9,7 +9,7 @@ Logging:
 
 ReportMate:
   # API Configuration
-  ApiUrl: ""                                    # ReportMate API endpoint (required)
+  ApiUrl: ""                                    # ReportMate API endpoint (required) - set via environment variable REPORTMATE_API_URL
   DeviceId: ""                                  # Custom device identifier (auto-generated if empty)
   ApiKey: ""                                    # API authentication key (optional)
   Passphrase: ""                                # Client passphrase for restricted access/reporting (optional)

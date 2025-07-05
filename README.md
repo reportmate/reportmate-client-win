@@ -12,13 +12,13 @@ The project includes a unified PowerShell 7 build script that handles all packag
 
 ```powershell
 # Simple build with auto-generated date version
-.\build.ps1
+.\build.ps1 -Sign
 
 # Build specific version
-.\build.ps1 -Version "2024.06.27"
+.\build.ps1 -Version "2024.06.27" -Sign
 
 # Clean build for release
-.\build.ps1 -Clean -Version "2024.06.27" -ApiUrl "https://api.reportmate.com"
+.\build.ps1 -Clean -Version "2024.06.27" -ApiUrl "https://api.reportmate.com" -Sign
 ```
 
 **📋 Prerequisites:**
