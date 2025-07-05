@@ -6,6 +6,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Text.Json.Serialization.Metadata;
+using ReportMate.WindowsClient.Models;
 
 namespace ReportMate.WindowsClient.Services;
 
@@ -119,10 +121,11 @@ public class OsQueryService : IOsQueryService
                 {
                     PropertyNameCaseInsensitive = true,
                     ReadCommentHandling = JsonCommentHandling.Skip,
-                    AllowTrailingCommas = true
+                    AllowTrailingCommas = true,
+                    TypeInfoResolver = ReportMateJsonContext.Default
                 };
 
-                var result = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(output, jsonOptions);
+                var result = JsonSerializer.Deserialize(output, ReportMateJsonContext.Default.ListDictionaryStringObject);
                 
                 if (result == null || result.Count == 0)
                 {
@@ -168,7 +171,7 @@ public class OsQueryService : IOsQueryService
             _logger.LogInformation("Executing queries from file: {QueryFile}", queryFilePath);
 
             var queriesJson = await File.ReadAllTextAsync(queryFilePath);
-            var queries = JsonSerializer.Deserialize<Dictionary<string, string>>(queriesJson);
+            var queries = JsonSerializer.Deserialize(queriesJson, ReportMateJsonContext.Default.DictionaryStringString);
 
             if (queries == null)
             {

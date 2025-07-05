@@ -253,7 +253,7 @@ public class ConfigurationService : IConfigurationService
         }
     }
 
-    private async Task<string> GenerateDeviceIdAsync()
+    private Task<string> GenerateDeviceIdAsync()
     {
         try
         {
@@ -281,12 +281,12 @@ public class ConfigurationService : IConfigurationService
             var deviceId = $"{computerName}.{domain}.{hardwareId}".ToLowerInvariant();
             _logger.LogDebug("Generated device ID: {DeviceId}", deviceId);
             
-            return deviceId;
+            return Task.FromResult(deviceId);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Error generating device ID, using fallback");
-            return $"{Environment.MachineName}.{Environment.UserDomainName}".ToLowerInvariant();
+            return Task.FromResult($"{Environment.MachineName}.{Environment.UserDomainName}".ToLowerInvariant());
         }
     }
 

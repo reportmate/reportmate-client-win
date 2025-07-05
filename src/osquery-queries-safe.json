@@ -1,0 +1,39 @@
+{
+  "system_info": "SELECT hostname, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory FROM system_info;",
+  
+  "os_version": "SELECT name, version, build, platform, arch FROM os_version;",
+  
+  "hardware_info": "SELECT vendor, model, version, serial, hardware_vendor, hardware_model, hardware_version, hardware_serial FROM system_info;",
+  
+  "memory_info": "SELECT device, device_type, size, form_factor, configured_clock_speed FROM memory_devices WHERE size > 0;",
+  
+  "disk_info": "SELECT device, model, size, type FROM disk_info WHERE size > 0;",
+  
+  "network_interfaces": "SELECT interface, mac, ip, mask, broadcast, type, mtu FROM interface_details WHERE interface NOT LIKE 'lo%' AND interface NOT LIKE 'Loopback%';",
+  
+  "installed_programs": "SELECT name, version, publisher, install_date FROM programs WHERE name IS NOT NULL AND name != '';",
+  
+  "running_services": "SELECT name, display_name, status, start_type, path FROM services WHERE status = 'RUNNING' AND name IS NOT NULL;",
+  
+  "startup_items": "SELECT name, path, source, status, username FROM startup_items WHERE name IS NOT NULL;",
+  
+  "recent_patches": "SELECT csname, hotfix_id, description, installed_on FROM patches WHERE installed_on IS NOT NULL ORDER BY installed_on DESC LIMIT 20;",
+  
+  "bitlocker_info": "SELECT device_id, drive_letter, conversion_status, protection_status, lock_status, encryption_method FROM bitlocker_info WHERE device_id IS NOT NULL;",
+  
+  "security_center": "SELECT domain, antivirus, antispyware, firewall, autoupdate, uac FROM windows_security_center;",
+  
+  "tpm_info": "SELECT activated, enabled, owned, manufacturer_version, manufacturer_full_version, manufacturer_info, tpm_version_major, tmp_version_minor FROM tpm_info;",
+  
+  "critical_processes": "SELECT pid, name, path, cmdline, parent, threads FROM processes WHERE name IN ('lsass.exe', 'winlogon.exe', 'csrss.exe', 'smss.exe', 'explorer.exe') AND name IS NOT NULL;",
+  
+  "listening_ports": "SELECT pid, port, protocol, family, address, path FROM listening_ports WHERE port != 0 AND port IS NOT NULL;",
+  
+  "active_tasks": "SELECT name, action, path, enabled, state, last_run_time, next_run_time FROM scheduled_tasks WHERE enabled = 1 AND name IS NOT NULL LIMIT 30;",
+  
+  "security_policies": "SELECT key, name, type, data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' AND name IN ('EnableLUA', 'ConsentPromptBehaviorAdmin', 'PromptOnSecureDesktop') AND data IS NOT NULL;",
+  
+  "removable_media": "SELECT vendor, model, serial, removable, size FROM usb_devices WHERE removable = 1 AND serial IS NOT NULL;",
+  
+  "logged_in_users": "SELECT user, host, time, pid FROM logged_in_users WHERE user IS NOT NULL;"
+}
