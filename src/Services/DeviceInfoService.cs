@@ -109,10 +109,11 @@ public class DeviceInfoService : IDeviceInfoService
             _logger.LogInformation("DeviceInfo created - DeviceId: '{DeviceId}', SerialNumber: '{SerialNumber}', ComputerName: '{ComputerName}'", 
                 deviceInfo.DeviceId, deviceInfo.SerialNumber, deviceInfo.ComputerName);
 
-            // Try to get additional info from WMI
+            // Try to get additional info from WMI with fallback methods
             _logger.LogInformation("Step 3: Getting additional WMI information...");
             try
             {
+                // First try standard WMI approach
                 using var searcher = new ManagementObjectSearcher("SELECT Manufacturer, Model, TotalPhysicalMemory FROM Win32_ComputerSystem");
                 foreach (ManagementObject obj in searcher.Get())
                 {
@@ -131,7 +132,22 @@ public class DeviceInfoService : IDeviceInfoService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Could not retrieve additional device info from WMI");
+                _logger.LogWarning(ex, "Standard WMI query failed, trying PowerShell fallback");
+                
+                // Fallback to PowerShell approach for WMI data
+                try
+                {
+                    await GetDeviceInfoViaPowerShellAsync(deviceInfo);
+                }
+                catch (Exception psEx)
+                {
+                    _logger.LogWarning(psEx, "PowerShell fallback also failed for device info");
+                    
+                    // Set reasonable defaults if all methods fail
+                    deviceInfo.Manufacturer = deviceInfo.Manufacturer ?? "Unknown";
+                    deviceInfo.Model = deviceInfo.Model ?? "Unknown";
+                    deviceInfo.TotalMemoryGB = deviceInfo.TotalMemoryGB == 0 ? GetMemoryViaEnvironment() : deviceInfo.TotalMemoryGB;
+                }
             }
 
             _logger.LogInformation("=== GetBasicDeviceInfoAsync COMPLETED SUCCESSFULLY ===");
@@ -183,7 +199,37 @@ public class DeviceInfoService : IDeviceInfoService
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Could not retrieve processor info from WMI");
+                _logger.LogDebug(ex, "Could not retrieve processor info from WMI, trying PowerShell fallback");
+                
+                try
+                {
+                    // Fallback to PowerShell for processor info
+                    var processorResult = await ExecutePowerShellCommandAsync(
+                        "Get-CimInstance -ClassName Win32_Processor | Select-Object -ExpandProperty Name -First 1"
+                    );
+                    
+                    if (!string.IsNullOrWhiteSpace(processorResult))
+                    {
+                        systemInfo.ProcessorName = processorResult.Trim();
+                        _logger.LogInformation("PowerShell Processor: '{ProcessorName}'", systemInfo.ProcessorName);
+                    }
+                    
+                    var speedResult = await ExecutePowerShellCommandAsync(
+                        "Get-CimInstance -ClassName Win32_Processor | Select-Object -ExpandProperty MaxClockSpeed -First 1"
+                    );
+                    
+                    if (!string.IsNullOrWhiteSpace(speedResult) && uint.TryParse(speedResult.Trim(), out var speed))
+                    {
+                        systemInfo.ProcessorSpeedMHz = speed;
+                        _logger.LogInformation("PowerShell Processor Speed: {Speed}MHz", systemInfo.ProcessorSpeedMHz);
+                    }
+                }
+                catch (Exception psEx)
+                {
+                    _logger.LogDebug(psEx, "PowerShell fallback also failed for processor info");
+                    systemInfo.ProcessorName = "Unknown";
+                    systemInfo.ProcessorSpeedMHz = 0;
+                }
             }
 
             // Get disk info
@@ -399,7 +445,7 @@ public class DeviceInfoService : IDeviceInfoService
         return Task.FromResult(diskInfoList);
     }
 
-    private Task<bool> CheckWindowsDefenderAsync()
+    private async Task<bool> CheckWindowsDefenderAsync()
     {
         try
         {
@@ -407,18 +453,35 @@ public class DeviceInfoService : IDeviceInfoService
             using var searcher = new ManagementObjectSearcher(@"root\Microsoft\Windows\Defender", "SELECT AntivirusEnabled FROM MSFT_MpComputerStatus");
             foreach (ManagementObject obj in searcher.Get())
             {
-                return Task.FromResult(obj["AntivirusEnabled"] != null && (bool)obj["AntivirusEnabled"]);
+                return obj["AntivirusEnabled"] != null && (bool)obj["AntivirusEnabled"];
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not check Windows Defender status");
+            _logger.LogDebug(ex, "Could not check Windows Defender status via WMI, trying PowerShell fallback");
+            
+            try
+            {
+                // Fallback to PowerShell
+                var result = await ExecutePowerShellCommandAsync(
+                    "Get-MpComputerStatus | Select-Object -ExpandProperty AntivirusEnabled"
+                );
+                
+                if (!string.IsNullOrWhiteSpace(result) && bool.TryParse(result.Trim(), out var enabled))
+                {
+                    return enabled;
+                }
+            }
+            catch (Exception psEx)
+            {
+                _logger.LogDebug(psEx, "PowerShell fallback also failed for Windows Defender status");
+            }
         }
         
-        return Task.FromResult(false);
+        return false;
     }
 
-    private Task<bool> CheckFirewallStatusAsync()
+    private async Task<bool> CheckFirewallStatusAsync()
     {
         try
         {
@@ -426,15 +489,32 @@ public class DeviceInfoService : IDeviceInfoService
             using var searcher = new ManagementObjectSearcher("SELECT EnabledDomainProfile FROM Win32_FirewallProfile WHERE ProfileName='Domain'");
             foreach (ManagementObject obj in searcher.Get())
             {
-                return Task.FromResult(obj["EnabledDomainProfile"] != null && (bool)obj["EnabledDomainProfile"]);
+                return obj["EnabledDomainProfile"] != null && (bool)obj["EnabledDomainProfile"];
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not check firewall status");
+            _logger.LogDebug(ex, "Could not check firewall status via WMI, trying PowerShell fallback");
+            
+            try
+            {
+                // Fallback to PowerShell
+                var result = await ExecutePowerShellCommandAsync(
+                    "Get-NetFirewallProfile -Profile Domain | Select-Object -ExpandProperty Enabled"
+                );
+                
+                if (!string.IsNullOrWhiteSpace(result) && bool.TryParse(result.Trim(), out var enabled))
+                {
+                    return enabled;
+                }
+            }
+            catch (Exception psEx)
+            {
+                _logger.LogDebug(psEx, "PowerShell fallback also failed for firewall status");
+            }
         }
         
-        return Task.FromResult(false);
+        return false;
     }
 
     private bool CheckUacStatus()
@@ -452,7 +532,7 @@ public class DeviceInfoService : IDeviceInfoService
         }
     }
 
-    private Task<bool> CheckBitLockerStatusAsync()
+    private async Task<bool> CheckBitLockerStatusAsync()
     {
         try
         {
@@ -460,33 +540,67 @@ public class DeviceInfoService : IDeviceInfoService
             foreach (ManagementObject obj in searcher.Get())
             {
                 var status = obj["ProtectionStatus"];
-                return Task.FromResult(status != null && (uint)status == 1); // 1 = Protection On
+                return status != null && (uint)status == 1; // 1 = Protection On
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not check BitLocker status");
+            _logger.LogDebug(ex, "Could not check BitLocker status via WMI, trying PowerShell fallback");
+            
+            try
+            {
+                // Fallback to PowerShell
+                var result = await ExecutePowerShellCommandAsync(
+                    "Get-BitLockerVolume -MountPoint C: | Select-Object -ExpandProperty ProtectionStatus"
+                );
+                
+                if (!string.IsNullOrWhiteSpace(result))
+                {
+                    return result.Trim().Equals("On", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch (Exception psEx)
+            {
+                _logger.LogDebug(psEx, "PowerShell fallback also failed for BitLocker status");
+            }
         }
         
-        return Task.FromResult(false);
+        return false;
     }
 
-    private Task<bool> CheckTpmStatusAsync()
+    private async Task<bool> CheckTpmStatusAsync()
     {
         try
         {
             using var searcher = new ManagementObjectSearcher(@"root\cimv2\security\microsofttpm", "SELECT IsEnabled_InitialValue FROM Win32_Tpm");
             foreach (ManagementObject obj in searcher.Get())
             {
-                return Task.FromResult(obj["IsEnabled_InitialValue"] != null && (bool)obj["IsEnabled_InitialValue"]);
+                return obj["IsEnabled_InitialValue"] != null && (bool)obj["IsEnabled_InitialValue"];
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Could not check TPM status");
+            _logger.LogDebug(ex, "Could not check TPM status via WMI, trying PowerShell fallback");
+            
+            try
+            {
+                // Fallback to PowerShell
+                var result = await ExecutePowerShellCommandAsync(
+                    "Get-Tpm | Select-Object -ExpandProperty TpmPresent"
+                );
+                
+                if (!string.IsNullOrWhiteSpace(result) && bool.TryParse(result.Trim(), out var present))
+                {
+                    return present;
+                }
+            }
+            catch (Exception psEx)
+            {
+                _logger.LogDebug(psEx, "PowerShell fallback also failed for TPM status");
+            }
         }
         
-        return Task.FromResult(false);
+        return false;
     }
 
     private Task<DateTime?> GetLastUpdateCheckAsync()
@@ -866,6 +980,43 @@ public class DeviceInfoService : IDeviceInfoService
             return null;
         }
     }
+    
+    /// <summary>
+    /// Execute a PowerShell command and return the output
+    /// </summary>
+    private async Task<string> ExecutePowerShellCommandAsync(string command)
+    {
+        try
+        {
+            using var process = new Process();
+            process.StartInfo.FileName = "powershell.exe";
+            process.StartInfo.Arguments = $"-Command \"{command}\"";
+            process.StartInfo.RedirectStandardOutput = true;
+            process.StartInfo.RedirectStandardError = true;
+            process.StartInfo.UseShellExecute = false;
+            process.StartInfo.CreateNoWindow = true;
+            
+            process.Start();
+            
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            
+            await process.WaitForExitAsync();
+            
+            if (process.ExitCode != 0)
+            {
+                _logger.LogDebug("PowerShell command failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+                return string.Empty;
+            }
+            
+            return output;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to execute PowerShell command: {Command}", command);
+            return string.Empty;
+        }
+    }
 
     private bool IsGenericSerial(string serial)
     {
@@ -889,6 +1040,76 @@ public class DeviceInfoService : IDeviceInfoService
         _logger.LogInformation("IsGenericSerial check for '{Serial}': {IsGeneric}", serial, isGeneric);
         
         return isGeneric;
+    }
+
+    /// <summary>
+    /// Fallback method to get device information via PowerShell when WMI fails
+    /// </summary>
+    private async Task GetDeviceInfoViaPowerShellAsync(DeviceInfo deviceInfo)
+    {
+        _logger.LogInformation("Attempting to get device info via PowerShell...");
+        
+        try
+        {
+            // Try to get manufacturer and model via PowerShell
+            var manufacturerResult = await ExecutePowerShellCommandAsync(
+                "Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Manufacturer"
+            );
+            
+            if (!string.IsNullOrWhiteSpace(manufacturerResult))
+            {
+                deviceInfo.Manufacturer = manufacturerResult.Trim();
+                _logger.LogInformation("PowerShell Manufacturer: '{Manufacturer}'", deviceInfo.Manufacturer);
+            }
+            
+            var modelResult = await ExecutePowerShellCommandAsync(
+                "Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty Model"
+            );
+            
+            if (!string.IsNullOrWhiteSpace(modelResult))
+            {
+                deviceInfo.Model = modelResult.Trim();
+                _logger.LogInformation("PowerShell Model: '{Model}'", deviceInfo.Model);
+            }
+            
+            // Try to get memory info via PowerShell
+            var memoryResult = await ExecutePowerShellCommandAsync(
+                "Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty TotalPhysicalMemory"
+            );
+            
+            if (!string.IsNullOrWhiteSpace(memoryResult) && ulong.TryParse(memoryResult.Trim(), out var memory))
+            {
+                deviceInfo.TotalMemoryGB = Math.Round(memory / (1024.0 * 1024.0 * 1024.0), 2);
+                _logger.LogInformation("PowerShell Memory: {Memory}GB", deviceInfo.TotalMemoryGB);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PowerShell fallback failed for device info");
+        }
+    }
+    
+    /// <summary>
+    /// Get memory information via environment variables as last resort
+    /// </summary>
+    private double GetMemoryViaEnvironment()
+    {
+        try
+        {
+            // Try to get memory from environment or system info
+            var memoryInfo = GC.GetTotalMemory(false);
+            if (memoryInfo > 0)
+            {
+                // This is just the managed memory, not system memory, but it's something
+                return Math.Round(memoryInfo / (1024.0 * 1024.0 * 1024.0), 2);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get memory via environment");
+        }
+        
+        return 0;
     }
 }
 
