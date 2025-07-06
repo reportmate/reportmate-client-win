@@ -91,7 +91,6 @@ public class Program
             _serviceProvider = ConfigureServices(configuration, isVerbose);
             _logger = _serviceProvider.GetRequiredService<ILogger<Program>>();
 
-            _logger.LogError("*** SUPER EARLY DEBUG LOG - RUNNER IS STARTING v2025.7.1.1 ***");
             _logger.LogInformation("ReportMate v{Version} starting", 
                 System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
 
@@ -416,6 +415,7 @@ public class Program
         });
 
         // Register services
+        // No longer using WMI - all data collection is done via osquery
         services.AddScoped<IApiService, ApiService>();
         services.AddScoped<IOsQueryService, OsQueryService>();
         services.AddScoped<IDataCollectionService, DataCollectionService>();
