@@ -419,16 +419,19 @@ public class DataCollectionService : IDataCollectionService
             return kvpOsquery.Value; // Return just the list data, not the KeyValuePair wrapper
         }
         
-        // Handle other KeyValuePair types
+        // Handle other KeyValuePair types (safe string conversion to avoid trim warnings)
         if (value.GetType().IsGenericType && value.GetType().GetGenericTypeDefinition() == typeof(System.Collections.Generic.KeyValuePair<,>))
         {
-            // Use reflection to get the Value property
-            var valueProperty = value.GetType().GetProperty("Value");
-            if (valueProperty != null)
+            // Convert to string representation instead of using reflection/dynamic
+            var stringValue = value.ToString() ?? "";
+            // Extract value part from "KeyValuePair[key, value]" format
+            var valueStart = stringValue.LastIndexOf(", ");
+            if (valueStart > 0 && stringValue.EndsWith("]"))
             {
-                var extractedValue = valueProperty.GetValue(value);
-                return SanitizeValue(extractedValue);
+                var extractedValue = stringValue.Substring(valueStart + 2, stringValue.Length - valueStart - 3);
+                return extractedValue;
             }
+            return stringValue;
         }
         
         // Handle other collections

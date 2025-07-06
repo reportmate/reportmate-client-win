@@ -333,7 +333,8 @@ public class Program
             .MinimumLevel.Information();
 
         // Enable debug logging if verbose mode is enabled
-        if (verbose || configuration.GetValue<bool>("ReportMate:DebugLogging"))
+        var debugLogging = bool.TryParse(configuration["ReportMate:DebugLogging"], out var debugEnabled) && debugEnabled;
+        if (verbose || debugLogging)
         {
             loggerConfig.MinimumLevel.Debug();
         }
@@ -349,7 +350,8 @@ public class Program
             .Enrich.WithProperty("Version", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown");
 
         // Add Windows Event Log in production
-        if (!configuration.GetValue<bool>("Development:Enabled"))
+        var developmentEnabled = bool.TryParse(configuration["Development:Enabled"], out var devEnabled) && devEnabled;
+        if (!developmentEnabled)
         {
             try
             {
@@ -362,7 +364,7 @@ public class Program
         }
 
         // Add console logging in development mode OR when verbose flag is used
-        if (configuration.GetValue<bool>("Development:Enabled") || verbose)
+        if (developmentEnabled || verbose)
         {
             loggerConfig.WriteTo.Console(
                 outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}");
@@ -379,8 +381,24 @@ public class Program
 
         // Register configuration
         services.AddSingleton(configuration);
-        services.Configure<ReportMateClientConfiguration>(
-            configuration.GetSection("ReportMate"));
+        
+        // Register ReportMate configuration manually to avoid trim warnings
+        var reportMateConfig = new ReportMateClientConfiguration
+        {
+            ApiUrl = configuration["ReportMate:ApiUrl"] ?? "",
+            DeviceId = configuration["ReportMate:DeviceId"] ?? "",
+            Passphrase = configuration["ReportMate:Passphrase"] ?? "",
+            ApiKey = configuration["ReportMate:ApiKey"] ?? "",
+            UserAgent = configuration["ReportMate:UserAgent"] ?? "ReportMate/1.0",
+            CollectionIntervalSeconds = int.TryParse(configuration["ReportMate:CollectionIntervalSeconds"], out var interval) ? interval : 3600,
+            MaxRetryAttempts = int.TryParse(configuration["ReportMate:MaxRetryAttempts"], out var attempts) ? attempts : 3,
+            ApiTimeoutSeconds = int.TryParse(configuration["ReportMate:ApiTimeoutSeconds"], out var timeout) ? timeout : 300,
+            MaxDataAgeMinutes = int.TryParse(configuration["ReportMate:MaxDataAgeMinutes"], out var maxAge) ? maxAge : 30,
+            CimianIntegrationEnabled = bool.TryParse(configuration["ReportMate:CimianIntegrationEnabled"], out var enabled) ? enabled : true,
+            DebugLogging = bool.TryParse(configuration["ReportMate:DebugLogging"], out var debug) && debug,
+            OsQueryPath = configuration["ReportMate:OsQueryPath"] ?? @"C:\Program Files\osquery\osqueryi.exe"
+        };
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(reportMateConfig));
 
         // Register HTTP client with proper configuration
         services.AddHttpClient<IApiService, ApiService>((serviceProvider, client) =>
