@@ -28,11 +28,13 @@ public class ConfigurationService : IConfigurationService
     private const string REGISTRY_KEY_PATH = @"SOFTWARE\ReportMate";
     private readonly ILogger<ConfigurationService> _logger;
     private readonly IConfiguration _configuration;
+    private readonly IOsQueryService _osQueryService;
 
-    public ConfigurationService(ILogger<ConfigurationService> logger, IConfiguration configuration)
+    public ConfigurationService(ILogger<ConfigurationService> logger, IConfiguration configuration, IOsQueryService osQueryService)
     {
         _logger = logger;
         _configuration = configuration;
+        _osQueryService = osQueryService;
     }
 
     /// <summary>
@@ -256,7 +258,7 @@ public class ConfigurationService : IConfigurationService
         }
     }
 
-    private Task<string> GenerateDeviceIdAsync()
+    private async Task<string> GenerateDeviceIdAsync()
     {
         try
         {
@@ -264,15 +266,20 @@ public class ConfigurationService : IConfigurationService
             var computerName = Environment.MachineName;
             var domain = Environment.UserDomainName;
             
-            // Try to get hardware UUID from WMI
+            // Try to get hardware UUID from osquery
             string hardwareId = "unknown";
             try
             {
-                using var searcher = new System.Management.ManagementObjectSearcher("SELECT UUID FROM Win32_ComputerSystemProduct");
-                foreach (System.Management.ManagementObject obj in searcher.Get())
+                var systemInfo = await _osQueryService.ExecuteQueryAsync("SELECT uuid FROM system_info");
+                if (systemInfo.ContainsKey("uuid"))
                 {
-                    hardwareId = obj["UUID"]?.ToString() ?? "unknown";
-                    break;
+                    hardwareId = systemInfo["uuid"]?.ToString() ?? "unknown";
+                }
+                
+                if (hardwareId == "unknown")
+                {
+                    _logger.LogDebug("Could not retrieve hardware UUID via osquery, using machine name as fallback");
+                    hardwareId = Environment.MachineName;
                 }
             }
             catch (Exception ex)
@@ -284,12 +291,12 @@ public class ConfigurationService : IConfigurationService
             var deviceId = $"{computerName}.{domain}.{hardwareId}".ToLowerInvariant();
             _logger.LogDebug("Generated device ID: {DeviceId}", deviceId);
             
-            return Task.FromResult(deviceId);
+            return deviceId;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Error generating device ID, using fallback");
-            return Task.FromResult($"{Environment.MachineName}.{Environment.UserDomainName}".ToLowerInvariant());
+            return $"{Environment.MachineName}.{Environment.UserDomainName}".ToLowerInvariant();
         }
     }
 
