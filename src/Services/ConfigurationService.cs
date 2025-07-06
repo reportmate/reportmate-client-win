@@ -189,10 +189,12 @@ public class ConfigurationService : IConfigurationService
             }
 
             // Set default values
-            key.SetValue("CollectionInterval", _configuration.GetValue<int>("ReportMate:CollectionIntervalSeconds", 3600), RegistryValueKind.DWord);
+            var collectionInterval = int.TryParse(_configuration["ReportMate:CollectionIntervalSeconds"], out var interval) ? interval : 3600;
+            key.SetValue("CollectionInterval", collectionInterval, RegistryValueKind.DWord);
             key.SetValue("LogLevel", _configuration["Logging:LogLevel:Default"] ?? "Information", RegistryValueKind.String);
             key.SetValue("OsQueryPath", _configuration["ReportMate:OsQueryPath"] ?? @"C:\Program Files\osquery\osqueryi.exe", RegistryValueKind.String);
-            key.SetValue("CimianIntegrationEnabled", _configuration.GetValue<bool>("ReportMate:CimianIntegrationEnabled", true) ? 1 : 0, RegistryValueKind.DWord);
+            var cimianEnabled = bool.TryParse(_configuration["ReportMate:CimianIntegrationEnabled"], out var enabled) ? enabled : true;
+            key.SetValue("CimianIntegrationEnabled", cimianEnabled ? 1 : 0, RegistryValueKind.DWord);
 
             // Set installation timestamp
             key.SetValue("InstallTime", DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
@@ -237,12 +239,13 @@ public class ConfigurationService : IConfigurationService
                 return false;
             }
 
-            var maxAge = TimeSpan.FromMinutes(_configuration.GetValue<int>("ReportMate:MaxDataAgeMinutes", 30));
+            var maxAgeMinutes = int.TryParse(_configuration["ReportMate:MaxDataAgeMinutes"], out var maxAge) ? maxAge : 30;
+            var maxAgeSpan = TimeSpan.FromMinutes(maxAgeMinutes);
             var age = DateTime.UtcNow - config.LastRunTime.Value;
             
-            var isRecent = age < maxAge;
+            var isRecent = age < maxAgeSpan;
             _logger.LogDebug("Last run was {Age} ago, max age is {MaxAge}, recent: {IsRecent}", 
-                age, maxAge, isRecent);
+                age, maxAgeSpan, isRecent);
             
             return isRecent;
         }

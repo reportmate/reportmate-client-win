@@ -16,6 +16,10 @@
     <AssemblyVersion>2025.07.06.0</AssemblyVersion>
     <FileVersion>2025.07.06.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    
+    <!-- Suppress trim warnings for assemblies that are not fully trim-compatible -->
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+    <NoWarn>$(NoWarn);IL2104</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -55,7 +59,21 @@
     </None>
   </ItemGroup>
 
+  <!-- Preserve these assemblies from trimming to avoid warnings -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="Serilog" />
+    <TrimmerRootAssembly Include="System.Management" />
+  </ItemGroup>
+
 </Project>
+
+
+
+
+
+
+
+
 
 
 

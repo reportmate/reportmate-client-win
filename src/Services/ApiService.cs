@@ -145,7 +145,7 @@ public class ApiService : IApiService
 
             _logger.LogInformation("Payload created with device ID: {DeviceId}", payload["device"]);
 
-            var maxRetries = _configuration.GetValue<int>("ReportMate:MaxRetryAttempts", 3);
+            var maxRetries = int.TryParse(_configuration["ReportMate:MaxRetryAttempts"], out var retries) ? retries : 3;
             var retryDelay = TimeSpan.FromSeconds(1);
 
             for (int attempt = 1; attempt <= maxRetries; attempt++)
@@ -329,7 +329,7 @@ public class ApiService : IApiService
             _logger.LogInformation("  Model: {Model}", deviceInfo.Model);
             _logger.LogInformation("  OS: {OperatingSystem}", deviceInfo.OperatingSystem);
 
-            var jsonContent = JsonSerializer.Serialize(registrationPayload, _jsonOptions);
+            var jsonContent = JsonSerializer.Serialize(registrationPayload, ReportMateJsonContext.Default.DictionaryStringObject);
             var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
 
             _logger.LogInformation("Sending registration request to /api/device...");
@@ -432,7 +432,7 @@ public class ApiService : IApiService
         }
 
         // Configure timeout
-        var timeoutSeconds = _configuration.GetValue<int>("ReportMate:ApiTimeoutSeconds", 300);
+        var timeoutSeconds = int.TryParse(_configuration["ReportMate:ApiTimeoutSeconds"], out var timeout) ? timeout : 300;
         _httpClient.Timeout = TimeSpan.FromSeconds(timeoutSeconds);
 
         // Accept JSON
