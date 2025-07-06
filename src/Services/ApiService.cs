@@ -109,7 +109,7 @@ public class ApiService : IApiService
             if (deviceData.ContainsKey("environment")) _logger.LogInformation("✅ Environment context included");
 
             // Create the payload as a proper dictionary for JSON serialization
-            _logger.LogInformation("Creating API payload for /api/ingest...");
+            _logger.LogInformation("Creating API payload for /api/device...");
             var payload = new Dictionary<string, object>
             {
                 { "device", deviceId }, // THIS IS CRITICAL - must be serial number 0F33V9G25083HJ
@@ -159,11 +159,11 @@ public class ApiService : IApiService
                     var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
                     
                     var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
-                    _logger.LogInformation("Sending POST to /api/ingest...");
+                    _logger.LogInformation("Sending POST to /api/device...");
                     _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
                     _logger.LogInformation("Device ID in payload: {DeviceId}", payload["device"]);
 
-                    var response = await _httpClient.PostAsync("/api/ingest", httpContent);
+                    var response = await _httpClient.PostAsync("/api/device", httpContent);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
 
                     if (response.IsSuccessStatusCode)
@@ -177,12 +177,12 @@ public class ApiService : IApiService
                     else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         // Special handling for 404 - API endpoint not deployed yet
-                        _logger.LogWarning("❌ API endpoint /api/ingest not found (404). This is unexpected as the endpoint should be available.");
+                        _logger.LogWarning("❌ API endpoint /api/device not found (404). This is unexpected as the endpoint should be available.");
                         _logger.LogInformation("DATA READY FOR TRANSMISSION - Would have sent the following payload:");
                         _logger.LogInformation("Payload size: {PayloadSize} bytes", jsonContent.Length);
                         _logger.LogInformation("Device: {Device}", payload["device"]);
                         _logger.LogInformation("Kind: {Kind}", payload["kind"]);
-                        _logger.LogInformation("Timestamp: {Timestamp}", payload["timestamp"]);
+                        _logger.LogInformation("Timestamp: {Timestamp}", payload["ts"]);
                         
                         // Log a sample of the actual data being collected
                         if (payload.TryGetValue("payload", out var innerPayload) && innerPayload is Dictionary<string, object> innerDict)
@@ -202,7 +202,7 @@ public class ApiService : IApiService
                         }
                         
                         _logger.LogInformation("🎯 SUCCESS: ReportMate client is fully functional and ready to send data!");
-                        _logger.LogInformation("📡 Once the /api/ingest endpoint is available, this machine will automatically start reporting.");
+                        _logger.LogInformation("📡 Once the /api/device endpoint is available, this machine will automatically start reporting.");
                         
                         // Return true since the client is working correctly
                         return true;
@@ -255,8 +255,8 @@ public class ApiService : IApiService
         {
             _logger.LogInformation("Testing API connectivity");
 
-            // Try to get the ingest endpoint with a HEAD request first
-            var request = new HttpRequestMessage(HttpMethod.Head, "/api/ingest");
+            // Try to get the device endpoint with a HEAD request first
+            var request = new HttpRequestMessage(HttpMethod.Head, "/api/device");
             var response = await _httpClient.SendAsync(request);
             
             if (response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
@@ -332,8 +332,8 @@ public class ApiService : IApiService
             var jsonContent = JsonSerializer.Serialize(registrationPayload, _jsonOptions);
             var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
 
-            _logger.LogInformation("Sending registration request to /api/ingest...");
-            var response = await _httpClient.PostAsync("/api/ingest", httpContent);
+            _logger.LogInformation("Sending registration request to /api/device...");
+            var response = await _httpClient.PostAsync("/api/device", httpContent);
 
             _logger.LogInformation("Registration response: {StatusCode}", response.StatusCode);
 

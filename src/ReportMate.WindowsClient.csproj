@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>false</UseWindowsForms>
     <PublishSingleFile>true</PublishSingleFile>
@@ -13,8 +13,8 @@
     <AssemblyDescription>Windows client for ReportMate device management and security monitoring</AssemblyDescription>
     <AssemblyCompany>ReportMate</AssemblyCompany>
     <AssemblyProduct>ReportMate</AssemblyProduct>
-    <AssemblyVersion>2025.07.04.0</AssemblyVersion>
-    <FileVersion>2025.07.04.0</FileVersion>
+    <AssemblyVersion>2025.07.06.0</AssemblyVersion>
+    <FileVersion>2025.07.06.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
@@ -56,6 +56,26 @@
   </ItemGroup>
 
 </Project>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -23,6 +23,8 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(decimal))]
 [JsonSerializable(typeof(bool))]
 [JsonSerializable(typeof(object[]))]
+[JsonSerializable(typeof(System.Text.Json.JsonElement))]
+[JsonSerializable(typeof(System.Text.Json.JsonDocument))]
 [JsonSerializable(typeof(DeviceRegistrationRequest))]
 [JsonSerializable(typeof(DeviceEventRequest))]
 [JsonSerializable(typeof(DeviceInfo))]

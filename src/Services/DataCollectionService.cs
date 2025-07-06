@@ -130,7 +130,7 @@ public class DataCollectionService : IDataCollectionService
 
             // Send to API
             _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");
-            _logger.LogInformation("🚀 Sending data to ReportMate API via /api/ingest");
+            _logger.LogInformation("🚀 Sending data to ReportMate API via /api/device");
             
             var success = await _apiService.SendDeviceDataAsync(deviceData);
 
@@ -344,6 +344,13 @@ public class DataCollectionService : IDataCollectionService
     {
         if (value == null) return null;
         
+        // Handle JsonElement which can come from osquery
+        if (value is System.Text.Json.JsonElement jsonElement)
+        {
+            _logger.LogDebug("Converting JsonElement to native object - ValueKind: {ValueKind}", jsonElement.ValueKind);
+            return ConvertJsonElementToObject(jsonElement);
+        }
+        
         // Handle primitive types
         if (value is string || value is int || value is long || value is double || value is float || 
             value is bool || value is DateTime || value is DateTimeOffset)
@@ -380,6 +387,17 @@ public class DataCollectionService : IDataCollectionService
             return sanitizedDict;
         }
         
+        // Handle Dictionary<string, List<Dictionary<string, object>>> specifically for OSQuery data
+        if (value is Dictionary<string, List<Dictionary<string, object>>> osqueryDict)
+        {
+            var sanitizedDict = new Dictionary<string, object>();
+            foreach (var kvp in osqueryDict)
+            {
+                sanitizedDict[kvp.Key] = kvp.Value; // Keep the list structure intact
+            }
+            return sanitizedDict;
+        }
+        
         // Handle lists
         if (value is List<Dictionary<string, object>> listDict)
         {
@@ -393,6 +411,24 @@ public class DataCollectionService : IDataCollectionService
                 }
             }
             return sanitizedList;
+        }
+        
+        // Handle KeyValuePair from OSQuery data (this was causing the string conversion issue)
+        if (value is System.Collections.Generic.KeyValuePair<string, List<Dictionary<string, object>>> kvpOsquery)
+        {
+            return kvpOsquery.Value; // Return just the list data, not the KeyValuePair wrapper
+        }
+        
+        // Handle other KeyValuePair types
+        if (value.GetType().IsGenericType && value.GetType().GetGenericTypeDefinition() == typeof(System.Collections.Generic.KeyValuePair<,>))
+        {
+            // Use reflection to get the Value property
+            var valueProperty = value.GetType().GetProperty("Value");
+            if (valueProperty != null)
+            {
+                var extractedValue = valueProperty.GetValue(value);
+                return SanitizeValue(extractedValue);
+            }
         }
         
         // Handle other collections
@@ -420,6 +456,56 @@ public class DataCollectionService : IDataCollectionService
         {
             // If all else fails, return the type name
             return value.GetType().Name;
+        }
+    }
+
+    /// <summary>
+    /// Converts a JsonElement to a native .NET object
+    /// </summary>
+    private object? ConvertJsonElementToObject(System.Text.Json.JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.String:
+                return element.GetString();
+            case System.Text.Json.JsonValueKind.Number:
+                if (element.TryGetInt32(out int intValue))
+                    return intValue;
+                if (element.TryGetInt64(out long longValue))
+                    return longValue;
+                if (element.TryGetDouble(out double doubleValue))
+                    return doubleValue;
+                return element.GetDecimal();
+            case System.Text.Json.JsonValueKind.True:
+                return true;
+            case System.Text.Json.JsonValueKind.False:
+                return false;
+            case System.Text.Json.JsonValueKind.Null:
+                return null;
+            case System.Text.Json.JsonValueKind.Array:
+                var list = new List<object>();
+                foreach (var item in element.EnumerateArray())
+                {
+                    var convertedItem = ConvertJsonElementToObject(item);
+                    if (convertedItem != null)
+                    {
+                        list.Add(convertedItem);
+                    }
+                }
+                return list;
+            case System.Text.Json.JsonValueKind.Object:
+                var dict = new Dictionary<string, object>();
+                foreach (var prop in element.EnumerateObject())
+                {
+                    var convertedValue = ConvertJsonElementToObject(prop.Value);
+                    if (convertedValue != null)
+                    {
+                        dict[prop.Name] = convertedValue;
+                    }
+                }
+                return dict;
+            default:
+                return element.ToString();
         }
     }
 }
