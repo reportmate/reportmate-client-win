@@ -11,7 +11,9 @@ using NetEscapades.Configuration.Yaml;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using Serilog;
 using Serilog.Extensions.Logging;
 
@@ -26,20 +28,67 @@ public class Program
     private static ServiceProvider? _serviceProvider;
     private static ILogger<Program>? _logger;
 
+    // Windows API for console attachment
+    [DllImport("kernel32.dll")]
+    static extern bool AttachConsole(int dwProcessId);
+
+    [DllImport("kernel32.dll")]
+    static extern bool AllocConsole();
+
+    [DllImport("kernel32.dll")]
+    static extern bool FreeConsole();
+
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetConsoleWindow();
+
+    const int ATTACH_PARENT_PROCESS = -1;
+
     public static async Task<int> Main(string[] args)
     {
         try
         {
-            // SUPER EARLY DEBUG LOGGING
-            Console.WriteLine("*** RUNNER STARTING - EARLY DEBUG ***");
+            // Check for verbose flag early to enable console output
+            var isVerbose = args.Contains("--verbose") || args.Contains("-v");
+            
+            // Handle console attachment for verbose mode
+            if (isVerbose)
+            {
+                // Try to attach to the parent process console (the terminal we were launched from)
+                if (AttachConsole(ATTACH_PARENT_PROCESS))
+                {
+                    // Successfully attached to parent console
+                    // Redirect console output to the attached console
+                    Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
+                    Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+                }
+                else
+                {
+                    // Could not attach to parent console - running interactively or from a different context
+                    // Don't allocate a new console, just use the existing one
+                    Console.WriteLine("Warning: Could not attach to parent console, using current console output");
+                }
+            }
+            
+            // Force console output for testing
+            if (isVerbose)
+            {
+                Console.WriteLine("=== REPORTMATE RUNNER STARTING ===");
+                Console.WriteLine($"Arguments: {string.Join(" ", args)}");
+                Console.WriteLine($"Verbose mode: {isVerbose}");
+                Console.WriteLine("=====================================");
+                Console.WriteLine("*** RUNNER STARTING - VERBOSE MODE ENABLED ***");
+            }
             
             // Build configuration from multiple sources
-            var configuration = BuildConfiguration();
+            var configuration = BuildConfiguration(isVerbose);
             
-            Console.WriteLine("*** CONFIGURATION BUILT ***");
+            if (isVerbose)
+            {
+                Console.WriteLine("*** CONFIGURATION BUILT ***");
+            }
             
-            // Setup dependency injection
-            _serviceProvider = ConfigureServices(configuration);
+            // Setup dependency injection with verbose flag
+            _serviceProvider = ConfigureServices(configuration, isVerbose);
             _logger = _serviceProvider.GetRequiredService<ILogger<Program>>();
 
             _logger.LogError("*** SUPER EARLY DEBUG LOG - RUNNER IS STARTING v2025.7.1.1 ***");
@@ -66,6 +115,15 @@ public class Program
         }
         catch (Exception ex)
         {
+            // Handle console output for errors in verbose mode
+            var isVerbose = args.Contains("--verbose") || args.Contains("-v");
+            
+            if (isVerbose)
+            {
+                Console.WriteLine($"FATAL ERROR: {ex.Message}");
+                Console.WriteLine($"Stack Trace: {ex.StackTrace}");
+            }
+            
             // Fallback logging when DI container fails - log to event log only
             try
             {
@@ -83,22 +141,37 @@ public class Program
         finally
         {
             _serviceProvider?.Dispose();
+            
+            // Clean up console if we attached to it
+            var isVerbose = args.Contains("--verbose") || args.Contains("-v");
+            if (isVerbose && GetConsoleWindow() != IntPtr.Zero)
+            {
+                // Give a moment for output to flush
+                await Task.Delay(100);
+                
+                // Don't free console if we attached to parent - let parent handle it
+                // Only free if we allocated our own console
+            }
         }
     }
 
-    private static IConfiguration BuildConfiguration()
+    private static IConfiguration BuildConfiguration(bool verbose = false)
     {
         var builder = new ConfigurationBuilder();
         
         // Configuration hierarchy (lowest to highest precedence):
-        Console.WriteLine("=== CONFIGURATION DECISION TREE ===");
-        
-        // 1. Hardcoded application defaults (no external JSON file)
-        Console.WriteLine("1. Application defaults: Embedded in binary (no JSON dependency)");
+        if (verbose)
+        {
+            Console.WriteLine("=== CONFIGURATION DECISION TREE ===");
+            Console.WriteLine("1. Application defaults: Embedded in binary (no JSON dependency)");
+        }
         
         // 2. YAML configuration from ProgramData (runtime/user editable)
         var programDataPath = ConfigurationService.GetWorkingDataDirectory();
-        Console.WriteLine($"2. YAML configuration from: {programDataPath}");
+        if (verbose)
+        {
+            Console.WriteLine($"2. YAML configuration from: {programDataPath}");
+        }
         if (Directory.Exists(programDataPath))
         {
             builder.SetBasePath(programDataPath)
@@ -106,7 +179,10 @@ public class Program
         }
         
         // 3. Environment variables (prefix: REPORTMATE_)
-        Console.WriteLine("3. Environment variables with REPORTMATE_ prefix");
+        if (verbose)
+        {
+            Console.WriteLine("3. Environment variables with REPORTMATE_ prefix");
+        }
         builder.AddEnvironmentVariables("REPORTMATE_");
         
         // 4. Check for default API URL from environment if not set
@@ -121,7 +197,10 @@ public class Program
             
             if (!string.IsNullOrEmpty(envApiUrl))
             {
-                Console.WriteLine($"Using API URL from environment: {envApiUrl}");
+                if (verbose)
+                {
+                    Console.WriteLine($"Using API URL from environment: {envApiUrl}");
+                }
                 builder.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["ReportMate:ApiUrl"] = envApiUrl
@@ -130,9 +209,12 @@ public class Program
         }
         
         // 5. Windows Registry (highest precedence - CSP/Group Policy)
-        Console.WriteLine("4. Windows Registry (HIGHEST PRECEDENCE)");
-        Console.WriteLine("   - HKLM\\SOFTWARE\\ReportMate (standard)");
-        Console.WriteLine("   - HKLM\\SOFTWARE\\Policies\\ReportMate (CSP/Group Policy)");
+        if (verbose)
+        {
+            Console.WriteLine("4. Windows Registry (HIGHEST PRECEDENCE)");
+            Console.WriteLine("   - HKLM\\SOFTWARE\\ReportMate (standard)");
+            Console.WriteLine("   - HKLM\\SOFTWARE\\Policies\\ReportMate (CSP/Group Policy)");
+        }
         
         // Add registry configuration for both standard and policy locations
         try
@@ -161,7 +243,10 @@ public class Program
                                 _ => $"ReportMate:{valueName}"
                             };
                             registryDict[configKey] = value;
-                            Console.WriteLine($"   Registry: {valueName} -> {configKey}");
+                            if (verbose)
+                            {
+                                Console.WriteLine($"   Registry: {valueName} -> {configKey}");
+                            }
                         }
                     }
                     if (registryDict.Count > 0)
@@ -196,7 +281,10 @@ public class Program
                                 _ => $"ReportMate:{valueName}"
                             };
                             policyDict[configKey] = value;
-                            Console.WriteLine($"   Policy: {valueName} -> {configKey}");
+                            if (verbose)
+                            {
+                                Console.WriteLine($"   Policy: {valueName} -> {configKey}");
+                            }
                         }
                     }
                     if (policyDict.Count > 0)
@@ -208,26 +296,32 @@ public class Program
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"   Warning: Could not read registry: {ex.Message}");
+            if (verbose)
+            {
+                Console.WriteLine($"   Warning: Could not read registry: {ex.Message}");
+            }
         }
 
         var config = builder.Build();
         
-        // Log the final configuration source for key settings
-        Console.WriteLine("\n=== FINAL CONFIGURATION SOURCE ===");
-        var finalApiUrl = config["ReportMate:ApiUrl"];
-        var deviceId = config["ReportMate:DeviceId"];
-        var debugLogging = config["ReportMate:DebugLogging"];
-        
-        Console.WriteLine($"ApiUrl: {finalApiUrl ?? "NOT SET"}");
-        Console.WriteLine($"DeviceId: {deviceId ?? "NOT SET"}");
-        Console.WriteLine($"DebugLogging: {debugLogging ?? "NOT SET"}");
-        Console.WriteLine("=====================================\n");
+        // Log the final configuration source for key settings only in verbose mode
+        if (verbose)
+        {
+            Console.WriteLine("\n=== FINAL CONFIGURATION SOURCE ===");
+            var finalApiUrl = config["ReportMate:ApiUrl"];
+            var deviceId = config["ReportMate:DeviceId"];
+            var debugLogging = config["ReportMate:DebugLogging"];
+            
+            Console.WriteLine($"ApiUrl: {finalApiUrl ?? "NOT SET"}");
+            Console.WriteLine($"DeviceId: {deviceId ?? "NOT SET"}");
+            Console.WriteLine($"DebugLogging: {debugLogging ?? "NOT SET"}");
+            Console.WriteLine("=====================================\n");
+        }
         
         return config;
     }
 
-    private static ServiceProvider ConfigureServices(IConfiguration configuration)
+    private static ServiceProvider ConfigureServices(IConfiguration configuration, bool verbose = false)
     {
         var services = new ServiceCollection();
 
@@ -238,7 +332,13 @@ public class Program
         var loggerConfig = new LoggerConfiguration()
             .MinimumLevel.Information();
 
-        // Only log to file and event log in production - never to console
+        // Enable debug logging if verbose mode is enabled
+        if (verbose || configuration.GetValue<bool>("ReportMate:DebugLogging"))
+        {
+            loggerConfig.MinimumLevel.Debug();
+        }
+
+        // Always log to file and event log
         loggerConfig.WriteTo.File(
             Path.Combine(logDirectory, "reportmate-.log"),
             rollingInterval: RollingInterval.Day,
@@ -260,10 +360,12 @@ public class Program
                 // Ignore if event log cannot be configured
             }
         }
-        else
+
+        // Add console logging in development mode OR when verbose flag is used
+        if (configuration.GetValue<bool>("Development:Enabled") || verbose)
         {
-            // Only add console logging in development mode
-            loggerConfig.WriteTo.Console();
+            loggerConfig.WriteTo.Console(
+                outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}");
         }
 
         Log.Logger = loggerConfig.CreateLogger();
@@ -310,7 +412,7 @@ public class Program
         var rootCommand = new RootCommand("ReportMate - Device data collection and reporting");
 
         // Global options - these are used across all commands
-        var verboseOption = new Option<bool>("--verbose", "Enable verbose output and detailed logging");
+        var verboseOption = new Option<bool>(new[] { "--verbose", "-v" }, "Enable verbose output and detailed logging");
         var deviceIdOption = new Option<string>("--device-id", "Override device ID");
         var apiUrlOption = new Option<string>("--api-url", "Override API URL");
         var forceOption = new Option<bool>("--force", "Force data collection even if recent run detected");
@@ -377,37 +479,47 @@ public class Program
             {
                 _logger!.LogInformation("=== VERBOSE MODE ENABLED ===");
                 _logger!.LogInformation("All detailed logging will be displayed");
+                _logger!.LogInformation("=== RUNNER COMMAND EXECUTION ===");
+                _logger!.LogInformation("Command: run");
+                _logger!.LogInformation("Parameters:");
+                _logger!.LogInformation("  Force: {Force}", force);
+                _logger!.LogInformation("  Custom Device ID: {DeviceId}", deviceId ?? "NONE (will auto-detect)");
+                _logger!.LogInformation("  Custom API URL: {ApiUrl}", apiUrl ?? "NONE (using config)");
+                _logger!.LogInformation("  Verbose: {Verbose}", verbose);
+                _logger!.LogInformation("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) Send Data");
             }
             
-            _logger!.LogError("*** REPORTMATE RUNNER v2025.7.2 - EXECUTION STARTING ***");
-            _logger!.LogInformation("*** DEVICE REGISTRATION & DATA COLLECTION ***");
-            _logger!.LogInformation("=== RUNNER COMMAND EXECUTION ===");
-            _logger!.LogInformation("Command: run");
-            _logger!.LogInformation("Parameters:");
-            _logger!.LogInformation("  Force: {Force}", force);
-            _logger!.LogInformation("  Custom Device ID: {DeviceId}", deviceId ?? "NONE (will auto-detect)");
-            _logger!.LogInformation("  Custom API URL: {ApiUrl}", apiUrl ?? "NONE (using config)");
-            _logger!.LogInformation("  Verbose: {Verbose}", verbose);
-            _logger!.LogInformation("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) Send Data");
+            _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", 
+                System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
             
             var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
-            _logger!.LogInformation("✅ DataCollectionService retrieved successfully");
-            _logger!.LogInformation("🚀 Calling CollectAndSendDataAsync - this will handle registration and data transmission");
+            
+            if (verbose)
+            {
+                _logger!.LogInformation("✅ DataCollectionService retrieved successfully");
+                _logger!.LogInformation("🚀 Calling CollectAndSendDataAsync - this will handle registration and data transmission");
+            }
             
             var result = await dataCollectionService.CollectAndSendDataAsync(force);
             
             if (result)
             {
-                _logger!.LogInformation("✅ RUNNER SUCCESS: Data collection and transmission completed successfully");
-                _logger!.LogInformation("✅ DASHBOARD: Check /device/{DeviceId} for new events", deviceId ?? "auto-detected");
-                _logger!.LogInformation("✅ COMPLIANCE: Registration policy enforced successfully");
+                _logger!.LogInformation("✅ Data collection and transmission completed successfully");
+                if (verbose)
+                {
+                    _logger!.LogInformation("✅ DASHBOARD: Check /device/{DeviceId} for new events", deviceId ?? "auto-detected");
+                    _logger!.LogInformation("✅ COMPLIANCE: Registration policy enforced successfully");
+                }
                 return 0;
             }
             else
             {
-                _logger!.LogError("❌ RUNNER FAILED: Data collection or transmission failed");
-                _logger!.LogError("❌ IMPACT: Device may not be registered or API issues detected");
-                _logger!.LogError("❌ ACTION REQUIRED: Check logs above for specific failure reasons");
+                _logger!.LogError("❌ Data collection or transmission failed");
+                if (verbose)
+                {
+                    _logger!.LogError("❌ IMPACT: Device may not be registered or API issues detected");
+                    _logger!.LogError("❌ ACTION REQUIRED: Check logs above for specific failure reasons");
+                }
                 return 1;
             }
         }
@@ -621,7 +733,7 @@ public class Program
         }
     }
 
-    private static async Task<int> HandleBuildCommand(bool verbose)
+    private static Task<int> HandleBuildCommand(bool verbose)
     {
         try
         {
@@ -636,12 +748,12 @@ public class Program
             _logger!.LogInformation("Build script handles actual compilation and signing");
             _logger!.LogInformation("For manual builds, use: .\\build.ps1 -Sign");
             
-            return 0;
+            return Task.FromResult(0);
         }
         catch (Exception ex)
         {
             _logger!.LogError(ex, "Error in build command");
-            return 1;
+            return Task.FromResult(1);
         }
     }
 }
