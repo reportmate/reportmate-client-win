@@ -240,9 +240,9 @@ if (-not $Version) {
 }
 
 # ──────────────────────────  SIGNING DECISION  ─────────────────
-# Auto-detect enterprise certificate if available
+# Auto-detect enterprise certificate if available and enforce signing by default
 $autoDetectedThumbprint = $null
-if (-not $Sign -and -not $NoSign -and -not $Thumbprint) {
+if (-not $NoSign) {
     try {
         $autoDetectedThumbprint = Get-SigningCertThumbprint
         if ($autoDetectedThumbprint) {
@@ -251,6 +251,7 @@ if (-not $Sign -and -not $NoSign -and -not $Thumbprint) {
             $Thumbprint = $autoDetectedThumbprint
         } else {
             Write-Warning "No enterprise certificate found - binaries will be unsigned (may be blocked by Defender)."
+            Write-Warning "Consider using -NoSign to explicitly disable signing warnings."
         }
     }
     catch {
@@ -327,6 +328,27 @@ if ($Clean) {
     Write-Success "Clean completed"
     Write-Output ""
 }
+
+# Clean old binaries from previous builds (always, not just when -Clean is specified)
+Write-Step "Cleaning old binaries from .publish and dist directories..."
+$cleanupPaths = @(
+    "$PublishDir/*.exe",
+    "$PublishDir/*.dll", 
+    "$PublishDir/*.pdb",
+    "$OutputDir/*.nupkg",
+    "$OutputDir/*.zip", 
+    "$OutputDir/*.exe"
+)
+
+foreach ($pattern in $cleanupPaths) {
+    $oldFiles = Get-ChildItem $pattern -ErrorAction SilentlyContinue
+    if ($oldFiles) {
+        $oldFiles | Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Verbose "Removed old files: $($oldFiles.Name -join ', ')"
+    }
+}
+Write-Success "Old binaries and artifacts cleaned"
+Write-Output ""
 
 # Create directories
 Write-Step "Creating directories..."
