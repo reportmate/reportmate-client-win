@@ -110,15 +110,33 @@ public class ApiService : IApiService
 
             // Create the payload as a proper dictionary for JSON serialization
             _logger.LogInformation("Creating API payload for /api/device...");
+            
+            // Create a serializable device info object
+            var deviceInfoPayload = new Dictionary<string, object>();
+            if (deviceInfo != null)
+            {
+                deviceInfoPayload["deviceId"] = deviceInfo.DeviceId;
+                deviceInfoPayload["serialNumber"] = deviceInfo.SerialNumber;
+                deviceInfoPayload["computerName"] = deviceInfo.ComputerName;
+                deviceInfoPayload["domain"] = deviceInfo.Domain ?? "";
+                deviceInfoPayload["operatingSystem"] = deviceInfo.OperatingSystem ?? "";
+                deviceInfoPayload["manufacturer"] = deviceInfo.Manufacturer ?? "";
+                deviceInfoPayload["model"] = deviceInfo.Model ?? "";
+                deviceInfoPayload["totalMemoryGB"] = deviceInfo.TotalMemoryGB;
+                deviceInfoPayload["lastSeen"] = deviceInfo.LastSeen.ToString("O");
+                deviceInfoPayload["clientVersion"] = deviceInfo.ClientVersion ?? "";
+            }
+            
             var payload = new Dictionary<string, object>
             {
                 { "device", deviceId }, // THIS IS CRITICAL - must be serial number 0F33V9G25083HJ
+                { "serialNumber", deviceInfo?.SerialNumber ?? deviceId }, // Add explicit serial number field
                 { "kind", "device_data" },
                 { "ts", DateTime.UtcNow.ToString("O") },
                 { "payload", new Dictionary<string, object>
                     {
-                        // Include device info for auto-registration
-                        { "device", deviceInfo ?? new object() },
+                        // Include device info as a proper dictionary
+                        { "device", deviceInfoPayload },
                         { "system", deviceData.GetValueOrDefault("system") ?? new object() },
                         { "security", deviceData.GetValueOrDefault("security") ?? new object() },
                         { "osquery", deviceData.GetValueOrDefault("osquery") ?? new object() },
