@@ -43,29 +43,59 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
+            // Get hardware UUID as the primary device ID
+            var hardwareUuid = await GetHardwareUuidAsync();
+            
             // Get hardware info from osquery
             var (manufacturer, model, serialNumber) = await GetHardwareInfoFromOsQueryAsync();
             
-            // Use hardware serial as device ID if available, otherwise fall back to environment
-            var deviceId = !string.IsNullOrEmpty(serialNumber) && !IsGenericSerial(serialNumber)
-                ? serialNumber
-                : Environment.MachineName;
+            // Get the Windows sharing name (NetBIOS name)
+            var computerName = GetWindowsSharingName();
+            var domain = GetDomainName();
+            
+            // Get asset tag from inventory file
+            var assetTag = await GetAssetTagFromInventoryAsync();
+            
+            // Get granular OS information
+            var (osName, osVersion, osBuild, osArchitecture, fullOsString) = await GetOperatingSystemInfoAsync();
 
             var deviceInfo = new DeviceInfo
             {
-                DeviceId = deviceId,
+                DeviceId = hardwareUuid,
                 SerialNumber = serialNumber ?? "UNKNOWN-" + Environment.MachineName,
-                ComputerName = Environment.MachineName,
-                Domain = Environment.UserDomainName,
-                OperatingSystem = await GetOperatingSystemInfoAsync(),
+                ComputerName = computerName,
+                Domain = domain,
+                OperatingSystem = fullOsString,
                 Manufacturer = manufacturer ?? "Unknown",
                 Model = model ?? "Unknown",
                 LastSeen = DateTime.UtcNow,
-                ClientVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0"
+                ClientVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0",
+                AssetTag = assetTag,
+                OsName = osName,
+                OsVersion = osVersion,
+                OsBuild = osBuild,
+                OsArchitecture = osArchitecture
             };
 
-            _logger.LogInformation("DeviceInfo created - DeviceId: '{DeviceId}', SerialNumber: '{SerialNumber}', ComputerName: '{ComputerName}'", 
-                deviceInfo.DeviceId, deviceInfo.SerialNumber, deviceInfo.ComputerName);
+            // Get memory info for the device
+            try
+            {
+                var systemInfoResult = await _osQueryService.ExecuteQueryAsync("SELECT physical_memory FROM system_info;");
+                if (systemInfoResult?.Any() == true && systemInfoResult.TryGetValue("physical_memory", out var memoryBytes))
+                {
+                    if (long.TryParse(memoryBytes?.ToString(), out var memBytes))
+                    {
+                        deviceInfo.TotalMemoryGB = Math.Round(memBytes / (1024.0 * 1024.0 * 1024.0), 2);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not get memory info from osquery");
+            }
+
+            _logger.LogInformation("DeviceInfo created - DeviceId: '{DeviceId}', SerialNumber: '{SerialNumber}', ComputerName: '{ComputerName}', OS: '{OsName} {OsVersion}'", 
+                deviceInfo.DeviceId, deviceInfo.SerialNumber, deviceInfo.ComputerName, deviceInfo.OsName, deviceInfo.OsVersion);
             
             return deviceInfo;
         }
@@ -80,10 +110,13 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
+            // Get granular OS information
+            var (osName, osVersion, osBuild, osArchitecture, fullOsString) = await GetOperatingSystemInfoAsync();
+            
             var systemInfo = new SystemInfo
             {
-                OperatingSystem = await GetOperatingSystemInfoAsync(),
-                Architecture = Environment.Is64BitOperatingSystem ? "x64" : "x86",
+                OperatingSystem = fullOsString,
+                Architecture = osArchitecture,
                 ProcessorCount = Environment.ProcessorCount,
                 Uptime = GetSystemUptime(),
                 LastBootTime = GetLastBootTime(),
@@ -123,6 +156,23 @@ public class DeviceInfoService : IDeviceInfoService
                 _logger.LogDebug(ex, "Could not retrieve processor info from osquery, using fallback values");
                 systemInfo.ProcessorName = "Unknown";
                 systemInfo.ProcessorSpeedMHz = 0;
+            }
+
+            // Try to get more detailed hardware info from osquery
+            try
+            {
+                var cpuInfoResult = await _osQueryService.ExecuteQueryAsync("SELECT max_clock_speed FROM cpu_info LIMIT 1;");
+                if (cpuInfoResult?.Any() == true && cpuInfoResult.TryGetValue("max_clock_speed", out var clockSpeed))
+                {
+                    if (uint.TryParse(clockSpeed?.ToString(), out var speed))
+                    {
+                        systemInfo.ProcessorSpeedMHz = speed;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not retrieve CPU clock speed from osquery");
             }
 
             // Get disk info
@@ -231,35 +281,40 @@ public class DeviceInfoService : IDeviceInfoService
         }
     }
 
-    private async Task<string> GetOperatingSystemInfoAsync()
+    private async Task<(string osName, string osVersion, string osBuild, string osArchitecture, string fullOsString)> GetOperatingSystemInfoAsync()
     {
+        string osName = "Windows";
+        string osVersion = "";
+        string osBuild = "";
+        string osArchitecture = "";
+        
         try
         {
             var osVersionResult = await _osQueryService.ExecuteQueryAsync("SELECT name, version, build, platform, arch FROM os_version;");
             
             if (osVersionResult?.Any() == true)
             {
-                string osName = osVersionResult.TryGetValue("name", out var name) ? name?.ToString() ?? "Windows" : "Windows";
-                string osVersion = osVersionResult.TryGetValue("version", out var version) ? version?.ToString() ?? "" : "";
-                string osBuild = osVersionResult.TryGetValue("build", out var build) ? build?.ToString() ?? "" : "";
-                string osArch = osVersionResult.TryGetValue("arch", out var arch) ? arch?.ToString() ?? "" : "";
+                osName = osVersionResult.TryGetValue("name", out var name) ? name?.ToString() ?? "Windows" : "Windows";
+                osVersion = osVersionResult.TryGetValue("version", out var version) ? version?.ToString() ?? "" : "";
+                osBuild = osVersionResult.TryGetValue("build", out var build) ? build?.ToString() ?? "" : "";
+                osArchitecture = osVersionResult.TryGetValue("arch", out var arch) ? arch?.ToString() ?? "" : "";
                 
-                var result = osName ?? "Windows";
+                var fullOsString = osName;
                 if (!string.IsNullOrEmpty(osVersion))
                 {
-                    result += $" {osVersion}";
+                    fullOsString += $" {osVersion}";
                 }
                 if (!string.IsNullOrEmpty(osBuild))
                 {
-                    result += $" (Build {osBuild})";
+                    fullOsString += $" (Build {osBuild})";
                 }
-                if (!string.IsNullOrEmpty(osArch))
+                if (!string.IsNullOrEmpty(osArchitecture))
                 {
-                    result += $" {osArch}";
+                    fullOsString += $" {osArchitecture}";
                 }
                 
-                _logger.LogDebug("osquery OS info: {OSInfo}", result);
-                return result;
+                _logger.LogDebug("osquery OS info: {OSInfo}", fullOsString);
+                return (osName, osVersion, osBuild, osArchitecture, fullOsString);
             }
         }
         catch (Exception ex)
@@ -271,17 +326,22 @@ public class DeviceInfoService : IDeviceInfoService
         try
         {
             var os = Environment.OSVersion;
-            var result = $"Windows {os.Version}";
+            osName = "Windows";
+            osVersion = os.Version.ToString();
+            osBuild = os.Version.Build.ToString();
+            osArchitecture = Environment.Is64BitOperatingSystem ? "x64" : "x86";
+            
+            var fullOsString = $"Windows {osVersion}";
             if (!string.IsNullOrEmpty(os.ServicePack))
             {
-                result += $" {os.ServicePack}";
+                fullOsString += $" {os.ServicePack}";
             }
             
-            return result;
+            return (osName, osVersion, osBuild, osArchitecture, fullOsString);
         }
         catch
         {
-            return "Windows (Unknown Version)";
+            return ("Windows", "Unknown", "", "", "Windows (Unknown Version)");
         }
     }
 
@@ -648,6 +708,163 @@ public class DeviceInfoService : IDeviceInfoService
         return Task.FromResult<DateTime?>(null);
     }
 
+    private async Task<string> GetHardwareUuidAsync()
+    {
+        try
+        {
+            // Try to get hardware UUID from osquery first
+            var uuidResult = await _osQueryService.ExecuteQueryAsync("SELECT uuid FROM system_info;");
+            if (uuidResult?.Any() == true && uuidResult.TryGetValue("uuid", out var uuid) && !string.IsNullOrEmpty(uuid?.ToString()))
+            {
+                var uuidStr = uuid.ToString()!;
+                if (IsValidUuid(uuidStr))
+                {
+                    _logger.LogDebug("Hardware UUID from osquery: {UUID}", uuidStr);
+                    return uuidStr;
+                }
+            }
+
+            // Fallback to WMI if osquery doesn't work
+            var wmiUuid = await GetUuidFromWmiAsync();
+            if (!string.IsNullOrEmpty(wmiUuid) && IsValidUuid(wmiUuid))
+            {
+                _logger.LogDebug("Hardware UUID from WMI: {UUID}", wmiUuid);
+                return wmiUuid;
+            }
+
+            // Last resort: generate a persistent UUID based on hardware characteristics
+            var fallbackUuid = await GeneratePersistentUuidAsync();
+            _logger.LogWarning("Using generated persistent UUID: {UUID}", fallbackUuid);
+            return fallbackUuid;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting hardware UUID, using fallback");
+            return await GeneratePersistentUuidAsync();
+        }
+    }
+
+    private async Task<string> GetUuidFromWmiAsync()
+    {
+        try
+        {
+            var result = await _osQueryService.ExecuteQueryAsync("SELECT uuid FROM wmi_bios_data;");
+            if (result?.Any() == true && result.TryGetValue("uuid", out var uuid))
+            {
+                return uuid?.ToString() ?? "";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get UUID from WMI via osquery");
+        }
+        return "";
+    }
+
+    private async Task<string> GeneratePersistentUuidAsync()
+    {
+        try
+        {
+            // Get hardware characteristics for generating a persistent UUID
+            var (manufacturer, model, serialNumber) = await GetHardwareInfoFromOsQueryAsync();
+            var machineName = Environment.MachineName;
+            
+            // Create a consistent seed from hardware info
+            var seed = $"{manufacturer}-{model}-{serialNumber}-{machineName}";
+            var hash = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(seed));
+            
+            // Convert to UUID format
+            var uuid = new Guid(hash).ToString();
+            return uuid;
+        }
+        catch
+        {
+            return Guid.NewGuid().ToString();
+        }
+    }
+
+    private static bool IsValidUuid(string uuid)
+    {
+        if (string.IsNullOrWhiteSpace(uuid))
+            return false;
+
+        // Check if it's a valid GUID format
+        if (!Guid.TryParse(uuid, out var guid))
+            return false;
+
+        // Reject common invalid/default UUIDs
+        var invalidUuids = new[]
+        {
+            "00000000-0000-0000-0000-000000000000",
+            "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+            "03000200-0400-0500-0006-000700080009" // Common default
+        };
+
+        return !invalidUuids.Contains(uuid.ToUpperInvariant());
+    }
+
+    private string GetWindowsSharingName()
+    {
+        try
+        {
+            // Get the NetBIOS name (Windows sharing name) - up to 15 characters
+            return Environment.MachineName;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get Windows sharing name");
+            return Environment.MachineName;
+        }
+    }
+
+    private string GetDomainName()
+    {
+        try
+        {
+            return Environment.UserDomainName ?? "WORKGROUP";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get domain name");
+            return "WORKGROUP";
+        }
+    }
+
+    private async Task<string> GetAssetTagFromInventoryAsync()
+    {
+        try
+        {
+            var inventoryPath = @"C:\ProgramData\Management\Inventory.yaml";
+            if (!File.Exists(inventoryPath))
+            {
+                _logger.LogDebug("Inventory file not found at {Path}", inventoryPath);
+                return "";
+            }
+
+            var content = await File.ReadAllTextAsync(inventoryPath);
+            var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            
+            foreach (var line in lines)
+            {
+                var trimmedLine = line.Trim();
+                if (trimmedLine.StartsWith("asset:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var assetTag = trimmedLine.Substring(6).Trim();
+                    _logger.LogDebug("Found asset tag in inventory: {AssetTag}", assetTag);
+                    return assetTag;
+                }
+            }
+
+            _logger.LogDebug("No asset tag found in inventory file");
+            return "";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not read asset tag from inventory file");
+            return "";
+        }
+    }
+
     private bool IsGenericSerial(string serial)
     {
         if (string.IsNullOrWhiteSpace(serial))
@@ -679,6 +896,13 @@ public class DeviceInfo
     public double TotalMemoryGB { get; set; }
     public DateTime LastSeen { get; set; }
     public string ClientVersion { get; set; } = string.Empty;
+    public string AssetTag { get; set; } = string.Empty;
+    
+    // Granular OS information
+    public string OsName { get; set; } = string.Empty;
+    public string OsVersion { get; set; } = string.Empty;
+    public string OsBuild { get; set; } = string.Empty;
+    public string OsArchitecture { get; set; } = string.Empty;
 }
 
 public class SystemInfo

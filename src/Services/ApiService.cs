@@ -90,14 +90,16 @@ public class ApiService : IApiService
                 _logger.LogError("❌ Device info has unexpected type: {Type}", deviceValue?.GetType().FullName);
             }
 
-            // Use DeviceId which should be the serial number (0F33V9G25083HJ)
-            var deviceId = deviceInfo?.DeviceId ?? deviceInfo?.SerialNumber ?? Environment.MachineName;
+            // Use Serial Number as the primary identifier for API routing
+            // The URL should be /device/{serial} while DeviceId field shows the hardware UUID
+            var deviceSerial = deviceInfo?.SerialNumber ?? Environment.MachineName;
+            var hardwareUuid = deviceInfo?.DeviceId; // This is the actual hardware UUID
             
             _logger.LogInformation("=== TRANSMISSION DETAILS ===");
-            _logger.LogInformation("Target Device ID: {DeviceId} (this should be the serial number)", deviceId);
-            _logger.LogInformation("Serial Number: {SerialNumber}", deviceInfo?.SerialNumber);
+            _logger.LogInformation("Device Serial Number: {DeviceSerial} (used for URL routing)", deviceSerial);
+            _logger.LogInformation("Hardware UUID: {HardwareUuid} (used for DeviceId field)", hardwareUuid);
             _logger.LogInformation("Computer Name: {ComputerName}", deviceInfo?.ComputerName ?? "Unknown");
-            _logger.LogInformation("Expected Dashboard URL: /device/{DeviceId}", deviceId);
+            _logger.LogInformation("Expected Dashboard URL: /device/{DeviceSerial}", deviceSerial);
 
             // Analyze payload composition
             _logger.LogInformation("=== PAYLOAD ANALYSIS ===");
@@ -115,23 +117,32 @@ public class ApiService : IApiService
             var deviceInfoPayload = new Dictionary<string, object>();
             if (deviceInfo != null)
             {
-                deviceInfoPayload["deviceId"] = deviceInfo.DeviceId;
-                deviceInfoPayload["serialNumber"] = deviceInfo.SerialNumber;
-                deviceInfoPayload["computerName"] = deviceInfo.ComputerName;
+                deviceInfoPayload["deviceId"] = hardwareUuid ?? "";  // Hardware UUID for DeviceId field
+                deviceInfoPayload["serialNumber"] = deviceInfo.SerialNumber ?? "";
+                deviceInfoPayload["computerName"] = deviceInfo.ComputerName ?? "";
                 deviceInfoPayload["domain"] = deviceInfo.Domain ?? "";
-                deviceInfoPayload["operatingSystem"] = deviceInfo.OperatingSystem ?? "";
                 deviceInfoPayload["manufacturer"] = deviceInfo.Manufacturer ?? "";
                 deviceInfoPayload["model"] = deviceInfo.Model ?? "";
                 deviceInfoPayload["totalMemoryGB"] = deviceInfo.TotalMemoryGB;
                 deviceInfoPayload["lastSeen"] = deviceInfo.LastSeen.ToString("O");
                 deviceInfoPayload["clientVersion"] = deviceInfo.ClientVersion ?? "";
+                deviceInfoPayload["assetTag"] = deviceInfo.AssetTag ?? "";
+                
+                // Send granular OS information instead of combined string
+                deviceInfoPayload["osName"] = deviceInfo.OsName ?? "";
+                deviceInfoPayload["osVersion"] = deviceInfo.OsVersion ?? "";
+                deviceInfoPayload["osBuild"] = deviceInfo.OsBuild ?? "";
+                deviceInfoPayload["osArchitecture"] = deviceInfo.OsArchitecture ?? "";
+                
+                // Don't send the combined OS string - dashboard expects granular fields
+                // deviceInfoPayload["operatingSystem"] = deviceInfo.OperatingSystem ?? "";
             }
             
             var payload = new Dictionary<string, object>
             {
-                { "device", deviceId }, // THIS IS CRITICAL - must be serial number 0F33V9G25083HJ
-                { "serialNumber", deviceInfo?.SerialNumber ?? deviceId }, // Add explicit serial number field
-                { "kind", "device_data" },
+                { "device", deviceSerial }, // Serial number for URL routing (0F33V9G25083HJ)
+                { "serialNumber", deviceInfo?.SerialNumber ?? deviceSerial }, // Explicit serial number field
+                { "kind", "Info" }, // Use standardized event type instead of "device_data"
                 { "ts", DateTime.UtcNow.ToString("O") },
                 { "payload", new Dictionary<string, object>
                     {
@@ -161,7 +172,7 @@ public class ApiService : IApiService
                 _logger.LogInformation("⚠️  No client passphrase configured - requests may be rejected if authentication is required");
             }
 
-            _logger.LogInformation("Payload created with device ID: {DeviceId}", payload["device"]);
+            _logger.LogInformation("Payload created with device serial: {DeviceSerial}", payload["device"]);
 
             var maxRetries = int.TryParse(_configuration["ReportMate:MaxRetryAttempts"], out var retries) ? retries : 3;
             var retryDelay = TimeSpan.FromSeconds(1);
@@ -179,7 +190,7 @@ public class ApiService : IApiService
                     var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
                     _logger.LogInformation("Sending POST to /api/device...");
                     _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
-                    _logger.LogInformation("Device ID in payload: {DeviceId}", payload["device"]);
+                    _logger.LogInformation("Device Serial in payload: {DeviceSerial}", payload["device"]);
 
                     var response = await _httpClient.PostAsync("/api/device", httpContent);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
@@ -188,7 +199,7 @@ public class ApiService : IApiService
                     {
                         var responseContent = await response.Content.ReadAsStringAsync();
                         _logger.LogInformation("✅ SUCCESS: Device data sent to ReportMate API");
-                        _logger.LogInformation("✅ Data should now be visible in dashboard at /device/{DeviceId}", deviceId);
+                        _logger.LogInformation("✅ Data should now be visible in dashboard at /device/{DeviceSerial}", deviceSerial);
                         _logger.LogInformation("API Response: {Response}", responseContent);
                         return true;
                     }
@@ -306,26 +317,14 @@ public class ApiService : IApiService
             // Create a "new_client" event through the ingest endpoint
             var registrationPayload = new Dictionary<string, object>
             {
-                { "device", deviceInfo.DeviceId }, // Use DeviceId as serial number
-                { "kind", "new_client" },
-                { "ts", DateTime.UtcNow.ToString("O") },
-                { "payload", new Dictionary<string, object>
-                    {
-                        { "message", "Device registered as new client" },
-                        { "source", "runner.exe" },
-                        { "device_id", deviceInfo.DeviceId },
-                        { "name", deviceInfo.ComputerName },
-                        { "model", deviceInfo.Model },
-                        { "os", deviceInfo.OperatingSystem },
-                        { "manufacturer", deviceInfo.Manufacturer },
-                        { "memory", deviceInfo.TotalMemoryGB },
-                        { "client_version", deviceInfo.ClientVersion },
-                        { "platform", "windows" },
-                        { "managed_installs_system", "Cimian" },
-                        { "domain", deviceInfo.Domain },
-                        { "registration_time", DateTime.UtcNow.ToString("O") }
-                    }
-                }
+                { "id", deviceInfo.DeviceId }, // Use DeviceId as the primary identifier
+                { "serialNumber", deviceInfo.SerialNumber }, // Also include serial number
+                { "name", deviceInfo.ComputerName },
+                { "model", deviceInfo.Model },
+                { "os", deviceInfo.OperatingSystem },
+                { "manufacturer", deviceInfo.Manufacturer },
+                { "domain", deviceInfo.Domain },
+                { "platform", "windows" }
             };
 
             // Add passphrase to payload if configured
