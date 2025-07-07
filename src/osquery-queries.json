@@ -1,17 +1,29 @@
 {
   "system_info": "SELECT hostname, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory FROM system_info;",
   
-  "os_version": "SELECT name, version, build, platform, arch FROM os_version;",
+  "os_version": "SELECT name, version, build, platform, arch, install_date FROM os_version;",
   
-  "hardware_info": "SELECT hardware_vendor, hardware_model, hardware_version, hardware_serial FROM system_info;",
+  "os_details": "SELECT install_date, codename FROM os_version;",
   
-  "memory_info": "SELECT device_locator, memory_type, size, form_factor, configured_clock_speed FROM memory_devices WHERE size > 0;",
+  "windows_experience_pack": "SELECT key, name, type, data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' AND name IN ('UBR', 'DisplayVersion', 'ReleaseId', 'CurrentBuild', 'InstallDate') AND data IS NOT NULL;",
   
-  "disk_info": "SELECT id, hardware_model, disk_size, type FROM disk_info WHERE disk_size > 0;",
+  "hardware_info": "SELECT hardware_vendor, hardware_model, hardware_version, hardware_serial, uuid FROM system_info;",
   
-  "network_interfaces": "SELECT interface, mac, type, mtu, friendly_name, description, manufacturer FROM interface_details WHERE interface NOT LIKE 'lo%' AND interface NOT LIKE 'Loopback%';",
+  "cpu_info": "SELECT device_id, name, manufacturer, family, model, stepping, processor_type, characteristics, address_width, current_clock_speed, max_clock_speed, cores, logical_processors FROM cpu_info;",
   
-  "network_addresses": "SELECT interface, address, mask, broadcast, type FROM interface_addresses WHERE address IS NOT NULL;",
+  "memory_info": "SELECT device_locator, memory_type, size, form_factor, configured_clock_speed, manufacturer, part_number FROM memory_devices WHERE size > 0;",
+  
+  "disk_info": "SELECT id, name, disk_index, disk_size, type, manufacturer, model, serial_number, description FROM disk_info WHERE disk_size > 0;",
+  
+  "graphics_info": "SELECT name, driver_version, driver_date, video_memory, current_horizontal_resolution, current_vertical_resolution, adapter_compatibility FROM video_info;",
+  
+  "network_interfaces": "SELECT interface, mac, type, mtu, friendly_name, description, manufacturer, connection_id, dhcp_enabled, dhcp_server FROM interface_details WHERE interface NOT LIKE 'lo%' AND interface NOT LIKE 'Loopback%';",
+  
+  "network_addresses": "SELECT interface, address, mask, broadcast, type FROM interface_addresses WHERE address IS NOT NULL AND address NOT LIKE '127.%' AND address NOT LIKE '::1%';",
+  
+  "wifi_networks": "SELECT ssid, bssid, network_name, security_type, signal_strength, authentication FROM wifi_networks WHERE ssid IS NOT NULL;",
+  
+  "route_table": "SELECT destination, netmask, gateway, source, flags, interface, mtu, metric, type FROM routes WHERE destination IS NOT NULL;",
   
   "installed_programs": "SELECT name, version, publisher, install_date FROM programs WHERE name IS NOT NULL AND name != '';",
   
@@ -25,7 +37,17 @@
   
   "security_center": "SELECT antivirus, antispyware, firewall, autoupdate FROM windows_security_center;",
   
+  "windows_defender": "SELECT key, name, type, data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender' AND name IN ('InstallLocation', 'ProductVersion') AND data IS NOT NULL;",
+  
+  "defender_exclusions": "SELECT key, name, type, data FROM registry WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\%' AND data IS NOT NULL;",
+  
+  "windows_firewall": "SELECT key, name, type, data FROM registry WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\%Profile' AND name IN ('EnableFirewall', 'DefaultInboundAction', 'DefaultOutboundAction') AND data IS NOT NULL;",
+  
   "tpm_info": "SELECT activated, enabled, owned, manufacturer_version, manufacturer_id, manufacturer_name, spec_version FROM tpm_info;",
+  
+  "mdm_enrollment": "SELECT enrollment_id, enrollment_type, enrollment_state, management_service_url, certificate_thumbprint FROM mdm_enrollment;",
+  
+  "enrollment_info": "SELECT key, name, type, data FROM registry WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\%' AND name IN ('ProviderID', 'UPN', 'EnrollmentState', 'AADResourceID', 'EnrollmentType') AND data IS NOT NULL;",
   
   "critical_processes": "SELECT pid, name, path, cmdline, parent, threads FROM processes WHERE name IN ('lsass.exe', 'winlogon.exe', 'csrss.exe', 'smss.exe', 'explorer.exe') AND name IS NOT NULL;",
   

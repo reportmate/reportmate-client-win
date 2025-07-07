@@ -50,7 +50,7 @@ public class DeviceInfoService : IDeviceInfoService
             var (manufacturer, model, serialNumber) = await GetHardwareInfoFromOsQueryAsync();
             
             // Get the Windows sharing name (NetBIOS name)
-            var computerName = GetWindowsSharingName();
+            var computerName = await GetWindowsSharingNameAsync();
             var domain = GetDomainName();
             
             // Get asset tag from inventory file
@@ -58,6 +58,11 @@ public class DeviceInfoService : IDeviceInfoService
             
             // Get granular OS information
             var (osName, osVersion, osBuild, osArchitecture, fullOsString) = await GetOperatingSystemInfoAsync();
+            var osInstallDate = await GetOsInstallDateAsync();
+            var experiencePack = await GetExperiencePackVersionAsync();
+            
+            // Get MDM enrollment information
+            var (mdmEnrollmentId, mdmEnrollmentType, mdmEnrollmentState, mdmManagementUrl) = await GetMdmEnrollmentInfoAsync();
 
             var deviceInfo = new DeviceInfo
             {
@@ -74,7 +79,13 @@ public class DeviceInfoService : IDeviceInfoService
                 OsName = osName,
                 OsVersion = osVersion,
                 OsBuild = osBuild,
-                OsArchitecture = osArchitecture
+                OsArchitecture = osArchitecture,
+                OsInstallDate = osInstallDate,
+                ExperiencePack = experiencePack,
+                MdmEnrollmentId = mdmEnrollmentId,
+                MdmEnrollmentType = mdmEnrollmentType,
+                MdmEnrollmentState = mdmEnrollmentState,
+                MdmManagementUrl = mdmManagementUrl
             };
 
             // Get memory info for the device
@@ -294,26 +305,42 @@ public class DeviceInfoService : IDeviceInfoService
             
             if (osVersionResult?.Any() == true)
             {
-                osName = osVersionResult.TryGetValue("name", out var name) ? name?.ToString() ?? "Windows" : "Windows";
-                osVersion = osVersionResult.TryGetValue("version", out var version) ? version?.ToString() ?? "" : "";
-                osBuild = osVersionResult.TryGetValue("build", out var build) ? build?.ToString() ?? "" : "";
+                var rawName = osVersionResult.TryGetValue("name", out var name) ? name?.ToString() ?? "Windows" : "Windows";
+                var rawVersion = osVersionResult.TryGetValue("version", out var version) ? version?.ToString() ?? "" : "";
+                var rawBuild = osVersionResult.TryGetValue("build", out var build) ? build?.ToString() ?? "" : "";
                 osArchitecture = osVersionResult.TryGetValue("arch", out var arch) ? arch?.ToString() ?? "" : "";
                 
-                var fullOsString = osName;
-                if (!string.IsNullOrEmpty(osVersion))
+                // Get UBR (Update Build Revision) to create full build number
+                var fullBuild = rawBuild;
+                try
                 {
-                    fullOsString += $" {osVersion}";
+                    var ubrResult = await _osQueryService.ExecuteQueryAsync(
+                        "SELECT data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' AND name = 'UBR';");
+                    
+                    if (ubrResult?.Any() == true && ubrResult.TryGetValue("data", out var ubrData))
+                    {
+                        var ubrStr = ubrData?.ToString();
+                        if (!string.IsNullOrEmpty(ubrStr) && !string.IsNullOrEmpty(rawBuild))
+                        {
+                            fullBuild = $"{rawBuild}.{ubrStr}";
+                        }
+                    }
                 }
-                if (!string.IsNullOrEmpty(osBuild))
+                catch (Exception ex)
                 {
-                    fullOsString += $" (Build {osBuild})";
-                }
-                if (!string.IsNullOrEmpty(osArchitecture))
-                {
-                    fullOsString += $" {osArchitecture}";
+                    _logger.LogDebug(ex, "Could not get UBR from registry");
                 }
                 
-                _logger.LogDebug("osquery OS info: {OSInfo}", fullOsString);
+                // Process the OS name to extract clean version
+                osName = ProcessWindowsOsName(rawName);
+                osVersion = ProcessWindowsVersion(rawVersion, rawBuild);
+                osBuild = fullBuild;
+                
+                var fullOsString = $"{osName} {osVersion} (Build {osBuild})";
+                
+                _logger.LogDebug("Processed OS info: {OSName} {OSVersion} Build {OSBuild} {OSArchitecture}", 
+                    osName, osVersion, osBuild, osArchitecture);
+                
                 return (osName, osVersion, osBuild, osArchitecture, fullOsString);
             }
         }
@@ -327,15 +354,11 @@ public class DeviceInfoService : IDeviceInfoService
         {
             var os = Environment.OSVersion;
             osName = "Windows";
-            osVersion = os.Version.ToString();
+            osVersion = GetWindowsVersionName(os.Version);
             osBuild = os.Version.Build.ToString();
             osArchitecture = Environment.Is64BitOperatingSystem ? "x64" : "x86";
             
-            var fullOsString = $"Windows {osVersion}";
-            if (!string.IsNullOrEmpty(os.ServicePack))
-            {
-                fullOsString += $" {os.ServicePack}";
-            }
+            var fullOsString = $"{osName} {osVersion} (Build {osBuild})";
             
             return (osName, osVersion, osBuild, osArchitecture, fullOsString);
         }
@@ -343,6 +366,112 @@ public class DeviceInfoService : IDeviceInfoService
         {
             return ("Windows", "Unknown", "", "", "Windows (Unknown Version)");
         }
+    }
+
+    private string ProcessWindowsOsName(string rawName)
+    {
+        if (string.IsNullOrEmpty(rawName))
+            return "Windows";
+
+        // Extract the clean OS name (e.g., "Microsoft Windows 11 Enterprise" -> "Windows 11 Enterprise")
+        var cleanName = rawName.Replace("Microsoft ", "");
+        
+        // Remove version numbers and build info from the name
+        var parts = cleanName.Split(' ');
+        var processedParts = new List<string>();
+        
+        foreach (var part in parts)
+        {
+            // Skip parts that look like version numbers or build info
+            if (part.Contains('.') || part.StartsWith('(') || part.StartsWith("10.0"))
+                break;
+            processedParts.Add(part);
+        }
+        
+        return string.Join(" ", processedParts);
+    }
+
+    private string ProcessWindowsVersion(string rawVersion, string rawBuild)
+    {
+        if (string.IsNullOrEmpty(rawVersion))
+            return "";
+
+        // Map Windows 10/11 builds to version names
+        if (int.TryParse(rawBuild, out var buildNumber))
+        {
+            return GetWindowsVersionFromBuild(buildNumber);
+        }
+
+        // Extract version from raw version string (e.g., "10.0.26100" -> "24H2")
+        var versionParts = rawVersion.Split('.');
+        if (versionParts.Length >= 3 && int.TryParse(versionParts[2], out var build))
+        {
+            return GetWindowsVersionFromBuild(build);
+        }
+
+        return rawVersion;
+    }
+
+    private string ProcessWindowsBuild(string rawBuild)
+    {
+        if (string.IsNullOrEmpty(rawBuild))
+            return "";
+
+        // Try to get the detailed build number including UBR (Update Build Revision)
+        // This should return something like "26100.4349" instead of just "26100"
+        return rawBuild;
+    }
+
+    private string GetWindowsVersionFromBuild(int buildNumber)
+    {
+        // Windows 11 version mapping
+        if (buildNumber >= 22000)
+        {
+            return buildNumber switch
+            {
+                >= 26100 => "24H2",
+                >= 22631 => "23H2", 
+                >= 22621 => "22H2",
+                >= 22000 => "21H2",
+                _ => "Unknown"
+            };
+        }
+        
+        // Windows 10 version mapping
+        if (buildNumber >= 10240)
+        {
+            return buildNumber switch
+            {
+                >= 19045 => "22H2",
+                >= 19044 => "21H2",
+                >= 19043 => "21H1",
+                >= 19042 => "20H2",
+                >= 19041 => "2004",
+                >= 18363 => "1909",
+                >= 18362 => "1903",
+                >= 17763 => "1809",
+                >= 17134 => "1803",
+                >= 16299 => "1709",
+                >= 15063 => "1703",
+                >= 14393 => "1607",
+                >= 10586 => "1511",
+                >= 10240 => "1507",
+                _ => "Unknown"
+            };
+        }
+
+        return buildNumber.ToString();
+    }
+
+    private string GetWindowsVersionName(Version version)
+    {
+        // Fallback version mapping based on Version object
+        if (version.Major == 10)
+        {
+            return GetWindowsVersionFromBuild(version.Build);
+        }
+        
+        return version.ToString();
     }
 
     private async Task<(string? manufacturer, string? model, string? serialNumber)> GetHardwareInfoFromOsQueryAsync()
@@ -748,10 +877,40 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
-            var result = await _osQueryService.ExecuteQueryAsync("SELECT uuid FROM wmi_bios_data;");
+            // First try to get UUID from system_info table
+            var result = await _osQueryService.ExecuteQueryAsync("SELECT uuid FROM system_info;");
             if (result?.Any() == true && result.TryGetValue("uuid", out var uuid))
             {
-                return uuid?.ToString() ?? "";
+                var uuidStr = uuid?.ToString();
+                if (!string.IsNullOrEmpty(uuidStr) && IsValidUuid(uuidStr))
+                {
+                    _logger.LogDebug("UUID from system_info: {UUID}", uuidStr);
+                    return uuidStr;
+                }
+            }
+
+            // Try alternative WMI approach via osquery
+            var wmiResult = await _osQueryService.ExecuteQueryAsync("SELECT SerialNumber FROM Win32_ComputerSystemProduct;");
+            if (wmiResult?.Any() == true && wmiResult.TryGetValue("SerialNumber", out var serialUuid))
+            {
+                var serialUuidStr = serialUuid?.ToString();
+                if (!string.IsNullOrEmpty(serialUuidStr) && IsValidUuid(serialUuidStr))
+                {
+                    _logger.LogDebug("UUID from Win32_ComputerSystemProduct: {UUID}", serialUuidStr);
+                    return serialUuidStr;
+                }
+            }
+
+            // Try to get UUID from BIOS
+            var biosResult = await _osQueryService.ExecuteQueryAsync("SELECT uuid FROM wmi_bios_data;");
+            if (biosResult?.Any() == true && biosResult.TryGetValue("uuid", out var biosUuid))
+            {
+                var biosUuidStr = biosUuid?.ToString();
+                if (!string.IsNullOrEmpty(biosUuidStr) && IsValidUuid(biosUuidStr))
+                {
+                    _logger.LogDebug("UUID from BIOS: {UUID}", biosUuidStr);
+                    return biosUuidStr;
+                }
             }
         }
         catch (Exception ex)
@@ -803,16 +962,83 @@ public class DeviceInfoService : IDeviceInfoService
         return !invalidUuids.Contains(uuid.ToUpperInvariant());
     }
 
-    private string GetWindowsSharingName()
+    private async Task<string> GetWindowsSharingNameAsync()
     {
         try
         {
-            // Get the NetBIOS name (Windows sharing name) - up to 15 characters
-            return Environment.MachineName;
+            // First try to get the current computer name from the registry via osquery
+            // This preserves the original casing as set by the user
+            var registryResult = await _osQueryService.ExecuteQueryAsync(
+                "SELECT data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\ComputerName\\ComputerName\\ComputerName';"
+            );
+            if (registryResult?.Any() == true && registryResult.TryGetValue("data", out var registryData))
+            {
+                var registryName = registryData?.ToString();
+                if (!string.IsNullOrEmpty(registryName))
+                {
+                    _logger.LogDebug("Computer name from registry via osquery: {ComputerName}", registryName);
+                    return registryName;
+                }
+            }
+
+            // Fallback to hostname from system_info - this may be uppercase/lowercase
+            var hostnameResult = await _osQueryService.ExecuteQueryAsync("SELECT hostname FROM system_info;");
+            if (hostnameResult?.Any() == true && hostnameResult.TryGetValue("hostname", out var hostname))
+            {
+                var hostnameStr = hostname?.ToString();
+                if (!string.IsNullOrEmpty(hostnameStr))
+                {
+                    _logger.LogDebug("Computer name from osquery hostname: {ComputerName}", hostnameStr);
+                    return hostnameStr;
+                }
+            }
+
+            // Fallback to registry to get the original computer name (preserves case)
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName");
+                var registryName = key?.GetValue("ComputerName")?.ToString();
+                if (!string.IsNullOrEmpty(registryName))
+                {
+                    _logger.LogDebug("Computer name from registry: {ComputerName}", registryName);
+                    return registryName;
+                }
+            }
+            catch (Exception regEx)
+            {
+                _logger.LogDebug(regEx, "Could not get computer name from registry");
+            }
+
+            // Try alternative registry location
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName");
+                var registryName = key?.GetValue("ComputerName")?.ToString();
+                if (!string.IsNullOrEmpty(registryName))
+                {
+                    _logger.LogDebug("Computer name from ActiveComputerName registry: {ComputerName}", registryName);
+                    return registryName;
+                }
+            }
+            catch (Exception regEx)
+            {
+                _logger.LogDebug(regEx, "Could not get computer name from ActiveComputerName registry");
+            }
+
+            // Last resort: Environment.MachineName - use as-is without case conversion
+            var machineName = Environment.MachineName;
+            if (!string.IsNullOrEmpty(machineName))
+            {
+                _logger.LogDebug("Using Environment.MachineName as-is: {MachineName}", machineName);
+                return machineName;
+            }
+            
+            return "Unknown";
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Could not get Windows sharing name");
+            // Return Environment.MachineName as-is without case conversion
             return Environment.MachineName;
         }
     }
@@ -882,6 +1108,201 @@ public class DeviceInfoService : IDeviceInfoService
         
         return genericSerials.Any(g => string.Equals(serial, g, StringComparison.OrdinalIgnoreCase));
     }
+
+    private async Task<DateTime?> GetOsInstallDateAsync()
+    {
+        try
+        {
+            // Try to get install date from osquery
+            var osDetailsResult = await _osQueryService.ExecuteQueryAsync("SELECT install_date FROM os_version;");
+            if (osDetailsResult?.Any() == true && osDetailsResult.TryGetValue("install_date", out var installDate))
+            {
+                var installDateStr = installDate?.ToString();
+                if (!string.IsNullOrEmpty(installDateStr))
+                {
+                    // Try to parse Unix timestamp
+                    if (long.TryParse(installDateStr, out var timestamp))
+                    {
+                        var dateTime = DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
+                        _logger.LogDebug("OS install date from osquery: {InstallDate}", dateTime);
+                        return dateTime;
+                    }
+                    
+                    // Try to parse regular date format
+                    if (DateTime.TryParse(installDateStr, out var parsedDate))
+                    {
+                        _logger.LogDebug("OS install date from osquery (parsed): {InstallDate}", parsedDate);
+                        return parsedDate;
+                    }
+                }
+            }
+
+            // Fallback to registry
+            var registryResult = await _osQueryService.ExecuteQueryAsync(
+                "SELECT data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' AND name = 'InstallDate';");
+            
+            if (registryResult?.Any() == true && registryResult.TryGetValue("data", out var regData))
+            {
+                var regDataStr = regData?.ToString();
+                if (!string.IsNullOrEmpty(regDataStr) && uint.TryParse(regDataStr, out var regTimestamp))
+                {
+                    // Registry InstallDate is a Unix timestamp
+                    var dateTime = DateTimeOffset.FromUnixTimeSeconds(regTimestamp).DateTime;
+                    _logger.LogDebug("OS install date from registry: {InstallDate}", dateTime);
+                    return dateTime;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get OS install date");
+        }
+        
+        return null;
+    }
+
+    private async Task<string> GetExperiencePackVersionAsync()
+    {
+        try
+        {
+            // Get UBR (Update Build Revision) from registry
+            var ubrResult = await _osQueryService.ExecuteQueryAsync(
+                "SELECT data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' AND name = 'UBR';");
+            
+            if (ubrResult?.Any() == true && ubrResult.TryGetValue("data", out var ubrData))
+            {
+                var ubrStr = ubrData?.ToString();
+                if (!string.IsNullOrEmpty(ubrStr))
+                {
+                    // Get current build number
+                    var buildResult = await _osQueryService.ExecuteQueryAsync(
+                        "SELECT data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' AND name = 'CurrentBuild';");
+                    
+                    if (buildResult?.Any() == true && buildResult.TryGetValue("data", out var buildData))
+                    {
+                        var buildStr = buildData?.ToString();
+                        if (!string.IsNullOrEmpty(buildStr))
+                        {
+                            var experiencePack = $"1000.{buildStr}.{ubrStr}.0";
+                            _logger.LogDebug("Experience pack version: {ExperiencePack}", experiencePack);
+                            return experiencePack;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get experience pack version");
+        }
+        
+        return "";
+    }
+
+    private async Task<(string enrollmentId, string enrollmentType, string enrollmentState, string managementUrl)> GetMdmEnrollmentInfoAsync()
+    {
+        try
+        {
+            // Try to get MDM enrollment from osquery mdm_enrollment table
+            var mdmResult = await _osQueryService.ExecuteQueryAsync("SELECT enrollment_id, enrollment_type, enrollment_state, management_service_url FROM mdm_enrollment;");
+            
+            if (mdmResult?.Any() == true)
+            {
+                var enrollmentId = mdmResult.TryGetValue("enrollment_id", out var id) ? id?.ToString() ?? "" : "";
+                var enrollmentType = mdmResult.TryGetValue("enrollment_type", out var type) ? type?.ToString() ?? "" : "";
+                var enrollmentState = mdmResult.TryGetValue("enrollment_state", out var state) ? state?.ToString() ?? "" : "";
+                var managementUrl = mdmResult.TryGetValue("management_service_url", out var url) ? url?.ToString() ?? "" : "";
+                
+                if (!string.IsNullOrEmpty(enrollmentId) || !string.IsNullOrEmpty(enrollmentType))
+                {
+                    _logger.LogDebug("MDM enrollment info from osquery: ID={EnrollmentId}, Type={EnrollmentType}, State={EnrollmentState}", 
+                        enrollmentId, enrollmentType, enrollmentState);
+                    return (enrollmentId, enrollmentType, enrollmentState, managementUrl);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "osquery MDM table not available, trying registry fallback");
+        }
+
+        // Fallback to direct registry access for MDM enrollment detection
+        try
+        {
+            // Check for Intune enrollment in registry
+            using var enrollmentsKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Enrollments");
+            if (enrollmentsKey != null)
+            {
+                foreach (var subKeyName in enrollmentsKey.GetSubKeyNames())
+                {
+                    using var enrollmentKey = enrollmentsKey.OpenSubKey(subKeyName);
+                    if (enrollmentKey != null)
+                    {
+                        var providerID = enrollmentKey.GetValue("ProviderID")?.ToString();
+                        var upn = enrollmentKey.GetValue("UPN")?.ToString();
+                        var enrollmentState = enrollmentKey.GetValue("EnrollmentState")?.ToString();
+                        var discoveryServiceFullUrl = enrollmentKey.GetValue("DiscoveryServiceFullURL")?.ToString();
+                        
+                        // Check if this is a Microsoft Intune enrollment
+                        if (!string.IsNullOrEmpty(providerID) && 
+                            (providerID.Contains("MS DM Server", StringComparison.OrdinalIgnoreCase) ||
+                             providerID.Contains("Microsoft", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            var enrollmentType = "Microsoft Intune";
+                            var state = "Enrolled";
+                            
+                            // Check enrollment state
+                            if (!string.IsNullOrEmpty(enrollmentState))
+                            {
+                                switch (enrollmentState)
+                                {
+                                    case "1":
+                                        state = "Enrolled";
+                                        break;
+                                    case "2":
+                                        state = "Pending";
+                                        break;
+                                    case "3":
+                                        state = "Failed";
+                                        break;
+                                    default:
+                                        state = "Unknown";
+                                        break;
+                                }
+                            }
+                            
+                            _logger.LogDebug("MDM enrollment info from registry: Type={EnrollmentType}, State={State}, UPN={UPN}", 
+                                enrollmentType, state, upn);
+                            
+                            return (subKeyName, enrollmentType, state, discoveryServiceFullUrl ?? "");
+                        }
+                    }
+                }
+            }
+            
+            // Check for Azure AD join (which often implies Intune enrollment)
+            using var aadKey = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\CloudDomainJoin\JoinInfo");
+            if (aadKey != null && aadKey.GetSubKeyNames().Length > 0)
+            {
+                _logger.LogDebug("Azure AD joined device detected");
+                return ("", "Azure AD", "Joined", "");
+            }
+            
+            // Check for domain join
+            var domain = GetDomainName();
+            if (!string.IsNullOrEmpty(domain) && !domain.Equals("WORKGROUP", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogDebug("Domain joined device detected: {Domain}", domain);
+                return ("", "Active Directory", "Domain Joined", "");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get MDM enrollment information from registry");
+        }
+        
+        return ("", "", "", "");
+    }
 }
 
 public class DeviceInfo
@@ -903,6 +1324,14 @@ public class DeviceInfo
     public string OsVersion { get; set; } = string.Empty;
     public string OsBuild { get; set; } = string.Empty;
     public string OsArchitecture { get; set; } = string.Empty;
+    public DateTime? OsInstallDate { get; set; }
+    public string ExperiencePack { get; set; } = string.Empty;
+    
+    // MDM/Management information
+    public string MdmEnrollmentId { get; set; } = string.Empty;
+    public string MdmEnrollmentType { get; set; } = string.Empty;
+    public string MdmEnrollmentState { get; set; } = string.Empty;
+    public string MdmManagementUrl { get; set; } = string.Empty;
 }
 
 public class SystemInfo
