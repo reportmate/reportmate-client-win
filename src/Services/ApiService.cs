@@ -10,6 +10,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Text.Json.Serialization.Metadata;
+using System.IO;
+using System.Linq;
 using ReportMate.WindowsClient.Models;
 
 namespace ReportMate.WindowsClient.Services;
@@ -32,12 +34,29 @@ public class ApiService : IApiService
     private readonly ILogger<ApiService> _logger;
     private readonly IConfiguration _configuration;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly string? _cacheDirectory;
 
     public ApiService(HttpClient httpClient, ILogger<ApiService> logger, IConfiguration configuration)
     {
         _httpClient = httpClient;
         _logger = logger;
         _configuration = configuration;
+        
+        // Set up cache directory for transmission replay
+        _cacheDirectory = Path.Combine(@"C:\ProgramData\ManagedReporting\cache");
+        try
+        {
+            if (!Directory.Exists(_cacheDirectory))
+            {
+                Directory.CreateDirectory(_cacheDirectory);
+                _logger.LogInformation("Created transmission cache directory: {CacheDirectory}", _cacheDirectory);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to create cache directory, caching will be disabled");
+            _cacheDirectory = null;
+        }
         
         _jsonOptions = new JsonSerializerOptions
         {
@@ -134,6 +153,17 @@ public class ApiService : IApiService
                 deviceInfoPayload["osBuild"] = deviceInfo.OsBuild ?? "";
                 deviceInfoPayload["osArchitecture"] = deviceInfo.OsArchitecture ?? "";
                 
+                // Network information
+                deviceInfoPayload["ipAddressV4"] = deviceInfo.IpAddressV4 ?? "";
+                deviceInfoPayload["ipAddressV6"] = deviceInfo.IpAddressV6 ?? "";
+                deviceInfoPayload["macAddress"] = deviceInfo.MacAddress ?? "";
+                
+                // MDM information
+                deviceInfoPayload["mdmEnrollmentId"] = deviceInfo.MdmEnrollmentId ?? "";
+                deviceInfoPayload["mdmEnrollmentType"] = deviceInfo.MdmEnrollmentType ?? "";
+                deviceInfoPayload["mdmEnrollmentState"] = deviceInfo.MdmEnrollmentState ?? "";
+                deviceInfoPayload["mdmManagementUrl"] = deviceInfo.MdmManagementUrl ?? "";
+                
                 // Don't send the combined OS string - dashboard expects granular fields
                 // deviceInfoPayload["operatingSystem"] = deviceInfo.OperatingSystem ?? "";
             }
@@ -186,6 +216,9 @@ public class ApiService : IApiService
                     // Use the ReportMateJsonContext for proper trim-safe JSON serialization
                     var jsonContent = JsonSerializer.Serialize(payload, ReportMateJsonContext.Default.DictionaryStringObject);
                     var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
+                    
+                    // Cache the payload for replay testing in case of transmission failure
+                    await CachePayloadAsync(jsonContent, deviceSerial, attempt);
                     
                     var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
                     _logger.LogInformation("Sending POST to /api/device...");
@@ -416,6 +449,58 @@ public class ApiService : IApiService
             _logger.LogError("   Assuming device is not registered due to exception");
             return false;
         }
+    }
+
+    private async Task CachePayloadAsync(string jsonContent, string deviceSerial, int attempt)
+    {
+        if (string.IsNullOrEmpty(_cacheDirectory))
+        {
+            return; // Caching disabled
+        }
+
+        try
+        {
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+            var filename = $"payload_{deviceSerial}_{timestamp}_attempt{attempt}.json";
+            var filepath = Path.Combine(_cacheDirectory, filename);
+            
+            await File.WriteAllTextAsync(filepath, jsonContent);
+            _logger.LogDebug("Payload cached to: {FilePath}", filepath);
+            
+            // Keep only the last 10 cache files per device to avoid disk space issues
+            await CleanupOldCacheFilesAsync(deviceSerial);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to cache payload, continuing with transmission");
+        }
+    }
+
+    private Task CleanupOldCacheFilesAsync(string deviceSerial)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_cacheDirectory))
+            {
+                return Task.CompletedTask;
+            }
+
+            var files = Directory.GetFiles(_cacheDirectory, $"payload_{deviceSerial}_*.json")
+                .OrderByDescending(f => File.GetCreationTime(f))
+                .Skip(10)
+                .ToArray();
+
+            foreach (var file in files)
+            {
+                File.Delete(file);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to cleanup old cache files");
+        }
+        
+        return Task.CompletedTask;
     }
 
     private void ConfigureHttpClient()
