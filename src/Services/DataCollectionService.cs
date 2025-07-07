@@ -250,7 +250,7 @@ public class DataCollectionService : IDataCollectionService
                 _logger.LogInformation("✅ Data collection completed successfully");
                 _logger.LogInformation("📊 Final data size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, serialized.Length);
                 
-                if (dataSizeKB > 100) // Log warning for large payloads
+                if (dataSizeKB > 10000) // Log warning for large payloads
                 {
                     _logger.LogWarning("⚠️  Large payload detected: {DataSize} KB - this may cause browser performance issues", dataSizeKB);
                 }
