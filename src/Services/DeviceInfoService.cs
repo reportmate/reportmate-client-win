@@ -64,6 +64,9 @@ public class DeviceInfoService : IDeviceInfoService
             // Get MDM enrollment information
             var (mdmEnrollmentId, mdmEnrollmentType, mdmEnrollmentState, mdmManagementUrl) = await GetMdmEnrollmentInfoAsync();
 
+            // Get network information
+            var (ipv4Address, ipv6Address, macAddress) = await GetNetworkInfoAsync();
+
             var deviceInfo = new DeviceInfo
             {
                 DeviceId = hardwareUuid,
@@ -82,6 +85,9 @@ public class DeviceInfoService : IDeviceInfoService
                 OsArchitecture = osArchitecture,
                 OsInstallDate = osInstallDate,
                 ExperiencePack = experiencePack,
+                IpAddressV4 = ipv4Address,
+                IpAddressV6 = ipv6Address,
+                MacAddress = macAddress,
                 MdmEnrollmentId = mdmEnrollmentId,
                 MdmEnrollmentType = mdmEnrollmentType,
                 MdmEnrollmentState = mdmEnrollmentState,
@@ -143,7 +149,7 @@ public class DeviceInfoService : IDeviceInfoService
                 {
                     if (systemInfoResult.TryGetValue("cpu_brand", out var cpuBrand) && !string.IsNullOrEmpty(cpuBrand?.ToString()))
                     {
-                        systemInfo.ProcessorName = cpuBrand.ToString()!;
+                        systemInfo.ProcessorName = CleanProcessorName(cpuBrand.ToString()!);
                     }
                     
                     if (systemInfoResult.TryGetValue("cpu_physical_cores", out var physicalCores) && 
@@ -177,7 +183,7 @@ public class DeviceInfoService : IDeviceInfoService
                 {
                     if (uint.TryParse(clockSpeed?.ToString(), out var speed))
                     {
-                        systemInfo.ProcessorSpeedMHz = speed;
+                        systemInfo.ProcessorSpeedMHz = (int)speed;
                     }
                 }
             }
@@ -336,6 +342,9 @@ public class DeviceInfoService : IDeviceInfoService
                 osVersion = ProcessWindowsVersion(rawVersion, rawBuild);
                 osBuild = fullBuild;
                 
+                // Clean up architecture names
+                osArchitecture = CleanArchitectureName(osArchitecture);
+                
                 var fullOsString = $"{osName} {osVersion} (Build {osBuild})";
                 
                 _logger.LogDebug("Processed OS info: {OSName} {OSVersion} Build {OSBuild} {OSArchitecture}", 
@@ -356,7 +365,7 @@ public class DeviceInfoService : IDeviceInfoService
             osName = "Windows";
             osVersion = GetWindowsVersionName(os.Version);
             osBuild = os.Version.Build.ToString();
-            osArchitecture = Environment.Is64BitOperatingSystem ? "x64" : "x86";
+            osArchitecture = CleanArchitectureName(Environment.Is64BitOperatingSystem ? "x64" : "x86");
             
             var fullOsString = $"{osName} {osVersion} (Build {osBuild})";
             
@@ -364,7 +373,7 @@ public class DeviceInfoService : IDeviceInfoService
         }
         catch
         {
-            return ("Windows", "Unknown", "", "", "Windows (Unknown Version)");
+            return ("Windows", "Unknown", "", "Unknown", "Windows (Unknown Version)");
         }
     }
 
@@ -540,13 +549,19 @@ public class DeviceInfoService : IDeviceInfoService
                     var diskInfo = new DiskInfo
                     {
                         Drive = drive.Name,
+                        DriveLetter = drive.Name,
                         TotalSizeGB = Math.Round(drive.TotalSize / (1024.0 * 1024.0 * 1024.0), 2),
                         FreeSpaceGB = Math.Round(drive.TotalFreeSpace / (1024.0 * 1024.0 * 1024.0), 2),
-                        FileSystem = drive.DriveFormat
+                        FileSystem = drive.DriveFormat,
+                        TotalSizeBytes = drive.TotalSize,
+                        AvailableSizeBytes = drive.TotalFreeSpace,
+                        DriveType = drive.DriveType.ToString()
                     };
                     
                     diskInfo.UsedSpaceGB = diskInfo.TotalSizeGB - diskInfo.FreeSpaceGB;
+                    diskInfo.UsedSizeBytes = diskInfo.TotalSizeBytes - diskInfo.AvailableSizeBytes;
                     diskInfo.UsedPercentage = diskInfo.TotalSizeGB > 0 ? Math.Round((diskInfo.UsedSpaceGB / diskInfo.TotalSizeGB) * 100, 1) : 0;
+                    diskInfo.UtilizationPercent = (int)diskInfo.UsedPercentage;
                     
                     diskInfoList.Add(diskInfo);
                 }
@@ -1303,67 +1318,162 @@ public class DeviceInfoService : IDeviceInfoService
         
         return ("", "", "", "");
     }
-}
 
-public class DeviceInfo
-{
-    public string DeviceId { get; set; } = string.Empty;
-    public string ComputerName { get; set; } = string.Empty;
-    public string Domain { get; set; } = string.Empty;
-    public string SerialNumber { get; set; } = string.Empty;
-    public string OperatingSystem { get; set; } = string.Empty;
-    public string Manufacturer { get; set; } = string.Empty;
-    public string Model { get; set; } = string.Empty;
-    public double TotalMemoryGB { get; set; }
-    public DateTime LastSeen { get; set; }
-    public string ClientVersion { get; set; } = string.Empty;
-    public string AssetTag { get; set; } = string.Empty;
-    
-    // Granular OS information
-    public string OsName { get; set; } = string.Empty;
-    public string OsVersion { get; set; } = string.Empty;
-    public string OsBuild { get; set; } = string.Empty;
-    public string OsArchitecture { get; set; } = string.Empty;
-    public DateTime? OsInstallDate { get; set; }
-    public string ExperiencePack { get; set; } = string.Empty;
-    
-    // MDM/Management information
-    public string MdmEnrollmentId { get; set; } = string.Empty;
-    public string MdmEnrollmentType { get; set; } = string.Empty;
-    public string MdmEnrollmentState { get; set; } = string.Empty;
-    public string MdmManagementUrl { get; set; } = string.Empty;
-}
+    private string CleanArchitectureName(string architecture)
+    {
+        if (string.IsNullOrEmpty(architecture))
+            return "Unknown";
 
-public class SystemInfo
-{
-    public string OperatingSystem { get; set; } = string.Empty;
-    public string Architecture { get; set; } = string.Empty;
-    public int ProcessorCount { get; set; }
-    public string ProcessorName { get; set; } = string.Empty;
-    public uint ProcessorSpeedMHz { get; set; }
-    public double TotalMemoryGB { get; set; }
-    public TimeSpan Uptime { get; set; }
-    public DateTime? LastBootTime { get; set; }
-    public string TimeZone { get; set; } = string.Empty;
-    public List<DiskInfo> DiskInfo { get; set; } = new();
-}
+        // Normalize architecture names
+        var arch = architecture.ToLowerInvariant().Trim();
+        return arch switch
+        {
+            "x86_64" => "x64",
+            "x64" => "x64",
+            "amd64" => "x64",
+            "arm64" => "arm64",
+            "arm 64-bit processor" => "arm64",
+            "x86" => "x86",
+            "i386" => "x86",
+            "i686" => "x86",
+            _ => architecture // Return original if no match
+        };
+    }
 
-public class DiskInfo
-{
-    public string Drive { get; set; } = string.Empty;
-    public double TotalSizeGB { get; set; }
-    public double FreeSpaceGB { get; set; }
-    public double UsedSpaceGB { get; set; }
-    public double UsedPercentage { get; set; }
-    public string FileSystem { get; set; } = string.Empty;
-}
+    private async Task<(string ipv4Address, string ipv6Address, string macAddress)> GetNetworkInfoAsync()
+    {
+        try
+        {
+            // Get network interfaces from osquery
+            var interfaceResult = await _osQueryService.ExecuteQueryAsync(
+                "SELECT interface, address, mac FROM interface_addresses WHERE type = 'Manual' OR type = 'DHCP' ORDER BY interface;"
+            );
+            
+            string ipv4Address = "";
+            string ipv6Address = "";
+            string macAddress = "";
+            
+            if (interfaceResult?.Any() == true)
+            {
+                var interfaceList = new List<Dictionary<string, object>>();
+                
+                // Handle both single result and multiple results
+                if (interfaceResult.ContainsKey("interface"))
+                {
+                    // Single interface result
+                    interfaceList.Add(interfaceResult);
+                }
+                else
+                {
+                    // Multiple interfaces - this shouldn't happen with our query structure
+                    // but handle gracefully
+                    _logger.LogDebug("Unexpected interface result structure");
+                }
+                
+                foreach (var interfaceData in interfaceList)
+                {
+                    var address = interfaceData.GetValueOrDefault("address")?.ToString();
+                    var mac = interfaceData.GetValueOrDefault("mac")?.ToString();
+                    
+                    if (!string.IsNullOrEmpty(address) && !IsLoopbackAddress(address))
+                    {
+                        if (IsIPv4Address(address) && string.IsNullOrEmpty(ipv4Address))
+                        {
+                            ipv4Address = address;
+                        }
+                        else if (IsIPv6Address(address) && string.IsNullOrEmpty(ipv6Address))
+                        {
+                            ipv6Address = address;
+                        }
+                    }
+                    
+                    if (!string.IsNullOrEmpty(mac) && string.IsNullOrEmpty(macAddress) && IsValidMacAddress(mac))
+                    {
+                        macAddress = mac;
+                    }
+                }
+            }
+            
+            // If osquery fails, try alternative method
+            if (string.IsNullOrEmpty(ipv4Address) && string.IsNullOrEmpty(macAddress))
+            {
+                try
+                {
+                    var networkResult = await _osQueryService.ExecuteQueryAsync(
+                        "SELECT address, mac FROM interface_details WHERE type = 'Physical' AND address IS NOT NULL LIMIT 1;"
+                    );
+                    
+                    if (networkResult?.Any() == true)
+                    {
+                        var address = networkResult.GetValueOrDefault("address")?.ToString();
+                        var mac = networkResult.GetValueOrDefault("mac")?.ToString();
+                        
+                        if (!string.IsNullOrEmpty(address) && IsIPv4Address(address))
+                        {
+                            ipv4Address = address;
+                        }
+                        
+                        if (!string.IsNullOrEmpty(mac) && IsValidMacAddress(mac))
+                        {
+                            macAddress = mac;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Could not get network info from interface_details");
+                }
+            }
+            
+            _logger.LogDebug("Network info collected: IPv4={IPv4}, IPv6={IPv6}, MAC={MAC}", 
+                ipv4Address, ipv6Address, macAddress);
+            
+            return (ipv4Address, ipv6Address, macAddress);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not get network information");
+            return ("", "", "");
+        }
+    }
 
-public class SecurityInfo
-{
-    public bool WindowsDefenderEnabled { get; set; }
-    public bool FirewallEnabled { get; set; }
-    public bool UacEnabled { get; set; }
-    public bool BitLockerEnabled { get; set; }
-    public bool TmpAvailable { get; set; }
-    public DateTime? LastUpdateCheck { get; set; }
+    private bool IsLoopbackAddress(string address)
+    {
+        return address.StartsWith("127.") || address.StartsWith("::1") || address.Equals("::1");
+    }
+
+    private bool IsIPv4Address(string address)
+    {
+        return System.Net.IPAddress.TryParse(address, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
+    }
+
+    private bool IsIPv6Address(string address)
+    {
+        return System.Net.IPAddress.TryParse(address, out var ip) && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6;
+    }
+
+    private bool IsValidMacAddress(string mac)
+    {
+        if (string.IsNullOrEmpty(mac))
+            return false;
+            
+        // Check for standard MAC address format (6 groups of 2 hex digits)
+        var macPattern = @"^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$";
+        return System.Text.RegularExpressions.Regex.IsMatch(mac, macPattern);
+    }
+
+    private string CleanProcessorName(string processor)
+    {
+        if (string.IsNullOrEmpty(processor))
+            return "Unknown";
+
+        // Clean up common virtual processor naming patterns
+        var cleaned = processor
+            .Replace("Virtual CPU @ ", "")
+            .Replace("Virtual CPU", "Virtual Processor")
+            .Trim();
+
+        return string.IsNullOrEmpty(cleaned) ? "Unknown" : cleaned;
+    }
+
 }

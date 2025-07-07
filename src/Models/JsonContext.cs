@@ -54,6 +54,8 @@ public class DeviceRegistrationRequest
     public string? OS { get; set; }
     public string? Architecture { get; set; }
     public string? IpAddress { get; set; }
+    public string? IpAddressV4 { get; set; }
+    public string? IpAddressV6 { get; set; }
     public string? MacAddress { get; set; }
     public string? Location { get; set; }
     public Dictionary<string, object>? DeviceData { get; set; }
