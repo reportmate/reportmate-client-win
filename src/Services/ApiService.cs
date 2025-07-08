@@ -214,7 +214,7 @@ public class ApiService : IApiService
                     _logger.LogInformation("=== API TRANSMISSION ATTEMPT {Attempt}/{MaxRetries} ===", attempt, maxRetries);
 
                     // Use the ReportMateJsonContext for proper trim-safe JSON serialization
-                    var jsonContent = JsonSerializer.Serialize(payload, ReportMateJsonContext.Default.DictionaryStringObject);
+                    var jsonContent = JsonSerializer.Serialize(payload, (JsonSerializerOptions?)null);
                     var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
                     
                     // Cache the payload for replay testing in case of transmission failure
@@ -223,7 +223,7 @@ public class ApiService : IApiService
                     var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
                     _logger.LogInformation("Sending POST to /api/device...");
                     _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
-                    _logger.LogInformation("Device Serial in payload: {DeviceSerial}", payload["device"]);
+                    _logger.LogInformation("Device Serial in payload: {DeviceSerial}", payload?.GetValueOrDefault("device", "Unknown") ?? "Unknown");
 
                     var response = await _httpClient.PostAsync("/api/device", httpContent);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
@@ -242,12 +242,12 @@ public class ApiService : IApiService
                         _logger.LogWarning("❌ API endpoint /api/device not found (404). This is unexpected as the endpoint should be available.");
                         _logger.LogInformation("DATA READY FOR TRANSMISSION - Would have sent the following payload:");
                         _logger.LogInformation("Payload size: {PayloadSize} bytes", jsonContent.Length);
-                        _logger.LogInformation("Device: {Device}", payload["device"]);
-                        _logger.LogInformation("Kind: {Kind}", payload["kind"]);
-                        _logger.LogInformation("Timestamp: {Timestamp}", payload["ts"]);
+                        _logger.LogInformation("Device: {Device}", payload?.GetValueOrDefault("device", "Unknown") ?? "Unknown");
+                        _logger.LogInformation("Kind: {Kind}", payload?.GetValueOrDefault("kind", "Unknown") ?? "Unknown");
+                        _logger.LogInformation("Timestamp: {Timestamp}", payload?.GetValueOrDefault("ts", "Unknown") ?? "Unknown");
                         
                         // Log a sample of the actual data being collected
-                        if (payload.TryGetValue("payload", out var innerPayload) && innerPayload is Dictionary<string, object> innerDict)
+                        if (payload?.TryGetValue("payload", out var innerPayload) == true && innerPayload is Dictionary<string, object> innerDict)
                         {
                             if (innerDict.ContainsKey("system"))
                             {
@@ -272,24 +272,97 @@ public class ApiService : IApiService
                     else
                     {
                         var errorContent = await response.Content.ReadAsStringAsync();
-                        _logger.LogWarning("API request failed with status {StatusCode}: {Error}", 
-                            response.StatusCode, errorContent);
-
+                        
+                        // Enhanced error logging for failed API responses
+                        _logger.LogWarning("=== API REQUEST FAILED ===");
+                        _logger.LogWarning("Status Code: {StatusCode}", response.StatusCode);
+                        _logger.LogWarning("Reason Phrase: {ReasonPhrase}", response.ReasonPhrase);
+                        _logger.LogWarning("Error Content: {ErrorContent}", errorContent);
+                        _logger.LogWarning("Request URL: {RequestUrl}", _httpClient.BaseAddress + "/api/device");
+                        _logger.LogWarning("Attempt: {Attempt}/{MaxRetries}", attempt, maxRetries);
+                        
+                        // Try to parse error response as JSON for additional details
+                        try
+                        {
+                            var errorResponse = JsonSerializer.Deserialize<Dictionary<string, object>>(errorContent);
+                            if (errorResponse != null)
+                            {
+                                _logger.LogWarning("Parsed Error Response:");
+                                foreach (var kvp in errorResponse)
+                                {
+                                    _logger.LogWarning("  {Key}: {Value}", kvp.Key, kvp.Value);
+                                }
+                                
+                                // Log debug_info if present
+                                if (errorResponse.TryGetValue("debug_info", out var debugInfo))
+                                {
+                                    _logger.LogWarning("Debug Information from API:");
+                                    _logger.LogWarning("  {DebugInfo}", debugInfo);
+                                }
+                            }
+                        }
+                        catch (JsonException)
+                        {
+                            _logger.LogWarning("Error response is not valid JSON: {ErrorContent}", errorContent);
+                        }
+                        
                         // Don't retry on client errors (4xx)
                         if ((int)response.StatusCode >= 400 && (int)response.StatusCode < 500)
                         {
-                            _logger.LogError("Client error occurred, not retrying: {StatusCode}", response.StatusCode);
+                            _logger.LogError("=== CLIENT ERROR - NOT RETRYING ===");
+                            _logger.LogError("Status Code: {StatusCode}", response.StatusCode);
+                            _logger.LogError("This indicates a problem with the request data or API configuration");
+                            _logger.LogError("Payload that caused the error:");
+                            _logger.LogError("Device Serial: {DeviceSerial}", payload?.GetValueOrDefault("device", "Unknown") ?? "Unknown");
+                            _logger.LogError("Payload Size: {PayloadSize} bytes", jsonContent.Length);
+                            _logger.LogError("Kind: {Kind}", payload?.GetValueOrDefault("kind", "Unknown") ?? "Unknown");
                             return false;
                         }
                     }
                 }
                 catch (HttpRequestException ex)
                 {
-                    _logger.LogWarning(ex, "HTTP request failed (attempt {Attempt}/{MaxRetries})", attempt, maxRetries);
+                    _logger.LogWarning("=== HTTP REQUEST EXCEPTION ===");
+                    _logger.LogWarning("Attempt: {Attempt}/{MaxRetries}", attempt, maxRetries);
+                    _logger.LogWarning("Exception Type: {ExceptionType}", ex.GetType().Name);
+                    _logger.LogWarning("Exception Message: {ExceptionMessage}", ex.Message);
+                    _logger.LogWarning("Inner Exception: {InnerException}", ex.InnerException?.Message);
+                    _logger.LogWarning("Request URL: {RequestUrl}", _httpClient.BaseAddress + "/api/device");
+                    _logger.LogWarning("Device Serial: {DeviceSerial}", deviceSerial);
+                    
+                    if (ex.Data?.Count > 0)
+                    {
+                        _logger.LogWarning("Exception Data:");
+                        foreach (var key in ex.Data.Keys)
+                        {
+                            _logger.LogWarning("  {Key}: {Value}", key, ex.Data[key]);
+                        }
+                    }
                 }
                 catch (TaskCanceledException ex) when (ex.CancellationToken.IsCancellationRequested)
                 {
-                    _logger.LogWarning(ex, "Request timed out (attempt {Attempt}/{MaxRetries})", attempt, maxRetries);
+                    _logger.LogWarning("=== REQUEST TIMEOUT ===");
+                    _logger.LogWarning("Attempt: {Attempt}/{MaxRetries}", attempt, maxRetries);
+                    _logger.LogWarning("Request timed out after configured timeout period");
+                    _logger.LogWarning("Device Serial: {DeviceSerial}", deviceSerial);
+                    _logger.LogWarning("Configured Timeout: {Timeout} seconds", _configuration["ReportMate:ApiTimeoutSeconds"] ?? "300");
+                    _logger.LogWarning("Exception Message: {ExceptionMessage}", ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError("=== UNEXPECTED EXCEPTION DURING TRANSMISSION ===");
+                    _logger.LogError("Attempt: {Attempt}/{MaxRetries}", attempt, maxRetries);
+                    _logger.LogError("Exception Type: {ExceptionType}", ex.GetType().FullName);
+                    _logger.LogError("Exception Message: {ExceptionMessage}", ex.Message);
+                    _logger.LogError("Stack Trace: {StackTrace}", ex.StackTrace);
+                    _logger.LogError("Device Serial: {DeviceSerial}", deviceSerial);
+                    _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload).Length : 0);
+                    
+                    if (ex.InnerException != null)
+                    {
+                        _logger.LogError("Inner Exception Type: {InnerExceptionType}", ex.InnerException.GetType().FullName);
+                        _logger.LogError("Inner Exception Message: {InnerExceptionMessage}", ex.InnerException.Message);
+                    }
                 }
 
                 // Wait before retrying (exponential backoff)
@@ -301,7 +374,32 @@ public class ApiService : IApiService
                 }
             }
 
+            // Final failure logging with comprehensive debugging information
+            _logger.LogError("=== TRANSMISSION FAILED ===");
             _logger.LogError("Failed to send device data after {MaxRetries} attempts", maxRetries);
+            _logger.LogError("Device Serial: {DeviceSerial}", deviceSerial);
+            _logger.LogError("Computer Name: {ComputerName}", deviceInfo?.ComputerName ?? "Unknown");
+            _logger.LogError("API Base URL: {BaseUrl}", _httpClient.BaseAddress);
+            _logger.LogError("Expected Endpoint: {Endpoint}", "/api/device");
+            _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload).Length : 0);
+            
+            if (payload != null)
+            {
+                _logger.LogError("Payload Summary:");
+                _logger.LogError("  Device: {Device}", payload.GetValueOrDefault("device", "Unknown"));
+                _logger.LogError("  Kind: {Kind}", payload.GetValueOrDefault("kind", "Unknown"));
+                _logger.LogError("  Has Device Info: {HasDevice}", payload.TryGetValue("payload", out var innerPayload) && 
+                    innerPayload is Dictionary<string, object> innerDict && innerDict.ContainsKey("device"));
+                _logger.LogError("  Has OSQuery Data: {HasOSQuery}", payload.TryGetValue("payload", out var innerPayload2) && 
+                    innerPayload2 is Dictionary<string, object> innerDict2 && innerDict2.ContainsKey("osquery"));
+            }
+            
+            _logger.LogError("❌ TRANSMISSION FAILED: Data collection succeeded but transmission failed");
+            _logger.LogError("❌ NOTE: Will retry on next run");
+            _logger.LogError("❌ Data collection or transmission failed");
+            _logger.LogError("❌ IMPACT: Device may not be registered or API issues detected");
+            _logger.LogError("❌ ACTION REQUIRED: Check logs above for specific failure reasons");
+            
             return false;
         }
         catch (Exception ex)

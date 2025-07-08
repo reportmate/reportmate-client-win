@@ -131,26 +131,50 @@ public class DataCollectionService : IDataCollectionService
             // Send to API
             _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");
             _logger.LogInformation("🚀 Sending data to ReportMate API via /api/device");
+            _logger.LogInformation("Data size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData).Length);
+            _logger.LogInformation("Device ID: {DeviceId}", deviceInfo.DeviceId);
+            _logger.LogInformation("Serial Number: {SerialNumber}", deviceInfo.SerialNumber);
             
             var success = await _apiService.SendDeviceDataAsync(deviceData);
 
             if (success)
             {
                 _logger.LogInformation("✅ SUCCESS: Data transmission completed successfully");
-                _logger.LogInformation("✅ DASHBOARD: Data should be visible at /device/{DeviceId}", deviceInfo.DeviceId);
+                _logger.LogInformation("✅ DASHBOARD: Data should be visible at /device/{SerialNumber}", deviceInfo.SerialNumber);
                 await _configurationService.UpdateLastRunTimeAsync();
                 return true;
             }
             else
             {
                 _logger.LogError("❌ TRANSMISSION FAILED: Data collection succeeded but transmission failed");
+                _logger.LogError("❌ Device Serial: {SerialNumber}", deviceInfo.SerialNumber);
+                _logger.LogError("❌ Device ID: {DeviceId}", deviceInfo.DeviceId);
+                _logger.LogError("❌ Computer Name: {ComputerName}", deviceInfo.ComputerName);
+                _logger.LogError("❌ Data Size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData).Length);
                 _logger.LogError("❌ NOTE: Will retry on next run");
+                _logger.LogError("❌ Data collection or transmission failed");
+                _logger.LogError("❌ IMPACT: Device may not be registered or API issues detected");
+                _logger.LogError("❌ ACTION REQUIRED: Check logs above for specific failure reasons");
                 return false;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ CRITICAL ERROR: Data collection process failed");
+            _logger.LogError("=== CRITICAL ERROR IN DATA COLLECTION PROCESS ===");
+            _logger.LogError("Exception Type: {ExceptionType}", ex.GetType().FullName);
+            _logger.LogError("Exception Message: {ExceptionMessage}", ex.Message);
+            _logger.LogError("Stack Trace: {StackTrace}", ex.StackTrace);
+            
+            if (ex.InnerException != null)
+            {
+                _logger.LogError("Inner Exception Type: {InnerExceptionType}", ex.InnerException.GetType().FullName);
+                _logger.LogError("Inner Exception Message: {InnerExceptionMessage}", ex.InnerException.Message);
+            }
+            
+            _logger.LogError("❌ CRITICAL ERROR: Data collection process failed");
+            _logger.LogError("❌ IMPACT: Device will not be updated in ReportMate");
+            _logger.LogError("❌ ACTION REQUIRED: Review error details above and check system configuration");
+            
             return false;
         }
     }
