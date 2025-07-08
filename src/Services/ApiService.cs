@@ -214,7 +214,7 @@ public class ApiService : IApiService
                     _logger.LogInformation("=== API TRANSMISSION ATTEMPT {Attempt}/{MaxRetries} ===", attempt, maxRetries);
 
                     // Use the ReportMateJsonContext for proper trim-safe JSON serialization
-                    var jsonContent = JsonSerializer.Serialize(payload, (JsonSerializerOptions?)null);
+                    var jsonContent = JsonSerializer.Serialize(payload, _jsonOptions);
                     var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
                     
                     // Cache the payload for replay testing in case of transmission failure
@@ -356,7 +356,7 @@ public class ApiService : IApiService
                     _logger.LogError("Exception Message: {ExceptionMessage}", ex.Message);
                     _logger.LogError("Stack Trace: {StackTrace}", ex.StackTrace);
                     _logger.LogError("Device Serial: {DeviceSerial}", deviceSerial);
-                    _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload).Length : 0);
+                    _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload, _jsonOptions).Length : 0);
                     
                     if (ex.InnerException != null)
                     {
@@ -381,7 +381,7 @@ public class ApiService : IApiService
             _logger.LogError("Computer Name: {ComputerName}", deviceInfo?.ComputerName ?? "Unknown");
             _logger.LogError("API Base URL: {BaseUrl}", _httpClient.BaseAddress);
             _logger.LogError("Expected Endpoint: {Endpoint}", "/api/device");
-            _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload).Length : 0);
+            _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload, _jsonOptions).Length : 0);
             
             if (payload != null)
             {
