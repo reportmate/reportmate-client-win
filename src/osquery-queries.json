@@ -23,7 +23,7 @@
   
   "disk_info": "SELECT id, name, disk_index, disk_size, type, manufacturer, model, serial_number, description FROM disk_info WHERE disk_size > 0;",
   
-  "video_info": "SELECT name, driver_version, driver_date, adapter_ram, current_horizontal_resolution, current_vertical_resolution, adapter_compatibility FROM video_info;",
+  "video_info": "SELECT model, manufacturer, driver_version, driver_date FROM video_info;",
   
   "network_interfaces": "SELECT interface, mac, type, mtu, friendly_name, description, manufacturer, connection_id, dhcp_enabled, dhcp_server FROM interface_details WHERE interface NOT LIKE 'lo%' AND interface NOT LIKE 'Loopback%';",
   
@@ -53,7 +53,7 @@
   
   "tpm_info": "SELECT activated, enabled, owned, manufacturer_version, manufacturer_id, manufacturer_name, spec_version FROM tpm_info;",
   
-  "mdm_enrollment": "SELECT enrollment_id, enrollment_type, enrollment_state, management_service_url, certificate_thumbprint FROM mdm_enrollment;",
+  "mdm_enrollment": "SELECT key, name, type, data FROM registry WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\%' AND name IN ('ProviderID', 'UPN', 'EnrollmentState', 'AADResourceID', 'EnrollmentType') AND data IS NOT NULL;",
   
   "enrollment_info": "SELECT key, name, type, data FROM registry WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\%' AND name IN ('ProviderID', 'UPN', 'EnrollmentState', 'AADResourceID', 'EnrollmentType') AND data IS NOT NULL;",
   

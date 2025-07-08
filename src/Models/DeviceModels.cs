@@ -55,6 +55,7 @@ public class SystemInfo
     public int MemoryUtilizationPercent { get; set; }
     public string TimeZone { get; set; } = string.Empty;
     public List<DiskInfo> Disks { get; set; } = new();
+    public string GraphicsCard { get; set; } = string.Empty;  // Added graphics card information
     
     // Additional system information
     public string OperatingSystem { get; set; } = string.Empty;
