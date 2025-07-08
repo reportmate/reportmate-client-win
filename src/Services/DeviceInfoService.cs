@@ -147,9 +147,26 @@ public class DeviceInfoService : IDeviceInfoService
                 
                 if (systemInfoResult?.Any() == true)
                 {
-                    if (systemInfoResult.TryGetValue("cpu_brand", out var cpuBrand) && !string.IsNullOrEmpty(cpuBrand?.ToString()))
+                    // Get detailed processor name from registry first
+                    try
                     {
-                        systemInfo.ProcessorName = CleanProcessorName(cpuBrand.ToString()!);
+                        var processorResult = await _osQueryService.ExecuteQueryAsync(
+                            "SELECT data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\\\HARDWARE\\\\DESCRIPTION\\\\System\\\\CentralProcessor\\\\0' AND name = 'ProcessorNameString';"
+                        );
+                        
+                        if (processorResult?.Any() == true && processorResult.TryGetValue("data", out var processorName))
+                        {
+                            systemInfo.ProcessorName = CleanProcessorName(processorName.ToString()!);
+                            _logger.LogDebug("Got detailed processor name from registry: {ProcessorName}", systemInfo.ProcessorName);
+                        }
+                    }
+                    catch (Exception regEx)
+                    {
+                        _logger.LogDebug(regEx, "Could not get detailed processor name from registry, using cpu_brand");
+                        if (systemInfoResult.TryGetValue("cpu_brand", out var cpuBrand) && !string.IsNullOrEmpty(cpuBrand?.ToString()))
+                        {
+                            systemInfo.ProcessorName = CleanProcessorName(cpuBrand.ToString()!);
+                        }
                     }
                     
                     if (systemInfoResult.TryGetValue("cpu_physical_cores", out var physicalCores) && 
@@ -190,6 +207,32 @@ public class DeviceInfoService : IDeviceInfoService
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Could not retrieve CPU clock speed from osquery");
+            }
+
+            // Get graphics card info
+            try
+            {
+                var graphicsResult = await _osQueryService.ExecuteQueryAsync("SELECT model, manufacturer FROM video_info LIMIT 1;");
+                if (graphicsResult?.Any() == true)
+                {
+                    var manufacturer = graphicsResult.GetValueOrDefault("manufacturer")?.ToString() ?? "";
+                    var model = graphicsResult.GetValueOrDefault("model")?.ToString() ?? "";
+                    
+                    if (!string.IsNullOrEmpty(manufacturer) && !string.IsNullOrEmpty(model))
+                    {
+                        // Clean up trademark symbols
+                        var cleanManufacturer = manufacturer.Replace("(R)", "").Replace("(TM)", "").Replace("®", "").Replace("™", "").Replace("  ", " ").Trim();
+                        var cleanModel = model.Replace("(R)", "").Replace("(TM)", "").Replace("®", "").Replace("™", "").Replace("  ", " ").Trim();
+                        
+                        systemInfo.GraphicsCard = $"{cleanManufacturer} {cleanModel}".Replace("  ", " ").Trim();
+                        _logger.LogDebug("Graphics card info: {GraphicsCard}", systemInfo.GraphicsCard);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not retrieve graphics card info from osquery");
+                systemInfo.GraphicsCard = "Unknown";
             }
 
             // Get disk info
@@ -1344,85 +1387,88 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
-            // Get network interfaces from osquery
-            var interfaceResult = await _osQueryService.ExecuteQueryAsync(
-                "SELECT interface, address FROM interface_addresses WHERE type = 'Manual' OR type = 'DHCP' ORDER BY interface;"
-            );
-            
             string ipv4Address = "";
             string ipv6Address = "";
             string macAddress = "";
             
-            if (interfaceResult?.Any() == true)
+            // Get IP addresses from interface_addresses table
+            try
             {
-                var interfaceList = new List<Dictionary<string, object>>();
+                var ipResult = await _osQueryService.ExecuteQueryAsync(
+                    "SELECT address FROM interface_addresses WHERE address IS NOT NULL AND address NOT LIKE '127.%' AND address NOT LIKE '169.254.%' AND address NOT LIKE 'fe80:%' ORDER BY address;"
+                );
                 
-                // Handle both single result and multiple results
-                if (interfaceResult.ContainsKey("interface"))
+                if (ipResult?.Any() == true)
                 {
-                    // Single interface result
-                    interfaceList.Add(interfaceResult);
-                }
-                else
-                {
-                    // Multiple interfaces - this shouldn't happen with our query structure
-                    // but handle gracefully
-                    _logger.LogDebug("Unexpected interface result structure");
-                }
-                
-                foreach (var interfaceData in interfaceList)
-                {
-                    var address = interfaceData.GetValueOrDefault("address")?.ToString();
-                    var mac = interfaceData.GetValueOrDefault("mac")?.ToString();
+                    var addresses = new List<string>();
                     
-                    if (!string.IsNullOrEmpty(address) && !IsLoopbackAddress(address))
+                    // Handle both single result and multiple results
+                    if (ipResult.ContainsKey("address"))
                     {
-                        if (IsIPv4Address(address) && string.IsNullOrEmpty(ipv4Address))
+                        // Single address result
+                        var addr = ipResult.GetValueOrDefault("address")?.ToString();
+                        if (!string.IsNullOrEmpty(addr))
                         {
-                            ipv4Address = address;
+                            addresses.Add(addr);
                         }
-                        else if (IsIPv6Address(address) && string.IsNullOrEmpty(ipv6Address))
+                    }
+                    else
+                    {
+                        // Multiple addresses - extract all addresses
+                        foreach (var key in ipResult.Keys)
                         {
-                            ipv6Address = address;
+                            if (ipResult[key] is Dictionary<string, object> addressData)
+                            {
+                                var addr = addressData.GetValueOrDefault("address")?.ToString();
+                                if (!string.IsNullOrEmpty(addr))
+                                {
+                                    addresses.Add(addr);
+                                }
+                            }
                         }
                     }
                     
-                    if (!string.IsNullOrEmpty(mac) && string.IsNullOrEmpty(macAddress) && IsValidMacAddress(mac))
+                    // Process collected addresses
+                    foreach (var address in addresses)
+                    {
+                        if (!IsLoopbackAddress(address))
+                        {
+                            if (IsIPv4Address(address) && string.IsNullOrEmpty(ipv4Address))
+                            {
+                                ipv4Address = address;
+                            }
+                            else if (IsIPv6Address(address) && string.IsNullOrEmpty(ipv6Address))
+                            {
+                                ipv6Address = address;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not get IP addresses from interface_addresses");
+            }
+            
+            // Get MAC address from interface_details table
+            try
+            {
+                var macResult = await _osQueryService.ExecuteQueryAsync(
+                    "SELECT mac FROM interface_details WHERE type = 6 AND mac IS NOT NULL AND mac != '' AND mac != '00:00:00:00:00:00' LIMIT 1;"
+                );
+                
+                if (macResult?.Any() == true)
+                {
+                    var mac = macResult.GetValueOrDefault("mac")?.ToString();
+                    if (!string.IsNullOrEmpty(mac) && IsValidMacAddress(mac))
                     {
                         macAddress = mac;
                     }
                 }
             }
-            
-            // If osquery fails, try alternative method
-            if (string.IsNullOrEmpty(ipv4Address) && string.IsNullOrEmpty(macAddress))
+            catch (Exception ex)
             {
-                try
-                {
-                    var networkResult = await _osQueryService.ExecuteQueryAsync(
-                        "SELECT address, mac FROM interface_details WHERE type = 'Physical' AND address IS NOT NULL LIMIT 1;"
-                    );
-                    
-                    if (networkResult?.Any() == true)
-                    {
-                        var address = networkResult.GetValueOrDefault("address")?.ToString();
-                        var mac = networkResult.GetValueOrDefault("mac")?.ToString();
-                        
-                        if (!string.IsNullOrEmpty(address) && IsIPv4Address(address))
-                        {
-                            ipv4Address = address;
-                        }
-                        
-                        if (!string.IsNullOrEmpty(mac) && IsValidMacAddress(mac))
-                        {
-                            macAddress = mac;
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Could not get network info from interface_details");
-                }
+                _logger.LogDebug(ex, "Could not get MAC address from interface_details");
             }
             
             _logger.LogDebug("Network info collected: IPv4={IPv4}, IPv6={IPv6}, MAC={MAC}", 
@@ -1467,10 +1513,16 @@ public class DeviceInfoService : IDeviceInfoService
         if (string.IsNullOrEmpty(processor))
             return "Unknown";
 
-        // Clean up common virtual processor naming patterns
+        // Clean up common virtual processor naming patterns and trademark symbols
         var cleaned = processor
             .Replace("Virtual CPU @ ", "")
             .Replace("Virtual CPU", "Virtual Processor")
+            .Replace("(R)", "")
+            .Replace("(TM)", "")
+            .Replace("(tm)", "")
+            .Replace("®", "")
+            .Replace("™", "")
+            .Replace("  ", " ")  // Remove double spaces
             .Trim();
 
         return string.IsNullOrEmpty(cleaned) ? "Unknown" : cleaned;
