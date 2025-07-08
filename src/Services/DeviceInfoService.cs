@@ -1219,7 +1219,7 @@ public class DeviceInfoService : IDeviceInfoService
         try
         {
             // Try to get MDM enrollment from osquery mdm_enrollment table
-            var mdmResult = await _osQueryService.ExecuteQueryAsync("SELECT enrollment_id, enrollment_type, enrollment_state, management_service_url FROM mdm_enrollment;");
+            var mdmResult = await _osQueryService.ExecuteQueryAsync("SELECT name, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments';");
             
             if (mdmResult?.Any() == true)
             {
@@ -1346,7 +1346,7 @@ public class DeviceInfoService : IDeviceInfoService
         {
             // Get network interfaces from osquery
             var interfaceResult = await _osQueryService.ExecuteQueryAsync(
-                "SELECT interface, address, mac FROM interface_addresses WHERE type = 'Manual' OR type = 'DHCP' ORDER BY interface;"
+                "SELECT interface, address FROM interface_addresses WHERE type = 'Manual' OR type = 'DHCP' ORDER BY interface;"
             );
             
             string ipv4Address = "";

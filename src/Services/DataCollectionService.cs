@@ -131,7 +131,20 @@ public class DataCollectionService : IDataCollectionService
             // Send to API
             _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");
             _logger.LogInformation("🚀 Sending data to ReportMate API via /api/device");
-            _logger.LogInformation("Data size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData).Length);
+            
+            // Calculate data size safely without reflection-based serialization
+            var dataSize = 0;
+            try
+            {
+                dataSize = System.Text.Json.JsonSerializer.Serialize(deviceData, ReportMateJsonContext.Default.DictionaryStringObject).Length;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not calculate data size for logging");
+                dataSize = -1; // Unknown size
+            }
+            
+            _logger.LogInformation("Data size: {DataSize} bytes", dataSize > 0 ? dataSize.ToString() : "Unknown");
             _logger.LogInformation("Device ID: {DeviceId}", deviceInfo.DeviceId);
             _logger.LogInformation("Serial Number: {SerialNumber}", deviceInfo.SerialNumber);
             
