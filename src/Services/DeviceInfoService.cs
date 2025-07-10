@@ -274,23 +274,19 @@ public class DeviceInfoService : IDeviceInfoService
     {
         try
         {
-            _logger.LogInformation("Collecting comprehensive device data");
+            _logger.LogInformation("Collecting streamlined device data (device + osquery only)");
 
             var data = new Dictionary<string, object>();
 
-            // Basic device info
+            // Basic device info - keep this as it contains processed device identification data
             var deviceInfo = await GetBasicDeviceInfoAsync();
             data["device"] = deviceInfo;
 
-            // System info
-            var systemInfo = await GetSystemInfoAsync();
-            data["system"] = systemInfo;
+            // STREAMLINED PAYLOAD: Remove system and security sections to eliminate duplication
+            // The Azure Function backend will extract all system and security information from osquery data
+            _logger.LogInformation("Skipping system and security sections - data will be extracted from osquery on backend");
 
-            // Security info
-            var securityInfo = await GetSecurityInfoAsync();
-            data["security"] = securityInfo;
-
-            // osquery data (if available)
+            // osquery data (if available) - this is the primary data source
             if (await _osQueryService.IsOsQueryAvailableAsync())
             {
                 try
@@ -308,6 +304,7 @@ public class DeviceInfoService : IDeviceInfoService
                         var osqueryResults = await _osQueryService.ExecuteQueriesFromFileAsync(osqueryQueriesFile);
                         data["osquery"] = osqueryResults;
                         _logger.LogInformation("Successfully collected osquery data with {Count} query results", osqueryResults.Count);
+                        _logger.LogInformation("osquery data will be processed by backend to extract system and security information");
                     }
                     else
                     {
@@ -322,7 +319,7 @@ public class DeviceInfoService : IDeviceInfoService
             }
             else
             {
-                _logger.LogInformation("osquery not available, skipping osquery data collection");
+                _logger.LogWarning("osquery not available - system and security data will be limited");
                 data["osquery_available"] = false;
             }
 

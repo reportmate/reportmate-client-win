@@ -202,14 +202,14 @@ public class DataCollectionService : IDataCollectionService
     {
         try
         {
-            _logger.LogInformation("=== COMPREHENSIVE DATA COLLECTION STARTING ===");
-            _logger.LogInformation("Collecting device, system, security, and osquery data...");
+            _logger.LogInformation("=== STREAMLINED DATA COLLECTION STARTING ===");
+            _logger.LogInformation("Collecting device and osquery data (system/security extracted from osquery on backend)...");
 
             var deviceData = await _deviceInfoService.GetComprehensiveDeviceDataAsync();
             
             _logger.LogInformation("Raw data collection completed. Analyzing collected data...");
 
-            // Log detailed collection results
+            // Log detailed collection results for streamlined payload
             if (deviceData.TryGetValue("device", out var deviceInfo))
             {
                 _logger.LogInformation("✅ Device Info: Collected basic device information");
@@ -223,15 +223,8 @@ public class DataCollectionService : IDataCollectionService
                 }
             }
 
-            if (deviceData.TryGetValue("system", out var systemInfo))
-            {
-                _logger.LogInformation("✅ System Info: Collected system information");
-            }
-
-            if (deviceData.TryGetValue("security", out var securityInfo))
-            {
-                _logger.LogInformation("✅ Security Info: Collected security status");
-            }
+            _logger.LogInformation("⚠️  System Info: REMOVED - will be extracted from osquery data on backend");
+            _logger.LogInformation("⚠️  Security Info: REMOVED - will be extracted from osquery data on backend");
 
             if (deviceData.TryGetValue("osquery", out var osqueryInfo))
             {
@@ -243,15 +236,16 @@ public class DataCollectionService : IDataCollectionService
                     {
                         _logger.LogInformation("   - Query: {QueryName}", queryName);
                     }
+                    _logger.LogInformation("   Backend will extract system and security data from these osquery results");
                 }
             }
             else
             {
-                _logger.LogWarning("⚠️  OSQuery Data: No osquery data found");
+                _logger.LogWarning("⚠️  OSQuery Data: No osquery data found - system and security data will be limited");
             }
 
             // Sanitize the device data to ensure it's JSON serializable
-            _logger.LogInformation("Sanitizing data for JSON serialization...");
+            _logger.LogInformation("Sanitizing streamlined data for JSON serialization...");
             var sanitizedData = SanitizeForSerialization(deviceData);
 
             // Add ReportMate client metadata with enhanced info
@@ -262,7 +256,9 @@ public class DataCollectionService : IDataCollectionService
                 { "platform", "windows" },
                 { "collection_time", DateTime.UtcNow.ToString("O") },
                 { "client_type", "windows_cimian" }, // Specify this is for Windows with Cimian support
-                { "managed_installs_system", "Cimian" } // Use Cimian for Windows (vs Munki for Mac)
+                { "managed_installs_system", "Cimian" }, // Use Cimian for Windows (vs Munki for Mac)
+                { "payload_format", "streamlined" }, // Indicate this is the new streamlined format
+                { "data_sources", "device+osquery" } // Indicate what sections are included
             };
 
             // Add environment context with enhanced details
@@ -291,7 +287,8 @@ public class DataCollectionService : IDataCollectionService
                 var dataSizeKB = Math.Round(serialized.Length / 1024.0, 2);
                 
                 _logger.LogInformation("✅ Data collection completed successfully");
-                _logger.LogInformation("📊 Final data size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, serialized.Length);
+                _logger.LogInformation("📊 Final streamlined data size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, serialized.Length);
+                _logger.LogInformation("📋 Payload format: device + osquery (system/security extracted on backend)");
                 
                 if (dataSizeKB > 10000) // Log warning for large payloads
                 {
@@ -304,7 +301,7 @@ public class DataCollectionService : IDataCollectionService
                 _logger.LogInformation("✅ Device data collection completed (size calculation failed)");
             }
 
-            _logger.LogInformation("=== COMPREHENSIVE DATA COLLECTION COMPLETED ===");
+            _logger.LogInformation("=== STREAMLINED DATA COLLECTION COMPLETED ===");
             return sanitizedData;
         }
         catch (Exception ex)
@@ -325,15 +322,9 @@ public class DataCollectionService : IDataCollectionService
                 summary.Add($"Device: {deviceInfo}");
             }
 
-            if (deviceData.TryGetValue("system", out var systemInfo))
-            {
-                summary.Add($"System data collected");
-            }
-
-            if (deviceData.TryGetValue("security", out var securityInfo))
-            {
-                summary.Add($"Security data collected");
-            }
+            // Note: system and security sections removed in streamlined payload
+            summary.Add("System data: extracted from osquery on backend");
+            summary.Add("Security data: extracted from osquery on backend");
 
             if (deviceData.TryGetValue("osquery", out var osqueryInfo))
             {
@@ -345,7 +336,7 @@ public class DataCollectionService : IDataCollectionService
                 summary.Add($"ReportMate client metadata collected");
             }
 
-            _logger.LogInformation("Collection summary: {Summary}", string.Join(", ", summary));
+            _logger.LogInformation("Streamlined collection summary: {Summary}", string.Join(", ", summary));
         }
         catch (Exception ex)
         {
