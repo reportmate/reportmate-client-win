@@ -163,7 +163,13 @@ public class DataCollectionService : IDataCollectionService
                 _logger.LogError("❌ Device Serial: {SerialNumber}", deviceInfo.SerialNumber);
                 _logger.LogError("❌ Device ID: {DeviceId}", deviceInfo.DeviceId);
                 _logger.LogError("❌ Computer Name: {ComputerName}", deviceInfo.ComputerName);
-                _logger.LogError("❌ Data Size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData).Length);
+                
+                // Use source-generated JSON serialization
+                var jsonOptions = new JsonSerializerOptions
+                {
+                    TypeInfoResolver = ReportMateJsonContext.Default
+                };
+                _logger.LogError("❌ Data Size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData, jsonOptions).Length);
                 _logger.LogError("❌ NOTE: Will retry on next run");
                 _logger.LogError("❌ Data collection or transmission failed");
                 _logger.LogError("❌ IMPACT: Device may not be registered or API issues detected");

@@ -284,7 +284,7 @@ public class ApiService : IApiService
                         // Try to parse error response as JSON for additional details
                         try
                         {
-                            var errorResponse = JsonSerializer.Deserialize<Dictionary<string, object>>(errorContent);
+                            var errorResponse = JsonSerializer.Deserialize<Dictionary<string, object>>(errorContent, _jsonOptions);
                             if (errorResponse != null)
                             {
                                 _logger.LogWarning("Parsed Error Response:");
