@@ -400,7 +400,7 @@ public class DataCollectionService : IDataCollectionService
             return value; // Keep the object intact for proper JSON serialization
         }
         
-        if (value is SystemInfo || value is SecurityInfo || value is DiskInfo)
+        if (value is SystemInfo || value is DeviceSecurityInfo || value is DiskInfo)
         {
             _logger.LogDebug("Sanitizing custom model type: {Type}", value.GetType().Name);
             return value; // Keep the object intact for proper JSON serialization
