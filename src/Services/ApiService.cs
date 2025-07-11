@@ -164,8 +164,45 @@ public class ApiService : IApiService
                 deviceInfoPayload["mdmEnrollmentState"] = deviceInfo.MdmEnrollmentState ?? "";
                 deviceInfoPayload["mdmManagementUrl"] = deviceInfo.MdmManagementUrl ?? "";
                 
-                // Don't send the combined OS string - dashboard expects granular fields
-                // deviceInfoPayload["operatingSystem"] = deviceInfo.OperatingSystem ?? "";
+                // Dashboard hardware fields - enhanced specifications for frontend widgets
+                if (!string.IsNullOrEmpty(deviceInfo.Processor))
+                    deviceInfoPayload["processor"] = deviceInfo.Processor;
+                if (deviceInfo.Cores.HasValue)
+                    deviceInfoPayload["cores"] = deviceInfo.Cores.Value;
+                if (!string.IsNullOrEmpty(deviceInfo.Memory))
+                    deviceInfoPayload["memory"] = deviceInfo.Memory;
+                if (!string.IsNullOrEmpty(deviceInfo.AvailableRAM))
+                    deviceInfoPayload["availableRAM"] = deviceInfo.AvailableRAM;
+                if (!string.IsNullOrEmpty(deviceInfo.Storage))
+                    deviceInfoPayload["storage"] = deviceInfo.Storage;
+                if (!string.IsNullOrEmpty(deviceInfo.AvailableStorage))
+                    deviceInfoPayload["availableStorage"] = deviceInfo.AvailableStorage;
+                if (!string.IsNullOrEmpty(deviceInfo.StorageType))
+                    deviceInfoPayload["storageType"] = deviceInfo.StorageType;
+                if (!string.IsNullOrEmpty(deviceInfo.Graphics))
+                    deviceInfoPayload["graphics"] = deviceInfo.Graphics;
+                if (!string.IsNullOrEmpty(deviceInfo.Vram))
+                    deviceInfoPayload["vram"] = deviceInfo.Vram;
+                if (!string.IsNullOrEmpty(deviceInfo.Platform))
+                    deviceInfoPayload["platform"] = deviceInfo.Platform;
+                if (!string.IsNullOrEmpty(deviceInfo.Architecture))
+                    deviceInfoPayload["architecture"] = deviceInfo.Architecture;
+                if (!string.IsNullOrEmpty(deviceInfo.Uptime))
+                    deviceInfoPayload["uptime"] = deviceInfo.Uptime;
+                if (!string.IsNullOrEmpty(deviceInfo.BootTime))
+                    deviceInfoPayload["bootTime"] = deviceInfo.BootTime;
+                if (deviceInfo.DiskUtilization.HasValue)
+                    deviceInfoPayload["diskUtilization"] = deviceInfo.DiskUtilization.Value;
+                if (deviceInfo.MemoryUtilization.HasValue)
+                    deviceInfoPayload["memoryUtilization"] = deviceInfo.MemoryUtilization.Value;
+                if (!string.IsNullOrEmpty(deviceInfo.BatteryLevel))
+                    deviceInfoPayload["batteryLevel"] = deviceInfo.BatteryLevel;
+                if (!string.IsNullOrEmpty(deviceInfo.Status))
+                    deviceInfoPayload["status"] = deviceInfo.Status;
+                if (deviceInfo.TotalEvents > 0)
+                    deviceInfoPayload["totalEvents"] = deviceInfo.TotalEvents;
+                if (deviceInfo.LastEventTime != default)
+                    deviceInfoPayload["lastEventTime"] = deviceInfo.LastEventTime.ToString("O");
             }
             
             var payload = new Dictionary<string, object>
