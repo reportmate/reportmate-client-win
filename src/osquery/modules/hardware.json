@@ -1,0 +1,52 @@
+{
+  "module": "hardware",
+  "version": "1.0.0",
+  "description": "Physical device hardware information collection",
+  "queries": {
+    "system_info": {
+      "query": "SELECT hostname, computer_name, hardware_serial, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory, cpu_subtype FROM system_info;",
+      "interval": 3600,
+      "description": "Basic system information including CPU and memory"
+    },
+    "processor_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\ProcessorNameString';",
+      "interval": 3600,
+      "description": "Enhanced processor name from registry"
+    },
+    "cpu_name_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0' AND name = 'ProcessorNameString';",
+      "interval": 3600,
+      "description": "CPU name from registry alternative path"
+    },
+    "processor_all_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\%\\ProcessorNameString';",
+      "interval": 3600,
+      "description": "All processor names from registry"
+    },
+    "graphics_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverDesc';",
+      "interval": 3600,
+      "description": "Graphics card information from registry"
+    },
+    "graphics_detailed": {
+      "query": "SELECT name, type, data FROM registry WHERE key LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%' AND name IN ('DriverDesc', 'HardwareInformation.AdapterString', 'Device Description');",
+      "interval": 3600,
+      "description": "Detailed graphics information from multiple registry sources"
+    },
+    "wmi_computersystem": {
+      "query": "SELECT hostname as Name, hardware_vendor as Manufacturer, hardware_model as Model, physical_memory as TotalPhysicalMemory, cpu_physical_cores as NumberOfProcessors, cpu_logical_cores as NumberOfLogicalProcessors FROM system_info;",
+      "interval": 3600,
+      "description": "Computer system information via system_info table"
+    },
+    "wmi_bios": {
+      "query": "SELECT MAX(CASE WHEN name = 'SerialNumber' THEN value END) as SerialNumber, MAX(CASE WHEN name = 'Manufacturer' THEN value END) as Manufacturer, MAX(CASE WHEN name = 'SMBIOSBIOSVersion' THEN value END) as SMBIOSBIOSVersion, MAX(CASE WHEN name = 'ReleaseDate' THEN value END) as ReleaseDate FROM wmi_bios_info WHERE name IN ('SerialNumber', 'Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate');",
+      "interval": 3600,
+      "description": "BIOS information including serial number"
+    },
+    "wmi_processor": {
+      "query": "SELECT cpu_brand as Name, cpu_brand as Description, '' as MaxClockSpeed, cpu_physical_cores as NumberOfCores, cpu_logical_cores as NumberOfLogicalProcessors, cpu_subtype as Architecture FROM system_info;",
+      "interval": 3600,
+      "description": "Detailed processor information via system_info"
+    }
+  }
+}

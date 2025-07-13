@@ -1,0 +1,32 @@
+{
+  "module": "installs",
+  "version": "1.0.0",
+  "description": "Managed software installation and deployment system logs",
+  "queries": {
+    "cimian_install_history": {
+      "query": "SELECT name, version, install_date, install_location, uninstall_string FROM programs WHERE publisher LIKE '%Cimian%' OR name LIKE '%Cimian%';",
+      "interval": 3600,
+      "description": "Cimian managed software installations"
+    },
+    "recent_installs": {
+      "query": "SELECT name, version, install_date, install_location, publisher FROM programs WHERE install_date >= date('now', '-30 days') AND install_date != '';",
+      "interval": 3600,
+      "description": "Recent software installations (last 30 days)"
+    },
+    "software_deployments": {
+      "query": "SELECT name, path, cmdline, start_time FROM processes WHERE name LIKE '%installer%' OR name LIKE '%setup%' OR name LIKE '%deploy%';",
+      "interval": 600,
+      "description": "Active software deployment processes"
+    },
+    "managed_installs_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\%' AND name = 'DisplayName' AND data != '';",
+      "interval": 3600,
+      "description": "Installed software from Windows registry"
+    },
+    "deployment_logs": {
+      "query": "SELECT datetime, source, data FROM windows_events WHERE source LIKE '%MSI%' OR source LIKE '%install%' OR source LIKE '%deploy%' AND datetime > datetime('now', '-24 hours');",
+      "interval": 3600,
+      "description": "Recent installation and deployment events"
+    }
+  }
+}
