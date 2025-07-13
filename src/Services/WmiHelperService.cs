@@ -270,7 +270,6 @@ public class WmiHelperService : IWmiHelperService
             if (process.ExitCode == 0)
             {
                 var result = output.Trim();
-                _logger.LogDebug("PowerShell command successful, output: {Output}", result);
                 return string.IsNullOrEmpty(result) ? null : result;
             }
             else

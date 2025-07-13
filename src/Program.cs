@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Services;
+using ReportMate.WindowsClient.Services.Modules;
 using ReportMate.WindowsClient.Configuration;
 using System.CommandLine;
 using System.CommandLine.Builder;
@@ -74,6 +75,7 @@ public class Program
             if (isVerbose)
             {
                 Logger.SetVerboseLevel(verboseLevel);
+                ConsoleFormatter.SetVerboseMode(verboseLevel >= 2); // Enable for INFO level and above
                 Logger.Section("ReportMate Windows Client", "Verbose logging enabled");
                 Logger.Info("Version: {0}", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown");
                 Logger.Info("Arguments: {0}", string.Join(" ", args));
@@ -127,6 +129,7 @@ public class Program
             if (isVerbose)
             {
                 Logger.SetVerboseLevel(verboseLevel);
+                ConsoleFormatter.SetVerboseMode(verboseLevel >= 2); // Enable for INFO level and above
                 Logger.Error("FATAL ERROR: {0}", ex.Message);
                 if (verboseLevel >= 3)
                 {
@@ -457,6 +460,18 @@ public class Program
         // Register modular services
         services.AddScoped<ModularOsQueryService>();
         services.AddScoped<IModularDataCollectionService, ModularDataCollectionService>();
+        
+        // Register module processors
+        services.AddScoped<IModuleProcessorFactory, ModuleProcessorFactory>();
+        services.AddScoped<ApplicationsModuleProcessor>();
+        services.AddScoped<HardwareModuleProcessor>();
+        services.AddScoped<InventoryModuleProcessor>();
+        services.AddScoped<InstallsModuleProcessor>();
+        services.AddScoped<ManagementModuleProcessor>();
+        services.AddScoped<NetworkModuleProcessor>();
+        services.AddScoped<ProfilesModuleProcessor>();
+        services.AddScoped<SecurityModuleProcessor>();
+        services.AddScoped<SystemModuleProcessor>();
 
         return services.BuildServiceProvider();
     }
@@ -544,6 +559,7 @@ public class Program
         {
             // Set enhanced logger verbose level
             Logger.SetVerboseLevel(verbose);
+            ConsoleFormatter.SetVerboseMode(verbose >= 2); // Enable for INFO level and above
             
             if (verbose > 0)
             {
@@ -626,6 +642,7 @@ public class Program
         {
             // Set enhanced logger verbose level
             Logger.SetVerboseLevel(verbose);
+            ConsoleFormatter.SetVerboseMode(verbose >= 2); // Enable for INFO level and above
             
             if (verbose > 0)
             {
