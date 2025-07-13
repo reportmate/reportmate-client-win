@@ -30,7 +30,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             _logger.LogDebug("Processing Inventory module for device {DeviceId}", deviceId);
 
             // Debug: Log all available query keys
-            _logger.LogInformation("Available osquery result keys: {Keys}", string.Join(", ", osqueryResults.Keys));
+            _logger.LogDebug("Available osquery result keys: {Keys}", string.Join(", ", osqueryResults.Keys));
             
             var data = new InventoryData
             {

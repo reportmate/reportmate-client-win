@@ -98,6 +98,20 @@ public class DataCollectionService : IDataCollectionService
             _logger.LogInformation("Domain: {Domain}", domain);
             _logger.LogInformation("Expected Dashboard URL: /device/{SerialNumber}", serialNumber);
 
+            _logger.LogInformation("Modular data collection completed successfully");
+
+            // Check if we should skip registration and transmission (stop here for --collect-only)
+            if (collectOnly)
+            {
+                _logger.LogInformation("=== COLLECT-ONLY MODE ===");
+                _logger.LogInformation("Data transmission SKIPPED (--collect-only flag specified)");
+                _logger.LogInformation("Data collection completed successfully without transmission");
+                _logger.LogInformation("Data saved to cache files only");
+                _logger.LogInformation(" To transmit data, run without --collect-only flag");
+                await _configurationService.UpdateLastRunTimeAsync();
+                return true;
+            }
+
             // CRITICAL: DEVICE REGISTRATION CHECK AND AUTO-REGISTRATION
             // Check if device is registered, if not, register it via "new_client" event
             _logger.LogInformation("=== STEP 3: DEVICE REGISTRATION CHECK ===");
@@ -148,22 +162,9 @@ public class DataCollectionService : IDataCollectionService
             // Reuse the modular payload from device identification step (no need to collect again)
             var modularPayload = deviceModularPayload;
             
-            _logger.LogInformation("Modular data collection completed successfully");
             _logger.LogInformation("Device ID: {DeviceId}", modularPayload.DeviceId);
             _logger.LogInformation(" Collection Time: {CollectedAt:yyyy-MM-dd HH:mm:ss}", modularPayload.CollectedAt);
             _logger.LogInformation("Individual module cache files created in C:\\ProgramData\\ManagedReports\\cache\\");
-
-            // Check if we should skip transmission
-            if (collectOnly)
-            {
-                _logger.LogInformation("=== COLLECT-ONLY MODE ===");
-                _logger.LogInformation("Data transmission SKIPPED (--collect-only flag specified)");
-                _logger.LogInformation("Data collection completed successfully without transmission");
-                _logger.LogInformation("Data saved to cache files only");
-                _logger.LogInformation(" To transmit data, run without --collect-only flag");
-                await _configurationService.UpdateLastRunTimeAsync();
-                return true;
-            }
 
             // Send to API
             _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");

@@ -5,7 +5,7 @@ using System.IO;
 using System.Threading.Tasks;
 using ReportMate.WindowsClient.Models.Modules;
 
-namespace ReportMate.WindowsClient.Services.Modules
+namespace ReportMate.WindowsClient.Services
 {
     /// <summary>
     /// Base interface for all module data processors

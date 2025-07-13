@@ -70,7 +70,7 @@
       "description": "Windows install date from registry"
     },
     "locale_info": {
-      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Language\\Default' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation\\TimeZoneKeyName' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Locale\\InstallLanguage';",
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Language\\Default' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation\\TimeZoneKeyName' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Locale\\InstallLanguage' OR path = 'HKEY_CURRENT_USER\\Control Panel\\International\\LocaleName' OR path = 'HKEY_CURRENT_USER\\Control Panel\\International\\sLanguage';",
       "interval": 3600,
       "description": "System locale and timezone from registry"
     },
@@ -93,6 +93,16 @@
       "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\DisplayVersion' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ReleaseId';",
       "interval": 3600,
       "description": "Windows display version (24H2, 23H2, etc.)"
+    },
+    "keyboard_layouts": {
+      "query": "WITH user_sid AS (SELECT registry_hive FROM logged_in_users WHERE type = 'active' AND user != '' LIMIT 1) SELECT r.name, r.type, r.data FROM registry r, user_sid u WHERE r.path LIKE u.registry_hive || '\\Keyboard Layout\\Preload\\%';",
+      "interval": 3600,
+      "description": "User keyboard layout preferences - only preloaded layouts for the currently logged in user"
+    },
+    "active_keyboard_layout": {
+      "query": "WITH user_sid AS (SELECT registry_hive FROM logged_in_users WHERE type = 'active' AND user != '' LIMIT 1) SELECT r.name, r.type, r.data FROM registry r, user_sid u WHERE r.path = u.registry_hive || '\\Keyboard Layout\\Toggle\\Layout Hotkey';",
+      "interval": 300,
+      "description": "Active keyboard layout hotkey setting for the currently logged in user"
     }
   }
 }

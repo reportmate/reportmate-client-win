@@ -59,7 +59,13 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Edition { get; set; } = string.Empty;
         
         [JsonPropertyOrder(13)]
-        public string ServicePack { get; set; } = string.Empty;
+        public string FeatureUpdate { get; set; } = string.Empty;
+        
+        [JsonPropertyOrder(14)]
+        public List<string> KeyboardLayouts { get; set; } = new();
+        
+        [JsonPropertyOrder(15)]
+        public string ActiveKeyboardLayout { get; set; } = string.Empty;
     }
 
     public class SystemUpdate

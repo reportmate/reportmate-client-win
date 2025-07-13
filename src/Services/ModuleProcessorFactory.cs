@@ -8,8 +8,9 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
+using ReportMate.WindowsClient.Services.Modules;
 
-namespace ReportMate.WindowsClient.Services.Modules
+namespace ReportMate.WindowsClient.Services
 {
     /// <summary>
     /// Factory for creating module processors
