@@ -143,8 +143,129 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         private Task ProcessLegacyMdmDataAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
         {
-            // Placeholder for legacy MDM data processing
-            _logger.LogDebug("Processing legacy MDM data from osquery results");
+            _logger.LogDebug("Processing MDM data from osquery results");
+
+            // Process MDM enrollment information from registry
+            if (osqueryResults.TryGetValue("mdm_enrollment", out var mdmEnrollment))
+            {
+                foreach (var entry in mdmEnrollment)
+                {
+                    var name = GetStringValue(entry, "name");
+                    var regData = GetStringValue(entry, "data");
+                    
+                    switch (name)
+                    {
+                        case "ProviderID":
+                            data.TenantDetails.TenantId = regData;
+                            break;
+                        case "UPN":
+                            data.MdmEnrollment.UserPrincipalName = regData;
+                            break;
+                        case "EnrollmentState":
+                            // Update device state based on enrollment status
+                            if (int.TryParse(regData, out var enrollmentState) && enrollmentState > 0)
+                            {
+                                data.DeviceState.EnterpriseJoined = true;
+                                data.MdmEnrollment.IsEnrolled = true;
+                            }
+                            break;
+                    }
+                }
+            }
+
+            // Process Intune-specific enrollment details
+            if (osqueryResults.TryGetValue("intune_enrollment", out var intuneEnrollment))
+            {
+                foreach (var entry in intuneEnrollment)
+                {
+                    var name = GetStringValue(entry, "name");
+                    var regData = GetStringValue(entry, "data");
+                    
+                    switch (name)
+                    {
+                        case "DiscoveryServiceFullURL":
+                            data.TenantDetails.MdmUrl = regData;
+                            break;
+                        case "EnrollmentServiceFullURL":
+                            data.TenantDetails.DeviceManagementSrvUrl = regData;
+                            break;
+                        case "PolicyServiceFullURL":
+                            data.TenantDetails.MdmComplianceUrl = regData;
+                            break;
+                    }
+                }
+            }
+
+            // Process device management server information
+            if (osqueryResults.TryGetValue("device_management_info", out var deviceMgmtInfo))
+            {
+                foreach (var entry in deviceMgmtInfo)
+                {
+                    var name = GetStringValue(entry, "name");
+                    var regData = GetStringValue(entry, "data");
+                    
+                    switch (name)
+                    {
+                        case "ServerURL":
+                            data.MdmEnrollment.ServerUrl = regData;
+                            break;
+                        case "UserName":
+                            if (string.IsNullOrEmpty(data.MdmEnrollment.UserPrincipalName))
+                            {
+                                data.MdmEnrollment.UserPrincipalName = regData;
+                            }
+                            break;
+                    }
+                }
+            }
+
+            // Process management certificates - store in metadata for now
+            if (osqueryResults.TryGetValue("management_certificates", out var mgmtCerts))
+            {
+                var certificateList = new List<Dictionary<string, object>>();
+                foreach (var cert in mgmtCerts)
+                {
+                    var certificate = new Dictionary<string, object>
+                    {
+                        ["Subject"] = GetStringValue(cert, "subject"),
+                        ["Issuer"] = GetStringValue(cert, "issuer"),
+                        ["SigningAlgorithm"] = GetStringValue(cert, "signing_algorithm")
+                    };
+
+                    var notValidAfterStr = GetStringValue(cert, "not_valid_after");
+                    if (!string.IsNullOrEmpty(notValidAfterStr) && long.TryParse(notValidAfterStr, out var notValidAfterUnix))
+                    {
+                        certificate["NotValidAfter"] = DateTimeOffset.FromUnixTimeSeconds(notValidAfterUnix).DateTime;
+                    }
+
+                    var notValidBeforeStr = GetStringValue(cert, "not_valid_before");
+                    if (!string.IsNullOrEmpty(notValidBeforeStr) && long.TryParse(notValidBeforeStr, out var notValidBeforeUnix))
+                    {
+                        certificate["NotValidBefore"] = DateTimeOffset.FromUnixTimeSeconds(notValidBeforeUnix).DateTime;
+                    }
+
+                    certificateList.Add(certificate);
+                }
+                data.Metadata["Certificates"] = certificateList;
+            }
+
+            // Process compliance information
+            if (osqueryResults.TryGetValue("device_compliance", out var compliance))
+            {
+                foreach (var entry in compliance)
+                {
+                    var name = GetStringValue(entry, "name");
+                    var regData = GetStringValue(entry, "data");
+                    
+                    if (name.Contains("Compliance") && !string.IsNullOrEmpty(regData))
+                    {
+                        // Store compliance status in metadata
+                        data.Metadata["ComplianceStatus"] = regData;
+                    }
+                }
+            }
+
+            _logger.LogDebug("Processed MDM data from osquery - Metadata entries: {MetadataCount}", data.Metadata.Count);
             return Task.CompletedTask;
         }
 
