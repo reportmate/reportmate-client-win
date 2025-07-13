@@ -48,6 +48,9 @@
 
 .PARAMETER Thumbprint
     Override auto-detection with specific certificate thumbprint
+
+.PARAMETER Install
+    Automatically install the built NUPKG package using chocolatey (requires admin privileges)
     
 .EXAMPLE
     .\build.ps1
@@ -92,6 +95,7 @@ param(
     [switch]$Verbose = $false,
     [switch]$Sign,
     [switch]$NoSign,
+    [switch]$Install = $false,
     [string]$Thumbprint
 )
 
@@ -517,7 +521,30 @@ $versionContent | Out-File "$ProgramFilesPayloadDir/version.txt" -Encoding UTF8
 
 # Copy configuration files to ProgramData
 Copy-Item "$SrcDir/appsettings.yaml" $ProgramDataPayloadDir -Force
-Copy-Item "$SrcDir/osquery-queries.json" "$ProgramDataPayloadDir/queries.json" -Force
+
+# Copy modular osquery configuration from source (single source of truth)
+$osquerySourceDir = "$SrcDir/osquery"
+$osqueryTargetDir = "$ProgramDataPayloadDir/osquery"
+
+# Always ensure target directory is clean first
+if (Test-Path $osqueryTargetDir) {
+    Remove-Item $osqueryTargetDir -Recurse -Force
+    Write-Verbose "Cleaned existing osquery target directory"
+}
+
+if (Test-Path $osquerySourceDir) {
+    Write-Step "📋 Copying modular osquery configuration from src..."
+    Copy-Item $osquerySourceDir $ProgramDataPayloadDir -Recurse -Force
+    Write-Success "Modular osquery configuration copied from single source of truth"
+} else {
+    Write-Warning "Modular osquery directory not found at: $osquerySourceDir"
+    # Fallback to unified file if modular not available
+    if (Test-Path "$SrcDir/osquery-unified.json") {
+        Write-Verbose "Fallback: Copying unified osquery configuration..."
+        Copy-Item "$SrcDir/osquery-unified.json" "$ProgramDataPayloadDir/osquery-unified.json" -Force
+    }
+}
+
 Copy-Item "$SrcDir/appsettings.yaml" "$ProgramDataPayloadDir/appsettings.template.yaml" -Force
 Write-Verbose "Copied configuration files to ProgramData payload"
 
@@ -649,6 +676,13 @@ if (-not $SkipNUPKG) {
             Write-Error "NUPKG creation failed: $_"
         } finally {
             Pop-Location
+            
+            # Clean up copied osquery files to prevent drift
+            if (Test-Path "$ProgramDataPayloadDir/osquery") {
+                Write-Verbose "🧹 Cleaning up copied osquery files from payload directory..."
+                Remove-Item "$ProgramDataPayloadDir/osquery" -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Verbose "Osquery files cleaned - maintaining single source of truth in src/"
+            }
         }
     }
 } else {
@@ -863,6 +897,47 @@ if ($CreateTag -and $gitFound) {
 
 if ($CreateRelease -and $ghFound) {
     Write-Info "7. GitHub release created: $Version"
+}
+
+# Install the package if requested
+if ($Install) {
+    Write-Step "Installing ReportMate package..."
+    
+    $nupkgPath = "$OutputDir/ReportMate-$Version.nupkg"
+    if (Test-Path $nupkgPath) {
+        try {
+            # Check if running as administrator
+            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
+            
+            if (-not $isAdmin) {
+                Write-Warning "Installation requires administrator privileges. Attempting to elevate..."
+                
+                # Construct the command to run with elevation
+                $installCmd = "choco install `"$nupkgPath`" --source=. --force --yes"
+                
+                # Start elevated process
+                Start-Process powershell -ArgumentList "-Command", $installCmd -Verb RunAs -Wait
+                
+                Write-Success "Installation command executed with elevation"
+            } else {
+                # Already running as admin, install directly
+                Write-Verbose "Installing with chocolatey: $nupkgPath"
+                choco install "$nupkgPath" --source=. --force --yes
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "ReportMate package installed successfully"
+                } else {
+                    Write-Error "Package installation failed with exit code: $LASTEXITCODE"
+                }
+            }
+        } catch {
+            Write-Error "Failed to install package: $_"
+            Write-Info "Manual installation: choco install `"$nupkgPath`" --source=. --force --yes"
+        }
+    } else {
+        Write-Error "NUPKG file not found: $nupkgPath"
+        Write-Info "Make sure the package was built successfully"
+    }
 }
 
 Write-Output ""

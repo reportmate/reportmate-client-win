@@ -79,7 +79,15 @@ After deployment, files are organized following Windows conventions:
 
 - `appsettings.yaml` - Active configuration file (editable)
 - `appsettings.template.yaml` - Enterprise template configuration (CSP/OMA-URI manageable)
-- `queries.json` - OSQuery definitions for data collection
+- `osquery/` - Modular osquery configuration directory
+  - `enabled-modules.json` - Module configuration
+  - `modules/` - Individual module query files
+    - `hardware.json` - Hardware detection queries
+    - `system.json` - OS and system queries
+    - `network.json` - Network configuration queries
+    - `security.json` - Security feature queries
+    - `applications.json` - Software inventory queries
+    - `inventory.json` - Device identification queries
 - Cache and log files (created at runtime)
 
 ### Cimian Integration (`C:\Program Files\Cimian\`)
