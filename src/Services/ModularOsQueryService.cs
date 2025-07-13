@@ -114,7 +114,7 @@ namespace ReportMate.WindowsClient.Services
                     foreach (var query in module.Queries)
                     {
                         combinedQueries[query.Key] = query.Value;
-                        _logger.LogInformation($"     Added query: {query.Key}");
+                        _logger.LogDebug($"     Added query: {query.Key}");
                     }
                 }
                 else

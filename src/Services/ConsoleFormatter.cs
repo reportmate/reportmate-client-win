@@ -194,7 +194,7 @@ namespace ReportMate.WindowsClient.Services
             var filled = (int)(percentage / 100 * width);
             var empty = width - filled;
             
-            return $"[{new string('#', filled)}{new string('.', empty)}]";
+            return $"[{new string('█', filled)}{new string('░', empty)}]";
         }
     }
 
