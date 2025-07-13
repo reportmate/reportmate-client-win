@@ -1,0 +1,32 @@
+{
+  "module": "security",
+  "version": "1.0.0",
+  "description": "Security features and protection status",
+  "queries": {
+    "windows_security_center": {
+      "query": "SELECT * FROM windows_security_center;",
+      "interval": 600,
+      "description": "Windows Security Center status"
+    },
+    "windows_security_products": {
+      "query": "SELECT type, name, state FROM windows_security_products;",
+      "interval": 600,
+      "description": "Security products information"
+    },
+    "bitlocker_info": {
+      "query": "SELECT device_id, drive_letter, conversion_status, lock_status, encryption_method, version FROM bitlocker_info;",
+      "interval": 3600,
+      "description": "BitLocker encryption status"
+    },
+    "tpm_info": {
+      "query": "SELECT activated, enabled, owned, manufacturer_version, manufacturer_id FROM tpm_info;",
+      "interval": 3600,
+      "description": "TPM (Trusted Platform Module) information"
+    },
+    "certificates": {
+      "query": "SELECT common_name, issuer, self_signed, not_valid_before, not_valid_after, signing_algorithm, key_algorithm, subject FROM certificates WHERE store_location = 'LocalMachine' AND store = 'My';",
+      "interval": 3600,
+      "description": "System certificates"
+    }
+  }
+}

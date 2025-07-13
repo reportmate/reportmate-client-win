@@ -1,0 +1,37 @@
+{
+  "module": "management",
+  "version": "1.0.0", 
+  "description": "Mobile Device Management (MDM) and device ownership information",
+  "queries": {
+    "mdm_enrollment": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\' AND name IN ('ProviderID', 'UPN', 'EnrollmentState', 'AADResourceID');",
+      "interval": 3600,
+      "description": "MDM enrollment status and details"
+    },
+    "device_management_info": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Provisioning\\OMADM\\Accounts\\%' AND name IN ('ServerURL', 'UserName', 'AuthPolicy');",
+      "interval": 3600,
+      "description": "Device management server configuration"
+    },
+    "intune_enrollment": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\%' AND name IN ('DiscoveryServiceFullURL', 'EnrollmentServiceFullURL', 'PolicyServiceFullURL');",
+      "interval": 3600,
+      "description": "Microsoft Intune enrollment URLs and services"
+    },
+    "device_compliance": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MDM\\%' AND name LIKE '%Compliance%';",
+      "interval": 1800,
+      "description": "Device compliance policy status"
+    },
+    "management_certificates": {
+      "query": "SELECT subject, issuer, not_valid_after, not_valid_before, signing_algorithm FROM certificates WHERE store_location = 'LocalMachine' AND (subject LIKE '%MDM%' OR subject LIKE '%Intune%' OR issuer LIKE '%Microsoft%');",
+      "interval": 3600,
+      "description": "Management-related certificates"
+    },
+    "domain_join_info": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\History\\' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters';",
+      "interval": 3600,
+      "description": "Domain join and group policy information"
+    }
+  }
+}

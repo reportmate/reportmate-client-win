@@ -1,0 +1,52 @@
+{
+  "module": "profiles", 
+  "version": "1.0.0",
+  "description": "Configuration profiles, policies, and CSP/GPO settings",
+  "queries": {
+    "group_policy_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Group Policy settings from registry"
+    },
+    "mdm_configuration_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\%' AND name != '';",
+      "interval": 3600,
+      "description": "MDM configuration service provider (CSP) policies"
+    },
+    "windows_defender_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Windows Defender security policies"
+    },
+    "firewall_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Windows Firewall policy configuration"
+    },
+    "update_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Windows Update policy settings"
+    },
+    "bitlocker_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\FVE\\%' AND data != '';",
+      "interval": 3600,
+      "description": "BitLocker encryption policy settings"
+    },
+    "user_account_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\%' AND data != '';",
+      "interval": 3600,
+      "description": "User account control and security policies"
+    },
+    "power_management_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Power\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Power management policy configuration"
+    },
+    "edge_browser_policies": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Microsoft Edge browser policy settings"
+    }
+  }
+}

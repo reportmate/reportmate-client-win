@@ -1,0 +1,17 @@
+{
+  "module": "network",
+  "version": "1.0.0",
+  "description": "Network connectivity and configuration information",
+  "queries": {
+    "interface_addresses": {
+      "query": "SELECT interface, address, mask, broadcast FROM interface_addresses WHERE address NOT LIKE '169.254.%' AND address NOT LIKE '127.%' AND interface NOT LIKE '%Loopback%';",
+      "interval": 600,
+      "description": "Network interface IP addresses"
+    },
+    "interface_details": {
+      "query": "SELECT interface, mac, mtu, type, flags FROM interface_details WHERE interface NOT LIKE '%Loopback%' AND mac != '';",
+      "interval": 600,
+      "description": "Network interface details including MAC addresses"
+    }
+  }
+}
