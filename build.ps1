@@ -452,7 +452,7 @@ if (-not $SkipBuild) {
     $content = $content -replace '<AssemblyVersion>.*?</AssemblyVersion>', "<AssemblyVersion>$assemblyVersion</AssemblyVersion>"
     $content = $content -replace '<FileVersion>.*?</FileVersion>', "<FileVersion>$assemblyVersion</FileVersion>"
     # Remove any trailing newlines and add exactly one
-    $content = $content.TrimEnd("`r`n", "`n") + "`n"
+    $content = $content.TrimEnd(@("`r", "`n")) + "`n"
     Set-Content $csprojPath $content -Encoding UTF8 -NoNewline
     
     Write-Info "Updated assembly version to: $assemblyVersion"
@@ -598,7 +598,7 @@ if (Test-Path $buildInfoPath) {
     $content = Get-Content $buildInfoPath -Raw
     $content = $content -replace 'version: ".*?"', "version: `"$Version`""
     # Remove any trailing newlines and add exactly one
-    $content = $content.TrimEnd("`r`n", "`n") + "`n"
+    $content = $content.TrimEnd(@("`r", "`n")) + "`n"
     Set-Content $buildInfoPath $content -Encoding UTF8 -NoNewline
     Write-Verbose "Updated build-info.yaml version"
 }
