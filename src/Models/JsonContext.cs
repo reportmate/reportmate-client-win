@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using ReportMate.WindowsClient.Models;
+using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services;
 using ReportMate.WindowsClient.DataProcessing;
 
@@ -56,19 +57,19 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(SecurityData), TypeInfoPropertyName = "ModularSecurityData")]
 [JsonSerializable(typeof(SystemData))]
 // Individual modular model types (to resolve conflicts)
-[JsonSerializable(typeof(Models.ProcessorInfo), TypeInfoPropertyName = "ModularProcessorInfo")]
-[JsonSerializable(typeof(Models.MemoryInfo), TypeInfoPropertyName = "ModularMemoryInfo")]
-[JsonSerializable(typeof(Models.OperatingSystemInfo), TypeInfoPropertyName = "ModularOperatingSystemInfo")]
-[JsonSerializable(typeof(Models.InstalledApplication), TypeInfoPropertyName = "ModularInstalledApplication")]
-[JsonSerializable(typeof(Models.NetworkInterface), TypeInfoPropertyName = "ModularNetworkInterface")]
-[JsonSerializable(typeof(Models.WifiNetwork), TypeInfoPropertyName = "ModularWifiNetwork")]
-[JsonSerializable(typeof(Models.ListeningPort), TypeInfoPropertyName = "ModularListeningPort")]
+[JsonSerializable(typeof(Modules.ProcessorInfo), TypeInfoPropertyName = "ModularProcessorInfo")]
+[JsonSerializable(typeof(Modules.MemoryInfo), TypeInfoPropertyName = "ModularMemoryInfo")]
+[JsonSerializable(typeof(Modules.OperatingSystemInfo), TypeInfoPropertyName = "ModularOperatingSystemInfo")]
+[JsonSerializable(typeof(Modules.InstalledApplication), TypeInfoPropertyName = "ModularInstalledApplication")]
+[JsonSerializable(typeof(Modules.NetworkInterface), TypeInfoPropertyName = "ModularNetworkInterface")]
+[JsonSerializable(typeof(Modules.WifiNetwork), TypeInfoPropertyName = "ModularWifiNetwork")]
+[JsonSerializable(typeof(Modules.ListeningPort), TypeInfoPropertyName = "ModularListeningPort")]
 
-[JsonSerializable(typeof(Models.BitLockerInfo), TypeInfoPropertyName = "ModularBitLockerInfo")]
-[JsonSerializable(typeof(List<Models.InstalledApplication>), TypeInfoPropertyName = "ModularInstalledApplicationList")]
-[JsonSerializable(typeof(List<Models.NetworkInterface>), TypeInfoPropertyName = "ModularNetworkInterfaceList")]
-[JsonSerializable(typeof(List<Models.WifiNetwork>), TypeInfoPropertyName = "ModularWifiNetworkList")]
-[JsonSerializable(typeof(List<Models.ListeningPort>), TypeInfoPropertyName = "ModularListeningPortList")]
+[JsonSerializable(typeof(Modules.BitLockerInfo), TypeInfoPropertyName = "ModularBitLockerInfo")]
+[JsonSerializable(typeof(List<Modules.InstalledApplication>), TypeInfoPropertyName = "ModularInstalledApplicationList")]
+[JsonSerializable(typeof(List<Modules.NetworkInterface>), TypeInfoPropertyName = "ModularNetworkInterfaceList")]
+[JsonSerializable(typeof(List<Modules.WifiNetwork>), TypeInfoPropertyName = "ModularWifiNetworkList")]
+[JsonSerializable(typeof(List<Modules.ListeningPort>), TypeInfoPropertyName = "ModularListeningPortList")]
 // Modular osquery types
 [JsonSerializable(typeof(Services.EnabledModulesConfig))]
 [JsonSerializable(typeof(Services.OsQueryModule))]
