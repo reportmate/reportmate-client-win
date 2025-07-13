@@ -21,7 +21,7 @@ namespace ReportMate.WindowsClient;
 
 /// <summary>
 /// ReportMate - Collects device data using osquery and sends to ReportMate API
-/// Designed to run as a postflight script after Cimian managed software updates
+/// Designed to run as a postflight script after managed software updates
 /// </summary>
 public class Program
 {
@@ -48,7 +48,8 @@ public class Program
         try
         {
             // Check for verbose flag early to enable console output
-            var isVerbose = args.Contains("--verbose") || args.Contains("-v");
+            var verboseLevel = GetVerboseLevelFromArgs(args);
+            var isVerbose = verboseLevel > 0;
             
             // Handle console attachment for verbose mode
             if (isVerbose)
@@ -69,27 +70,28 @@ public class Program
                 }
             }
             
-            // Initialize enhanced console formatter for verbose mode
+            // Initialize enhanced logging for verbose mode
             if (isVerbose)
             {
-                ConsoleFormatter.SetVerboseMode(true);
-                ConsoleFormatter.WriteHeader("ReportMate Windows Client");
-                ConsoleFormatter.WriteKeyValue("Version", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
-                ConsoleFormatter.WriteKeyValue("Arguments", string.Join(" ", args));
-                ConsoleFormatter.WriteKeyValue("Verbose Mode", "Enabled");
-                ConsoleFormatter.WriteKeyValue("Platform", Environment.OSVersion.VersionString);
+                Logger.SetVerboseLevel(verboseLevel);
+                Logger.Section("ReportMate Windows Client", "Verbose logging enabled");
+                Logger.Info("Version: {0}", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown");
+                Logger.Info("Arguments: {0}", string.Join(" ", args));
+                Logger.Info("Verbose Level: {0} ({1})", verboseLevel, GetVerboseLevelName(verboseLevel));
+                Logger.Info("Platform: {0}", Environment.OSVersion.VersionString);
+                Logger.Debug("Logger initialized with level {0}", verboseLevel);
             }
             
             // Build configuration from multiple sources
-            var configuration = BuildConfiguration(isVerbose);
+            var configuration = BuildConfiguration(verboseLevel);
             
             if (isVerbose)
             {
-                ConsoleFormatter.WriteSuccess("Configuration built successfully");
+                Logger.Info("Configuration built successfully");
             }
             
             // Setup dependency injection with verbose flag
-            _serviceProvider = ConfigureServices(configuration, isVerbose);
+            _serviceProvider = ConfigureServices(configuration, verboseLevel);
             _logger = _serviceProvider.GetRequiredService<ILogger<Program>>();
 
             _logger.LogInformation("ReportMate v{Version} starting", 
@@ -101,6 +103,9 @@ public class Program
             // Create and configure command line interface
             var rootCommand = ConfigureCommandLine();
             
+            // Preprocess arguments to convert -v, -vv, -vvv to --verbose=N format
+            var processedArgs = PreprocessVerboseArgs(args);
+            
             // Parse and execute commands
             var commandLineBuilder = new CommandLineBuilder(rootCommand)
                 .UseDefaults()
@@ -111,17 +116,22 @@ public class Program
                 });
 
             var parser = commandLineBuilder.Build();
-            return await parser.InvokeAsync(args);
+            return await parser.InvokeAsync(processedArgs);
         }
         catch (Exception ex)
         {
             // Handle console output for errors in verbose mode
-            var isVerbose = args.Contains("--verbose") || args.Contains("-v");
+            var verboseLevel = GetVerboseLevelFromArgs(args);
+            var isVerbose = verboseLevel > 0;
             
             if (isVerbose)
             {
-                Console.WriteLine($"FATAL ERROR: {ex.Message}");
-                Console.WriteLine($"Stack Trace: {ex.StackTrace}");
+                Logger.SetVerboseLevel(verboseLevel);
+                Logger.Error("FATAL ERROR: {0}", ex.Message);
+                if (verboseLevel >= 3)
+                {
+                    Logger.Debug("Stack Trace: {0}", ex.StackTrace ?? "No stack trace available");
+                }
             }
             
             // Fallback logging when DI container fails - log to event log only
@@ -143,7 +153,8 @@ public class Program
             _serviceProvider?.Dispose();
             
             // Clean up console if we attached to it
-            var isVerbose = args.Contains("--verbose") || args.Contains("-v");
+            var verboseLevel = GetVerboseLevelFromArgs(args);
+            var isVerbose = verboseLevel > 0;
             if (isVerbose && GetConsoleWindow() != IntPtr.Zero)
             {
                 // Give a moment for output to flush
@@ -155,22 +166,23 @@ public class Program
         }
     }
 
-    private static IConfiguration BuildConfiguration(bool verbose = false)
+    private static IConfiguration BuildConfiguration(int verboseLevel = 0)
     {
         var builder = new ConfigurationBuilder();
+        var isVerbose = verboseLevel > 0;
         
         // Configuration hierarchy (lowest to highest precedence):
-        if (verbose)
+        if (isVerbose)
         {
-            ConsoleFormatter.WriteSection("Configuration Sources", "Loading settings from multiple sources in order of precedence");
-            ConsoleFormatter.WriteInfo("1. Application defaults: Embedded in binary (no JSON dependency)", 1);
+            Logger.Section("Configuration Sources", "Loading settings from multiple sources in order of precedence");
+            Logger.Info("1. Application defaults: Embedded in binary (no JSON dependency)");
         }
         
         // 2. YAML configuration from ProgramData (runtime/user editable)
         var programDataPath = ConfigurationService.GetWorkingDataDirectory();
-        if (verbose)
+        if (isVerbose)
         {
-            ConsoleFormatter.WriteInfo($"2. YAML configuration from: {programDataPath}", 1);
+            Logger.Info("2. YAML configuration from: {0}", programDataPath);
         }
         if (Directory.Exists(programDataPath))
         {
@@ -179,9 +191,9 @@ public class Program
         }
         
         // 3. Environment variables (prefix: REPORTMATE_)
-        if (verbose)
+        if (isVerbose)
         {
-            ConsoleFormatter.WriteInfo("3. Environment variables with REPORTMATE_ prefix", 1);
+            Logger.Info("3. Environment variables with REPORTMATE_ prefix");
         }
         builder.AddEnvironmentVariables("REPORTMATE_");
         
@@ -197,9 +209,9 @@ public class Program
             
             if (!string.IsNullOrEmpty(envApiUrl))
             {
-                if (verbose)
+                if (isVerbose)
                 {
-                    ConsoleFormatter.WriteInfo($"Using API URL from environment: {envApiUrl}", 2);
+                    Logger.Info("Using API URL from environment: {0}", envApiUrl);
                 }
                 builder.AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -209,11 +221,11 @@ public class Program
         }
         
         // 5. Windows Registry (highest precedence - CSP/Group Policy)
-        if (verbose)
+        if (isVerbose)
         {
-            ConsoleFormatter.WriteInfo("4. Windows Registry (HIGHEST PRECEDENCE)", 1);
-            ConsoleFormatter.WriteInfo("HKLM\\SOFTWARE\\ReportMate (standard)", 2);
-            ConsoleFormatter.WriteInfo("HKLM\\SOFTWARE\\Policies\\ReportMate (CSP/Group Policy)", 2);
+            Logger.Info("4. Windows Registry (HIGHEST PRECEDENCE)");
+            Logger.Debug("HKLM\\SOFTWARE\\ReportMate (standard)");
+            Logger.Debug("HKLM\\SOFTWARE\\Policies\\ReportMate (CSP/Group Policy)");
         }
         
         // Add registry configuration for both standard and policy locations
@@ -243,9 +255,9 @@ public class Program
                                 _ => $"ReportMate:{valueName}"
                             };
                             registryDict[configKey] = value;
-                            if (verbose)
+                            if (isVerbose)
                             {
-                                ConsoleFormatter.WriteKeyValue($"Registry: {valueName}", configKey, 2);
+                                Logger.Debug("Registry: {0} -> {1}", valueName, configKey);
                             }
                         }
                     }
@@ -281,9 +293,9 @@ public class Program
                                 _ => $"ReportMate:{valueName}"
                             };
                             policyDict[configKey] = value;
-                            if (verbose)
+                            if (isVerbose)
                             {
-                                ConsoleFormatter.WriteKeyValue($"Policy: {valueName}", configKey, 2);
+                                Logger.Debug("Policy: {0} -> {1}", valueName, configKey);
                             }
                         }
                     }
@@ -296,31 +308,36 @@ public class Program
         }
         catch (Exception ex)
         {
-            if (verbose)
+            if (isVerbose)
             {
-                ConsoleFormatter.WriteWarning($"Could not read registry: {ex.Message}");
+                Logger.Warning("Could not read registry: {0}", ex.Message);
             }
         }
 
         var config = builder.Build();
         
         // Log the final configuration source for key settings only in verbose mode
-        if (verbose)
+        if (isVerbose)
         {
-            ConsoleFormatter.WriteSection("Final Configuration");
+            Logger.Section("Final Configuration");
             var finalApiUrl = config["ReportMate:ApiUrl"];
             var deviceId = config["ReportMate:DeviceId"];
             var debugLogging = config["ReportMate:DebugLogging"];
             
-            ConsoleFormatter.WriteKeyValue("ApiUrl", finalApiUrl ?? "NOT SET");
-            ConsoleFormatter.WriteKeyValue("DeviceId", deviceId ?? "NOT SET");  
-            ConsoleFormatter.WriteKeyValue("DebugLogging", debugLogging ?? "NOT SET");
+            var configData = new Dictionary<string, object?>
+            {
+                ["ApiUrl"] = finalApiUrl ?? "NOT SET",
+                ["DeviceId"] = deviceId ?? "NOT SET",
+                ["DebugLogging"] = debugLogging ?? "NOT SET"
+            };
+            
+            Logger.InfoWithData("Key configuration values", configData);
         }
         
         return config;
     }
 
-    private static ServiceProvider ConfigureServices(IConfiguration configuration, bool verbose = false)
+    private static ServiceProvider ConfigureServices(IConfiguration configuration, int verboseLevel = 0)
     {
         var services = new ServiceCollection();
 
@@ -328,14 +345,28 @@ public class Program
         var logDirectory = configuration["ReportMate:LogDirectory"] ?? @"C:\ProgramData\ManagedReports\logs";
         Directory.CreateDirectory(logDirectory);
         
-        var loggerConfig = new LoggerConfiguration()
-            .MinimumLevel.Information();
+        var loggerConfig = new LoggerConfiguration();
 
-        // Enable debug logging if verbose mode is enabled
+        // Set Serilog minimum level based on enhanced logger verbose level
         var debugLogging = bool.TryParse(configuration["ReportMate:DebugLogging"], out var debugEnabled) && debugEnabled;
-        if (verbose || debugLogging)
+        
+        // Map enhanced logger levels to Serilog levels:
+        // Level 0 (Error only): Warning (to reduce noise, only show warnings and errors)
+        // Level 1 (Error + Warning): Information (show info messages for better visibility)  
+        // Level 2 (Error + Warning + Info): Information
+        // Level 3 (All including Debug): Debug
+        if (verboseLevel >= 3 || debugLogging)
         {
             loggerConfig.MinimumLevel.Debug();
+        }
+        else if (verboseLevel >= 1)
+        {
+            loggerConfig.MinimumLevel.Information();
+        }
+        else
+        {
+            // Level 0: Only errors and warnings to reduce noise
+            loggerConfig.MinimumLevel.Warning();
         }
 
         // Always log to file and event log
@@ -363,7 +394,7 @@ public class Program
         }
 
         // Add console logging in development mode OR when verbose flag is used
-        if (developmentEnabled || verbose)
+        if (developmentEnabled || verboseLevel > 0)
         {
             loggerConfig.WriteTo.Console(
                 outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}");
@@ -419,8 +450,7 @@ public class Program
         services.AddScoped<IApiService, ApiService>();
         services.AddScoped<IOsQueryService, OsQueryService>();
         services.AddScoped<IDataCollectionService, DataCollectionService>();
-        services.AddScoped<IDeviceInfoService, EnhancedDeviceInfoService>();
-        services.AddScoped<IEnhancedDeviceInfoService, EnhancedDeviceInfoService>();
+        services.AddScoped<IDeviceInfoService, DeviceInfoService>();
         services.AddScoped<IConfigurationService, ConfigurationService>();
         services.AddScoped<IWmiHelperService, WmiHelperService>(); // Add WMI service for fallback scenarios
         
@@ -436,7 +466,12 @@ public class Program
         var rootCommand = new RootCommand("ReportMate - Device data collection and reporting");
 
         // Global options - these are used across all commands
-        var verboseOption = new Option<bool>(new[] { "--verbose", "-v" }, "Enable verbose output and detailed logging");
+        // Note: We handle -v, -vv, -vvv parsing manually in GetVerboseLevelFromArgs()
+        // This option only handles --verbose=N format to avoid conflicts
+        var verboseOption = new Option<int>("--verbose", () => 0, "Set verbose level (0=Error, 1=Warning, 2=Info, 3=Debug). Use -v, -vv, -vvv, -vvvv or --verbose=N")
+        {
+            Arity = ArgumentArity.ZeroOrOne
+        };
         var deviceIdOption = new Option<string>("--device-id", "Override device ID");
         var apiUrlOption = new Option<string>("--api-url", "Override API URL");
         var forceOption = new Option<bool>("--force", "Force data collection even if recent run detected");
@@ -503,23 +538,30 @@ public class Program
         return rootCommand;
     }
 
-    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, string? deviceId, string? apiUrl, bool verbose)
+    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, string? deviceId, string? apiUrl, int verbose)
     {
         try
         {
-            if (verbose)
+            // Set enhanced logger verbose level
+            Logger.SetVerboseLevel(verbose);
+            
+            if (verbose > 0)
             {
-                _logger!.LogInformation("=== VERBOSE MODE ENABLED ===");
-                _logger!.LogInformation("All detailed logging will be displayed");
-                _logger!.LogInformation("=== RUNNER COMMAND EXECUTION ===");
-                _logger!.LogInformation("Command: run");
-                _logger!.LogInformation("Parameters:");
-                _logger!.LogInformation("  Force: {Force}", force);
-                _logger!.LogInformation("  Collect Only: {CollectOnly}", collectOnly);
-                _logger!.LogInformation("  Custom Device ID: {DeviceId}", deviceId ?? "NONE (will auto-detect)");
-                _logger!.LogInformation("  Custom API URL: {ApiUrl}", apiUrl ?? "NONE (using config)");
-                _logger!.LogInformation("  Verbose: {Verbose}", verbose);
-                _logger!.LogInformation("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) {FlowType}", collectOnly ? "Collect Data (NO TRANSMISSION)" : "Send Data");
+                Logger.Section("Command Execution", "Run command with enhanced verbose logging");
+                
+                var commandData = new Dictionary<string, object?>
+                {
+                    ["Command"] = "run",
+                    ["Force"] = force,
+                    ["Collect Only"] = collectOnly,
+                    ["Custom Device ID"] = deviceId ?? "NONE (will auto-detect)",
+                    ["Custom API URL"] = apiUrl ?? "NONE (using config)",
+                    ["Verbose Level"] = $"{verbose} ({GetVerboseLevelName(verbose)})"
+                };
+                
+                Logger.InfoWithData("Command Parameters", commandData);
+                Logger.Info("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) {0}", 
+                    collectOnly ? "Collect Data (NO TRANSMISSION)" : "Send Data");
             }
             
             _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", 
@@ -527,9 +569,11 @@ public class Program
             
             var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
             
-            if (verbose)
+            if (verbose > 0)
             {
-                _logger!.LogInformation("DataCollectionService retrieved successfully");
+                Logger.Debug("DataCollectionService retrieved successfully");
+                Logger.Info("Calling CollectAndSendDataAsync - this will handle registration and {0}", 
+                    collectOnly ? "data collection only" : "data transmission");
                 _logger!.LogInformation("Calling CollectAndSendDataAsync - this will handle registration and {Mode}", 
                     collectOnly ? "data collection only" : "data transmission");
             }
@@ -541,19 +585,19 @@ public class Program
                 if (collectOnly)
                 {
                     _logger!.LogInformation("Data collection completed successfully (transmission skipped)");
-                    if (verbose)
+                    if (verbose > 0)
                     {
-                        _logger!.LogInformation("CACHE: Data saved to local cache files only");
-                        _logger!.LogInformation(" TIP: Run without --collect-only to transmit data");
+                        Logger.Info("CACHE: Data saved to local cache files only");
+                        Logger.Info("TIP: Run without --collect-only to transmit data");
                     }
                 }
                 else
                 {
                     _logger!.LogInformation("Data collection and transmission completed successfully");
-                    if (verbose)
+                    if (verbose > 0)
                     {
-                        _logger!.LogInformation("DASHBOARD: Check /device/{DeviceId} for new events", deviceId ?? "auto-detected");
-                        _logger!.LogInformation("COMPLIANCE: Registration policy enforced successfully");
+                        Logger.Info("DASHBOARD: Check /device/{0} for new events", deviceId ?? "auto-detected");
+                        Logger.Info("COMPLIANCE: Registration policy enforced successfully");
                     }
                 }
                 return 0;
@@ -561,10 +605,10 @@ public class Program
             else
             {
                 _logger!.LogError("Data collection or transmission failed");
-                if (verbose)
+                if (verbose > 0)
                 {
-                    _logger!.LogError("IMPACT: Device may not be registered or API issues detected");
-                    _logger!.LogError("ACTION REQUIRED: Check logs above for specific failure reasons");
+                    Logger.Error("IMPACT: Device may not be registered or API issues detected");
+                    Logger.Error("ACTION REQUIRED: Check logs above for specific failure reasons");
                 }
                 return 1;
             }
@@ -576,13 +620,16 @@ public class Program
         }
     }
 
-    private static async Task<int> HandleTestCommand(bool verbose)
+    private static async Task<int> HandleTestCommand(int verbose)
     {
         try
         {
-            if (verbose)
+            // Set enhanced logger verbose level
+            Logger.SetVerboseLevel(verbose);
+            
+            if (verbose > 0)
             {
-                _logger!.LogInformation("=== VERBOSE TEST MODE ENABLED ===");
+                Logger.Section("Test Mode", "Comprehensive ReportMate test with enhanced logging");
             }
             
             _logger!.LogInformation("=== REPORTMATE COMPREHENSIVE TEST STARTING ===");
@@ -593,47 +640,53 @@ public class Program
             var deviceInfoService = _serviceProvider!.GetRequiredService<IDeviceInfoService>();
             
             // Step 1: Test device information collection
-            _logger!.LogInformation("=== STEP 1: DEVICE INFORMATION COLLECTION ===");
+            Logger.Info("=== STEP 1: DEVICE INFORMATION COLLECTION ===");
             DeviceInfo deviceInfo;
             try
             {
                 deviceInfo = await deviceInfoService.GetBasicDeviceInfoAsync();
-                _logger!.LogInformation("Device information collected successfully");
-                _logger!.LogInformation("   Device ID: {DeviceId}", deviceInfo.DeviceId);
-                _logger!.LogInformation("   Serial Number: {SerialNumber}", deviceInfo.SerialNumber);
-                _logger!.LogInformation("   Computer Name: {ComputerName}", deviceInfo.ComputerName);
-                _logger!.LogInformation("   Operating System: {OperatingSystem}", deviceInfo.OperatingSystem);
-                _logger!.LogInformation("   Manufacturer: {Manufacturer}", deviceInfo.Manufacturer);
-                _logger!.LogInformation("   Model: {Model}", deviceInfo.Model);
-                _logger!.LogInformation("   Client Version: {ClientVersion}", deviceInfo.ClientVersion);
+                Logger.Info("Device information collected successfully");
                 
-                if (verbose)
+                var deviceData = new Dictionary<string, object?>
                 {
-                    _logger!.LogInformation("   Domain: {Domain}", deviceInfo.Domain);
-                    _logger!.LogInformation("   Total Memory: {TotalMemoryGB}GB", deviceInfo.TotalMemoryGB);
-                    _logger!.LogInformation("   Last Seen: {LastSeen}", deviceInfo.LastSeen);
+                    ["Device ID"] = deviceInfo.DeviceId,
+                    ["Serial Number"] = deviceInfo.SerialNumber,
+                    ["Computer Name"] = deviceInfo.ComputerName,
+                    ["Operating System"] = deviceInfo.OperatingSystem,
+                    ["Manufacturer"] = deviceInfo.Manufacturer,
+                    ["Model"] = deviceInfo.Model,
+                    ["Client Version"] = deviceInfo.ClientVersion
+                };
+                
+                if (verbose >= 2)
+                {
+                    deviceData["Domain"] = deviceInfo.Domain;
+                    deviceData["Total Memory"] = $"{deviceInfo.TotalMemoryGB}GB";
+                    deviceData["Last Seen"] = deviceInfo.LastSeen;
                 }
+                
+                Logger.InfoWithData("Device Information", deviceData);
             }
             catch (Exception ex)
             {
-                _logger!.LogError(ex, "Failed to collect device information");
+                Logger.Error("Failed to collect device information: {0}", ex.Message);
                 return 1;
             }
             
             // Step 2: Test configuration
-            _logger!.LogInformation("=== STEP 2: CONFIGURATION VALIDATION ===");
+            Logger.Info("=== STEP 2: CONFIGURATION VALIDATION ===");
             var config = await configService.ValidateConfigurationAsync();
             if (!config.IsValid)
             {
-                _logger!.LogError("Configuration validation failed: {Errors}", 
+                Logger.Error("Configuration validation failed: {0}", 
                     string.Join(", ", config.Errors));
                 return 1;
             }
-            _logger!.LogInformation("Configuration validation passed");
+            Logger.Info("Configuration validation passed");
             
-            if (verbose && config.Warnings.Count > 0)
+            if (verbose > 0 && config.Warnings.Count > 0)
             {
-                _logger!.LogWarning("Configuration warnings: {Warnings}", 
+                Logger.Warning("Configuration warnings: {0}", 
                     string.Join(", ", config.Warnings));
             }
             
@@ -702,7 +755,7 @@ public class Program
         }
     }
 
-    private static async Task<int> HandleInfoCommand(bool verbose)
+    private static async Task<int> HandleInfoCommand(int verbose)
     {
         try
         {
@@ -731,7 +784,7 @@ public class Program
             Console.WriteLine($"Last Run: {config.LastRunTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "Never"}");
             Console.WriteLine($"Is Configured: {config.IsConfigured}");
             
-            if (verbose)
+            if (verbose > 0)
             {
                 Console.WriteLine($"");
                 Console.WriteLine("=== Verbose Configuration Details ===");
@@ -763,13 +816,13 @@ public class Program
         }
     }
 
-    private static async Task<int> HandleInstallCommand(bool verbose)
+    private static async Task<int> HandleInstallCommand(int verbose)
     {
         try
         {
-            if (verbose)
+            if (verbose > 0)
             {
-                _logger!.LogInformation("=== VERBOSE INSTALL MODE ===");
+                Logger.Section("Install Mode", "Installing ReportMate client configuration");
             }
             
             _logger!.LogInformation("Installing ReportMate client configuration...");
@@ -787,14 +840,14 @@ public class Program
         }
     }
 
-    private static Task<int> HandleBuildCommand(bool verbose)
+    private static Task<int> HandleBuildCommand(int verbose)
     {
         try
         {
-            if (verbose)
+            if (verbose > 0)
             {
-                _logger!.LogInformation("=== BUILD COMMAND VERBOSE MODE ===");
-                _logger!.LogInformation("This command is used internally by the build script");
+                Logger.Section("Build Command", "Internal build script operation");
+                Logger.Info("This command is used internally by the build script");
             }
             
             _logger!.LogInformation("ReportMate Build Command");
@@ -811,13 +864,13 @@ public class Program
         }
     }
 
-    private static async Task<int> HandleModularTestCommand(bool verbose)
+    private static async Task<int> HandleModularTestCommand(int verbose)
     {
         try
         {
-            if (verbose)
+            if (verbose > 0)
             {
-                _logger!.LogInformation("=== MODULAR TEST COMMAND VERBOSE MODE ===");
+                Logger.Section("Modular Test", "Testing modular data collection system");
             }
 
             _logger!.LogInformation("🧪 Testing Modular Data Collection System");
@@ -871,5 +924,92 @@ public class Program
             _logger!.LogError(ex, "Error during modular test");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Parse verbose level from command line arguments before full parsing
+    /// Supports: -v (1), -vv (2), -vvv (3), -vvvv (4), --verbose=N
+    /// </summary>
+    private static int GetVerboseLevelFromArgs(string[] args)
+    {
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            
+            // Handle --verbose=N format
+            if (arg.StartsWith("--verbose="))
+            {
+                var levelStr = arg.Substring("--verbose=".Length);
+                if (int.TryParse(levelStr, out var level))
+                {
+                    return Math.Max(0, Math.Min(3, level));
+                }
+            }
+            // Handle explicit --verbose followed by number
+            else if (arg == "--verbose" && i + 1 < args.Length)
+            {
+                if (int.TryParse(args[i + 1], out var level))
+                {
+                    return Math.Max(0, Math.Min(3, level));
+                }
+                // If next arg is not a number, treat as level 2 (info)
+                return 2;
+            }
+            // Handle -v, -vv, -vvv, -vvvv format
+            else if (arg.StartsWith("-v") && arg.All(c => c == 'v' || c == '-'))
+            {
+                return Math.Max(0, Math.Min(3, arg.Count(c => c == 'v')));
+            }
+            // Handle single --verbose flag
+            else if (arg == "--verbose")
+            {
+                return 2; // Default to info level
+            }
+        }
+        
+        return 0; // No verbose flag found
+    }
+
+    /// <summary>
+    /// Get human-readable name for verbose level
+    /// </summary>
+    private static string GetVerboseLevelName(int level)
+    {
+        return level switch
+        {
+            0 => "Errors Only",
+            1 => "Errors + Warnings", 
+            2 => "Errors + Warnings + Info",
+            3 => "All Messages (Debug)",
+            _ => "Unknown"
+        };
+    }
+
+    /// <summary>
+    /// Preprocess command line arguments to convert -v, -vv, -vvv format to --verbose=N
+    /// This allows System.CommandLine to properly parse the arguments without conflicts
+    /// </summary>
+    private static string[] PreprocessVerboseArgs(string[] args)
+    {
+        var processedArgs = new List<string>();
+        
+        for (int i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            
+            // Handle -v, -vv, -vvv, -vvvv format
+            if (arg.StartsWith("-v") && arg.All(c => c == 'v' || c == '-') && arg != "--verbose")
+            {
+                var level = arg.Count(c => c == 'v');
+                level = Math.Max(0, Math.Min(3, level)); // Clamp to 0-3
+                processedArgs.Add($"--verbose={level}");
+            }
+            else
+            {
+                processedArgs.Add(arg);
+            }
+        }
+        
+        return processedArgs.ToArray();
     }
 }

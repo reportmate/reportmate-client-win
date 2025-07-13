@@ -13,19 +13,12 @@ using ReportMate.WindowsClient.DataProcessing;
 namespace ReportMate.WindowsClient.Services
 {
     /// <summary>
-    /// Enhanced Device Info Service that processes data on the client side
+    /// Device Info Service that processes data on the client side
     /// This eliminates the need for complex backend processing
     /// </summary>
-    public interface IEnhancedDeviceInfoService
+    public class DeviceInfoService : IDeviceInfoService
     {
-        Task<ProcessedDeviceData> GetProcessedDeviceDataAsync();
-        Task<bool> SaveProcessedDataLocallyAsync(ProcessedDeviceData data, string filePath);
-        Task<ProcessedDeviceData?> LoadProcessedDataFromFileAsync(string filePath);
-    }
-
-    public class EnhancedDeviceInfoService : IEnhancedDeviceInfoService, IDeviceInfoService
-    {
-        private readonly ILogger<EnhancedDeviceInfoService> _logger;
+        private readonly ILogger<DeviceInfoService> _logger;
         private readonly IConfiguration _configuration;
         private readonly IOsQueryService _osQueryService;
         private readonly DataProcessor _dataProcessor;
@@ -36,8 +29,8 @@ namespace ReportMate.WindowsClient.Services
         private DateTime? _cacheTimestamp;
         private readonly TimeSpan _cacheTimeout = TimeSpan.FromMinutes(5); // Cache for 5 minutes
 
-        public EnhancedDeviceInfoService(
-            ILogger<EnhancedDeviceInfoService> logger,
+        public DeviceInfoService(
+            ILogger<DeviceInfoService> logger,
             IConfiguration configuration,
             IOsQueryService osQueryService)
         {

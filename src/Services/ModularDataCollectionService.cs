@@ -126,7 +126,7 @@ namespace ReportMate.WindowsClient.Services
             Dictionary<string, object> modularQueries)
         {
             _logger.LogInformation($"MODULAR SERVICE: Executing {modularQueries.Count} osquery queries [UNIQUE LOG]");
-            ConsoleFormatter.WriteProgress("Executing osquery queries", $"{modularQueries.Count} total queries");
+            Logger.Section("osQuery Execution", $"Processing {modularQueries.Count} queries across all modules");
             
             try
             {
@@ -180,12 +180,12 @@ namespace ReportMate.WindowsClient.Services
                                 
                                 results[kvp.Key] = resultList;
                                 _logger.LogDebug($"Query '{kvp.Key}' returned {resultList.Count} results");
-                                ConsoleFormatter.WriteQueryProgress(kvp.Key, current, modularQueries.Count, $"{resultList.Count} results");
+                                Logger.Progress($"Query: {kvp.Key}", current, modularQueries.Count, $"{resultList.Count} results");
                             }
                             else
                             {
                                 results[kvp.Key] = new List<Dictionary<string, object>>();
-                                ConsoleFormatter.WriteQueryProgress(kvp.Key, current, modularQueries.Count, "no results");
+                                Logger.Progress($"Query: {kvp.Key}", current, modularQueries.Count, "no results");
                             }
                         }
                         else
@@ -196,13 +196,13 @@ namespace ReportMate.WindowsClient.Services
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, $"Error executing query '{kvp.Key}': {queryString}");
-                        ConsoleFormatter.WriteQueryProgress(kvp.Key, current, modularQueries.Count, "ERROR");
+                        Logger.Progress($"Query: {kvp.Key}", current, modularQueries.Count, "ERROR");
                         results[kvp.Key] = new List<Dictionary<string, object>>();
                     }
                 }
                 
                 _logger.LogInformation($"Successfully executed {results.Count} modular queries");
-                ConsoleFormatter.WriteSuccess($"Completed {results.Count} osquery operations");
+                Logger.Info("✓ Completed {0} osquery operations", results.Count);
                 return results;
             }
             catch (Exception ex)
