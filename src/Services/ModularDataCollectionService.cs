@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models;
+using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Services
 {
@@ -400,7 +401,7 @@ namespace ReportMate.WindowsClient.Services
             {
                 foreach (var program in programs)
                 {
-                    data.InstalledApplications.Add(new ReportMate.WindowsClient.Models.InstalledApplication
+                    data.InstalledApplications.Add(new ReportMate.WindowsClient.Models.Modules.InstalledApplication
                     {
                         Name = GetStringValue(program, "name"),
                         Version = GetStringValue(program, "version"),
@@ -808,7 +809,7 @@ namespace ReportMate.WindowsClient.Services
             {
                 foreach (var addr in addresses)
                 {
-                    var interfaceInfo = new ReportMate.WindowsClient.Models.NetworkInterface
+                    var interfaceInfo = new ReportMate.WindowsClient.Models.Modules.NetworkInterface
                     {
                         Name = GetStringValue(addr, "interface"),
                         IpAddresses = new List<string> { GetStringValue(addr, "address") }

@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using ReportMate.WindowsClient.Models;
+using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.DataProcessing;
 
 namespace ReportMate.WindowsClient.Services;
