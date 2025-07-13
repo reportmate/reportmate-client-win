@@ -4,7 +4,7 @@
   "description": "Mobile Device Management (MDM) and device ownership information",
   "queries": {
     "mdm_enrollment": {
-      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\' AND name IN ('ProviderID', 'UPN', 'EnrollmentState', 'AADResourceID');",
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\%' AND name IN ('ProviderID', 'UPN', 'EnrollmentState', 'AADResourceID');",
       "interval": 3600,
       "description": "MDM enrollment status and details"
     },
