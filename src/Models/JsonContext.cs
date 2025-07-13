@@ -1,13 +1,16 @@
 #nullable enable
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Services;
+using ReportMate.WindowsClient.DataProcessing;
 
 namespace ReportMate.WindowsClient.Models;
 
 /// <summary>
 /// JSON serialization context for NativeAOT compatibility
 /// This enables source-generated JSON serialization instead of reflection
+/// Only includes types that are actually serialized by the application
 /// </summary>
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
@@ -27,34 +30,58 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(System.Text.Json.JsonDocument))]
 [JsonSerializable(typeof(DeviceRegistrationRequest))]
 [JsonSerializable(typeof(DeviceEventRequest))]
-[JsonSerializable(typeof(DeviceInfo))]
-[JsonSerializable(typeof(BasicInfo))]
-[JsonSerializable(typeof(OperatingSystemInfo))]
-[JsonSerializable(typeof(HardwareInfo))]
-[JsonSerializable(typeof(NetworkInfo))]
-[JsonSerializable(typeof(DeviceSecurityInfo))]
-[JsonSerializable(typeof(MdmInfo))]
-[JsonSerializable(typeof(SystemMetrics))]
-[JsonSerializable(typeof(ProcessorInfo))]
-[JsonSerializable(typeof(MemoryInfo))]
-[JsonSerializable(typeof(VideoInfo))]
-[JsonSerializable(typeof(InstalledApplication))]
-[JsonSerializable(typeof(RunningService))]
-[JsonSerializable(typeof(NetworkInterface))]
-[JsonSerializable(typeof(StartupItem))]
-[JsonSerializable(typeof(SecurityPatch))]
-[JsonSerializable(typeof(ScheduledTask))]
-[JsonSerializable(typeof(ListeningPort))]
-[JsonSerializable(typeof(LogicalDrive))]
-[JsonSerializable(typeof(ProcessInfo))]
-[JsonSerializable(typeof(UserInfo))]
-[JsonSerializable(typeof(DiskInfo))]
-[JsonSerializable(typeof(List<DiskInfo>))]
+[JsonSerializable(typeof(DeviceDataRequest))]
+[JsonSerializable(typeof(DeviceDataPayload))]
+// Note: DeviceInfo is from Services namespace (legacy compatibility)
+[JsonSerializable(typeof(Services.DeviceInfo))]
+// Data processing types (legacy)
+[JsonSerializable(typeof(DataProcessing.ProcessedDeviceData))]
+[JsonSerializable(typeof(DataProcessing.BasicDeviceInfo))]
+[JsonSerializable(typeof(DataProcessing.OperatingSystemInfo), TypeInfoPropertyName = "LegacyOperatingSystemInfo")]
+[JsonSerializable(typeof(DataProcessing.HardwareInfo), TypeInfoPropertyName = "LegacyHardwareInfo")]
+[JsonSerializable(typeof(DataProcessing.NetworkInfo), TypeInfoPropertyName = "LegacyNetworkInfo")]
+[JsonSerializable(typeof(DataProcessing.SecurityInfo))]
+[JsonSerializable(typeof(DataProcessing.ManagementInfo))]
+[JsonSerializable(typeof(DataProcessing.ApplicationInfo), TypeInfoPropertyName = "LegacyApplicationInfo")]
+[JsonSerializable(typeof(List<DataProcessing.ApplicationInfo>), TypeInfoPropertyName = "LegacyApplicationInfoList")]
+// Modular data types (new architecture)
+[JsonSerializable(typeof(UnifiedDevicePayload))]
+[JsonSerializable(typeof(ApplicationsData))]
+[JsonSerializable(typeof(HardwareData), TypeInfoPropertyName = "ModularHardwareData")]
+[JsonSerializable(typeof(InventoryData))]
+[JsonSerializable(typeof(InstallsData))]
+[JsonSerializable(typeof(ManagementData), TypeInfoPropertyName = "ModularManagementData")]
+[JsonSerializable(typeof(NetworkData), TypeInfoPropertyName = "ModularNetworkData")]
+[JsonSerializable(typeof(ProfilesData))]
+[JsonSerializable(typeof(SecurityData), TypeInfoPropertyName = "ModularSecurityData")]
+[JsonSerializable(typeof(SystemData))]
+// Individual modular model types (to resolve conflicts)
+[JsonSerializable(typeof(Models.ProcessorInfo), TypeInfoPropertyName = "ModularProcessorInfo")]
+[JsonSerializable(typeof(Models.MemoryInfo), TypeInfoPropertyName = "ModularMemoryInfo")]
+[JsonSerializable(typeof(Models.OperatingSystemInfo), TypeInfoPropertyName = "ModularOperatingSystemInfo")]
+[JsonSerializable(typeof(Models.InstalledApplication), TypeInfoPropertyName = "ModularInstalledApplication")]
+[JsonSerializable(typeof(Models.NetworkInterface), TypeInfoPropertyName = "ModularNetworkInterface")]
+[JsonSerializable(typeof(Models.WifiNetwork), TypeInfoPropertyName = "ModularWifiNetwork")]
+[JsonSerializable(typeof(Models.ListeningPort), TypeInfoPropertyName = "ModularListeningPort")]
+
+[JsonSerializable(typeof(Models.BitLockerInfo), TypeInfoPropertyName = "ModularBitLockerInfo")]
+[JsonSerializable(typeof(List<Models.InstalledApplication>), TypeInfoPropertyName = "ModularInstalledApplicationList")]
+[JsonSerializable(typeof(List<Models.NetworkInterface>), TypeInfoPropertyName = "ModularNetworkInterfaceList")]
+[JsonSerializable(typeof(List<Models.WifiNetwork>), TypeInfoPropertyName = "ModularWifiNetworkList")]
+[JsonSerializable(typeof(List<Models.ListeningPort>), TypeInfoPropertyName = "ModularListeningPortList")]
+// Modular osquery types
+[JsonSerializable(typeof(Services.EnabledModulesConfig))]
+[JsonSerializable(typeof(Services.OsQueryModule))]
+// Anonymous types used in data transmission
+[JsonSerializable(typeof(Dictionary<string, object>))]
+[JsonSerializable(typeof(object))]
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     WriteIndented = false,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    AllowTrailingCommas = true
+    AllowTrailingCommas = true,
+    // Enable reflection-based fallback for anonymous types while maintaining AOT compatibility
+    UseStringEnumConverter = true
 )]
 public partial class ReportMateJsonContext : JsonSerializerContext
 {
@@ -94,4 +121,33 @@ public class DeviceEventRequest
     public Dictionary<string, object>? Payload { get; set; }
     public string? Severity { get; set; }
     public string? Message { get; set; }
+}
+
+/// <summary>
+/// Device data API request payload
+/// </summary>
+public class DeviceDataRequest
+{
+    public string Device { get; set; } = string.Empty;
+    public string SerialNumber { get; set; } = string.Empty;
+    public string Kind { get; set; } = "Info";
+    public string Ts { get; set; } = string.Empty;
+    public DeviceDataPayload Payload { get; set; } = new();
+    public string? Passphrase { get; set; }
+}
+
+/// <summary>
+/// Device data payload structure
+/// </summary>
+public class DeviceDataPayload
+{
+    public Dictionary<string, object> Device { get; set; } = new();
+    public Dictionary<string, object>? System { get; set; }
+    public Dictionary<string, object>? Security { get; set; }
+    public Dictionary<string, object>? OsQuery { get; set; }
+    public string CollectionTimestamp { get; set; } = string.Empty;
+    public string ClientVersion { get; set; } = string.Empty;
+    public string CollectionType { get; set; } = "comprehensive";
+    public string ManagedInstallsSystem { get; set; } = "Cimian";
+    public string Source { get; set; } = "runner.exe";
 }

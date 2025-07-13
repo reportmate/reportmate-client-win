@@ -69,14 +69,15 @@ public class Program
                 }
             }
             
-            // Force console output for testing
+            // Initialize enhanced console formatter for verbose mode
             if (isVerbose)
             {
-                Console.WriteLine("=== REPORTMATE RUNNER STARTING ===");
-                Console.WriteLine($"Arguments: {string.Join(" ", args)}");
-                Console.WriteLine($"Verbose mode: {isVerbose}");
-                Console.WriteLine("=====================================");
-                Console.WriteLine("*** RUNNER STARTING - VERBOSE MODE ENABLED ***");
+                ConsoleFormatter.SetVerboseMode(true);
+                ConsoleFormatter.WriteHeader("ReportMate Windows Client");
+                ConsoleFormatter.WriteKeyValue("Version", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
+                ConsoleFormatter.WriteKeyValue("Arguments", string.Join(" ", args));
+                ConsoleFormatter.WriteKeyValue("Verbose Mode", "Enabled");
+                ConsoleFormatter.WriteKeyValue("Platform", Environment.OSVersion.VersionString);
             }
             
             // Build configuration from multiple sources
@@ -84,7 +85,7 @@ public class Program
             
             if (isVerbose)
             {
-                Console.WriteLine("*** CONFIGURATION BUILT ***");
+                ConsoleFormatter.WriteSuccess("Configuration built successfully");
             }
             
             // Setup dependency injection with verbose flag
@@ -161,15 +162,15 @@ public class Program
         // Configuration hierarchy (lowest to highest precedence):
         if (verbose)
         {
-            Console.WriteLine("=== CONFIGURATION DECISION TREE ===");
-            Console.WriteLine("1. Application defaults: Embedded in binary (no JSON dependency)");
+            ConsoleFormatter.WriteSection("Configuration Sources", "Loading settings from multiple sources in order of precedence");
+            ConsoleFormatter.WriteInfo("1. Application defaults: Embedded in binary (no JSON dependency)", 1);
         }
         
         // 2. YAML configuration from ProgramData (runtime/user editable)
         var programDataPath = ConfigurationService.GetWorkingDataDirectory();
         if (verbose)
         {
-            Console.WriteLine($"2. YAML configuration from: {programDataPath}");
+            ConsoleFormatter.WriteInfo($"2. YAML configuration from: {programDataPath}", 1);
         }
         if (Directory.Exists(programDataPath))
         {
@@ -180,7 +181,7 @@ public class Program
         // 3. Environment variables (prefix: REPORTMATE_)
         if (verbose)
         {
-            Console.WriteLine("3. Environment variables with REPORTMATE_ prefix");
+            ConsoleFormatter.WriteInfo("3. Environment variables with REPORTMATE_ prefix", 1);
         }
         builder.AddEnvironmentVariables("REPORTMATE_");
         
@@ -198,7 +199,7 @@ public class Program
             {
                 if (verbose)
                 {
-                    Console.WriteLine($"Using API URL from environment: {envApiUrl}");
+                    ConsoleFormatter.WriteInfo($"Using API URL from environment: {envApiUrl}", 2);
                 }
                 builder.AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -210,9 +211,9 @@ public class Program
         // 5. Windows Registry (highest precedence - CSP/Group Policy)
         if (verbose)
         {
-            Console.WriteLine("4. Windows Registry (HIGHEST PRECEDENCE)");
-            Console.WriteLine("   - HKLM\\SOFTWARE\\ReportMate (standard)");
-            Console.WriteLine("   - HKLM\\SOFTWARE\\Policies\\ReportMate (CSP/Group Policy)");
+            ConsoleFormatter.WriteInfo("4. Windows Registry (HIGHEST PRECEDENCE)", 1);
+            ConsoleFormatter.WriteInfo("HKLM\\SOFTWARE\\ReportMate (standard)", 2);
+            ConsoleFormatter.WriteInfo("HKLM\\SOFTWARE\\Policies\\ReportMate (CSP/Group Policy)", 2);
         }
         
         // Add registry configuration for both standard and policy locations
@@ -244,7 +245,7 @@ public class Program
                             registryDict[configKey] = value;
                             if (verbose)
                             {
-                                Console.WriteLine($"   Registry: {valueName} -> {configKey}");
+                                ConsoleFormatter.WriteKeyValue($"Registry: {valueName}", configKey, 2);
                             }
                         }
                     }
@@ -282,7 +283,7 @@ public class Program
                             policyDict[configKey] = value;
                             if (verbose)
                             {
-                                Console.WriteLine($"   Policy: {valueName} -> {configKey}");
+                                ConsoleFormatter.WriteKeyValue($"Policy: {valueName}", configKey, 2);
                             }
                         }
                     }
@@ -297,7 +298,7 @@ public class Program
         {
             if (verbose)
             {
-                Console.WriteLine($"   Warning: Could not read registry: {ex.Message}");
+                ConsoleFormatter.WriteWarning($"Could not read registry: {ex.Message}");
             }
         }
 
@@ -306,15 +307,14 @@ public class Program
         // Log the final configuration source for key settings only in verbose mode
         if (verbose)
         {
-            Console.WriteLine("\n=== FINAL CONFIGURATION SOURCE ===");
+            ConsoleFormatter.WriteSection("Final Configuration");
             var finalApiUrl = config["ReportMate:ApiUrl"];
             var deviceId = config["ReportMate:DeviceId"];
             var debugLogging = config["ReportMate:DebugLogging"];
             
-            Console.WriteLine($"ApiUrl: {finalApiUrl ?? "NOT SET"}");
-            Console.WriteLine($"DeviceId: {deviceId ?? "NOT SET"}");
-            Console.WriteLine($"DebugLogging: {debugLogging ?? "NOT SET"}");
-            Console.WriteLine("=====================================\n");
+            ConsoleFormatter.WriteKeyValue("ApiUrl", finalApiUrl ?? "NOT SET");
+            ConsoleFormatter.WriteKeyValue("DeviceId", deviceId ?? "NOT SET");  
+            ConsoleFormatter.WriteKeyValue("DebugLogging", debugLogging ?? "NOT SET");
         }
         
         return config;
@@ -419,8 +419,14 @@ public class Program
         services.AddScoped<IApiService, ApiService>();
         services.AddScoped<IOsQueryService, OsQueryService>();
         services.AddScoped<IDataCollectionService, DataCollectionService>();
-        services.AddScoped<IDeviceInfoService, DeviceInfoService>();
+        services.AddScoped<IDeviceInfoService, EnhancedDeviceInfoService>();
+        services.AddScoped<IEnhancedDeviceInfoService, EnhancedDeviceInfoService>();
         services.AddScoped<IConfigurationService, ConfigurationService>();
+        services.AddScoped<IWmiHelperService, WmiHelperService>(); // Add WMI service for fallback scenarios
+        
+        // Register modular services
+        services.AddScoped<ModularOsQueryService>();
+        services.AddScoped<IModularDataCollectionService, ModularDataCollectionService>();
 
         return services.BuildServiceProvider();
     }
@@ -434,29 +440,36 @@ public class Program
         var deviceIdOption = new Option<string>("--device-id", "Override device ID");
         var apiUrlOption = new Option<string>("--api-url", "Override API URL");
         var forceOption = new Option<bool>("--force", "Force data collection even if recent run detected");
+        var collectOnlyOption = new Option<bool>("--collect-only", "Collect data only without transmitting to API");
         
         // Add global options to root command
         rootCommand.AddGlobalOption(verboseOption);
         rootCommand.AddOption(forceOption);
+        rootCommand.AddOption(collectOnlyOption);
         rootCommand.AddOption(deviceIdOption);
         rootCommand.AddOption(apiUrlOption);
 
         // Set default handler for root command (when no subcommand is specified)
         // This makes running the binary without any command default to data collection
-        rootCommand.SetHandler(HandleRunCommand, forceOption, deviceIdOption, apiUrlOption, verboseOption);
+        rootCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Run command - explicit run data collection (optional, since it's the default)
         var runCommand = new Command("run", "Run data collection and send to API (same as default behavior)")
         {
             forceOption,
+            collectOnlyOption,
             deviceIdOption,
             apiUrlOption
         };
-        runCommand.SetHandler(HandleRunCommand, forceOption, deviceIdOption, apiUrlOption, verboseOption);
+        runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Test command - validate configuration and connectivity
         var testCommand = new Command("test", "Test configuration and API connectivity");
         testCommand.SetHandler(HandleTestCommand, verboseOption);
+
+        // Modular test command - test the new modular data collection system
+        var modularTestCommand = new Command("test-modular", "Test modular data collection system");
+        modularTestCommand.SetHandler(HandleModularTestCommand, verboseOption);
 
         // Info command - display system and configuration information
         var infoCommand = new Command("info", "Display system and configuration information");
@@ -482,6 +495,7 @@ public class Program
 
         rootCommand.AddCommand(runCommand);
         rootCommand.AddCommand(testCommand);
+        rootCommand.AddCommand(modularTestCommand);
         rootCommand.AddCommand(infoCommand);
         rootCommand.AddCommand(installCommand);
         rootCommand.AddCommand(buildCommand);
@@ -489,7 +503,7 @@ public class Program
         return rootCommand;
     }
 
-    private static async Task<int> HandleRunCommand(bool force, string? deviceId, string? apiUrl, bool verbose)
+    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, string? deviceId, string? apiUrl, bool verbose)
     {
         try
         {
@@ -501,10 +515,11 @@ public class Program
                 _logger!.LogInformation("Command: run");
                 _logger!.LogInformation("Parameters:");
                 _logger!.LogInformation("  Force: {Force}", force);
+                _logger!.LogInformation("  Collect Only: {CollectOnly}", collectOnly);
                 _logger!.LogInformation("  Custom Device ID: {DeviceId}", deviceId ?? "NONE (will auto-detect)");
                 _logger!.LogInformation("  Custom API URL: {ApiUrl}", apiUrl ?? "NONE (using config)");
                 _logger!.LogInformation("  Verbose: {Verbose}", verbose);
-                _logger!.LogInformation("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) Send Data");
+                _logger!.LogInformation("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) {FlowType}", collectOnly ? "Collect Data (NO TRANSMISSION)" : "Send Data");
             }
             
             _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", 
@@ -514,29 +529,42 @@ public class Program
             
             if (verbose)
             {
-                _logger!.LogInformation("✅ DataCollectionService retrieved successfully");
-                _logger!.LogInformation("🚀 Calling CollectAndSendDataAsync - this will handle registration and data transmission");
+                _logger!.LogInformation("DataCollectionService retrieved successfully");
+                _logger!.LogInformation("Calling CollectAndSendDataAsync - this will handle registration and {Mode}", 
+                    collectOnly ? "data collection only" : "data transmission");
             }
             
-            var result = await dataCollectionService.CollectAndSendDataAsync(force);
+            var result = await dataCollectionService.CollectAndSendDataAsync(force, collectOnly);
             
             if (result)
             {
-                _logger!.LogInformation("✅ Data collection and transmission completed successfully");
-                if (verbose)
+                if (collectOnly)
                 {
-                    _logger!.LogInformation("✅ DASHBOARD: Check /device/{DeviceId} for new events", deviceId ?? "auto-detected");
-                    _logger!.LogInformation("✅ COMPLIANCE: Registration policy enforced successfully");
+                    _logger!.LogInformation("Data collection completed successfully (transmission skipped)");
+                    if (verbose)
+                    {
+                        _logger!.LogInformation("CACHE: Data saved to local cache files only");
+                        _logger!.LogInformation(" TIP: Run without --collect-only to transmit data");
+                    }
+                }
+                else
+                {
+                    _logger!.LogInformation("Data collection and transmission completed successfully");
+                    if (verbose)
+                    {
+                        _logger!.LogInformation("DASHBOARD: Check /device/{DeviceId} for new events", deviceId ?? "auto-detected");
+                        _logger!.LogInformation("COMPLIANCE: Registration policy enforced successfully");
+                    }
                 }
                 return 0;
             }
             else
             {
-                _logger!.LogError("❌ Data collection or transmission failed");
+                _logger!.LogError("Data collection or transmission failed");
                 if (verbose)
                 {
-                    _logger!.LogError("❌ IMPACT: Device may not be registered or API issues detected");
-                    _logger!.LogError("❌ ACTION REQUIRED: Check logs above for specific failure reasons");
+                    _logger!.LogError("IMPACT: Device may not be registered or API issues detected");
+                    _logger!.LogError("ACTION REQUIRED: Check logs above for specific failure reasons");
                 }
                 return 1;
             }
@@ -570,7 +598,7 @@ public class Program
             try
             {
                 deviceInfo = await deviceInfoService.GetBasicDeviceInfoAsync();
-                _logger!.LogInformation("✅ Device information collected successfully");
+                _logger!.LogInformation("Device information collected successfully");
                 _logger!.LogInformation("   Device ID: {DeviceId}", deviceInfo.DeviceId);
                 _logger!.LogInformation("   Serial Number: {SerialNumber}", deviceInfo.SerialNumber);
                 _logger!.LogInformation("   Computer Name: {ComputerName}", deviceInfo.ComputerName);
@@ -588,7 +616,7 @@ public class Program
             }
             catch (Exception ex)
             {
-                _logger!.LogError(ex, "❌ Failed to collect device information");
+                _logger!.LogError(ex, "Failed to collect device information");
                 return 1;
             }
             
@@ -597,15 +625,15 @@ public class Program
             var config = await configService.ValidateConfigurationAsync();
             if (!config.IsValid)
             {
-                _logger!.LogError("❌ Configuration validation failed: {Errors}", 
+                _logger!.LogError("Configuration validation failed: {Errors}", 
                     string.Join(", ", config.Errors));
                 return 1;
             }
-            _logger!.LogInformation("✅ Configuration validation passed");
+            _logger!.LogInformation("Configuration validation passed");
             
             if (verbose && config.Warnings.Count > 0)
             {
-                _logger!.LogWarning("⚠️ Configuration warnings: {Warnings}", 
+                _logger!.LogWarning("Configuration warnings: {Warnings}", 
                     string.Join(", ", config.Warnings));
             }
             
@@ -614,21 +642,21 @@ public class Program
             var apiConnectivity = await apiService.TestConnectivityAsync();
             if (!apiConnectivity)
             {
-                _logger!.LogError("❌ API connectivity test failed");
+                _logger!.LogError("API connectivity test failed");
                 return 1;
             }
-            _logger!.LogInformation("✅ API connectivity test passed");
+            _logger!.LogInformation("API connectivity test passed");
             
             // Step 4: Test device registration check
             _logger!.LogInformation("=== STEP 4: DEVICE REGISTRATION CHECK ===");
             var isRegistered = await apiService.IsDeviceRegisteredAsync(deviceInfo.DeviceId);
             if (isRegistered)
             {
-                _logger!.LogInformation("✅ Device {DeviceId} is already registered", deviceInfo.DeviceId);
+                _logger!.LogInformation("Device {DeviceId} is already registered", deviceInfo.DeviceId);
             }
             else
             {
-                _logger!.LogWarning("⚠️  Device {DeviceId} is not registered", deviceInfo.DeviceId);
+                _logger!.LogWarning(" Device {DeviceId} is not registered", deviceInfo.DeviceId);
                 _logger!.LogInformation("   This device will be auto-registered on first data collection run");
             }
             
@@ -639,23 +667,31 @@ public class Program
                 var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
                 var deviceData = await dataCollectionService.CollectDataAsync();
                 
-                _logger!.LogInformation("✅ Comprehensive data collection successful");
-                _logger!.LogInformation("   Collected data sections:");
+                _logger!.LogInformation("Comprehensive data collection successful");
+                _logger!.LogInformation("   Device data request created:");
+                _logger!.LogInformation("     - Device: {Device}", deviceData.Device);
+                _logger!.LogInformation("     - SerialNumber: {SerialNumber}", deviceData.SerialNumber);
+                _logger!.LogInformation("     - Kind: {Kind}", deviceData.Kind);
+                _logger!.LogInformation("     - Timestamp: {Timestamp}", deviceData.Ts);
                 
-                foreach (var kvp in deviceData)
+                if (deviceData.Payload != null)
                 {
-                    _logger!.LogInformation("     - {Section}: {Type}", kvp.Key, kvp.Value?.GetType().Name ?? "null");
+                    _logger!.LogInformation("   Payload sections:");
+                    if (deviceData.Payload.Device != null) _logger!.LogInformation("     - Device: Dictionary with {Count} items", deviceData.Payload.Device.Count);
+                    if (deviceData.Payload.System != null) _logger!.LogInformation("     - System: Dictionary with {Count} items", deviceData.Payload.System.Count);
+                    if (deviceData.Payload.Security != null) _logger!.LogInformation("     - Security: Dictionary with {Count} items", deviceData.Payload.Security.Count);
+                    if (deviceData.Payload.OsQuery != null) _logger!.LogInformation("     - OsQuery: Dictionary with {Count} items", deviceData.Payload.OsQuery.Count);
                 }
             }
             catch (Exception ex)
             {
-                _logger!.LogError(ex, "❌ Data collection test failed");
+                _logger!.LogError(ex, "Data collection test failed");
                 return 1;
             }
             
             _logger!.LogInformation("=== ALL TESTS PASSED SUCCESSFULLY ===");
-            _logger!.LogInformation("🎯 ReportMate client is ready for data collection and reporting");
-            _logger!.LogInformation("💡 Run 'runner.exe run' to perform actual data collection and transmission");
+            _logger!.LogInformation(" ReportMate client is ready for data collection and reporting");
+            _logger!.LogInformation(" Run 'runner.exe run' to perform actual data collection and transmission");
             
             return 0;
         }
@@ -741,7 +777,7 @@ public class Program
             var configService = _serviceProvider!.GetRequiredService<IConfigurationService>();
             await configService.InstallConfigurationAsync();
             
-            _logger!.LogInformation("✅ Installation completed successfully");
+            _logger!.LogInformation("Installation completed successfully");
             return 0;
         }
         catch (Exception ex)
@@ -772,6 +808,68 @@ public class Program
         {
             _logger!.LogError(ex, "Error in build command");
             return Task.FromResult(1);
+        }
+    }
+
+    private static async Task<int> HandleModularTestCommand(bool verbose)
+    {
+        try
+        {
+            if (verbose)
+            {
+                _logger!.LogInformation("=== MODULAR TEST COMMAND VERBOSE MODE ===");
+            }
+
+            _logger!.LogInformation("🧪 Testing Modular Data Collection System");
+            _logger!.LogInformation("===============================================");
+
+            var modularService = _serviceProvider!.GetRequiredService<IModularDataCollectionService>();
+            
+            _logger!.LogInformation("Starting modular data collection test...");
+            
+            var payload = await modularService.CollectAllModuleDataAsync();
+            
+            _logger!.LogInformation($"Modular data collection completed!");
+            _logger!.LogInformation($"Device ID: {payload.DeviceId}");
+            _logger!.LogInformation($" Collection Time: {payload.CollectedAt:yyyy-MM-dd HH:mm:ss}");
+            _logger!.LogInformation($"Platform: {payload.Platform}");
+            _logger!.LogInformation($" Client Version: {payload.ClientVersion}");
+            
+            // Show module data summary
+            var moduleCount = 0;
+            if (payload.Applications != null) { moduleCount++; _logger!.LogInformation($"  Applications: {payload.Applications.TotalApplications} apps"); }
+            if (payload.Hardware != null) { moduleCount++; _logger!.LogInformation($"  Hardware: {payload.Hardware.Processor.Name}"); }
+            if (payload.Inventory != null) { moduleCount++; _logger!.LogInformation($"  Inventory: {payload.Inventory.DeviceName}"); }
+            if (payload.Installs != null) { moduleCount++; _logger!.LogInformation($"  Installs: Module data collected"); }
+            if (payload.Management != null) { moduleCount++; _logger!.LogInformation($"  Management: Module data collected"); }
+            if (payload.Network != null) { moduleCount++; _logger!.LogInformation($"  Network: {payload.Network.Interfaces.Count} interfaces"); }
+            if (payload.Profiles != null) { moduleCount++; _logger!.LogInformation($"  Profiles: Module data collected"); }
+            if (payload.Security != null) { moduleCount++; _logger!.LogInformation($"  Security: Module data collected"); }
+            if (payload.System != null) { moduleCount++; _logger!.LogInformation($"  System: {payload.System.OperatingSystem.Name}"); }
+            
+            _logger!.LogInformation($"Total modules processed: {moduleCount}/9");
+            
+            // Test loading cached data
+            _logger!.LogInformation("Testing cached data loading...");
+            var cachedPayload = await modularService.LoadCachedDataAsync();
+            if (cachedPayload.DeviceId == payload.DeviceId)
+            {
+                _logger!.LogInformation("Cached data loaded successfully");
+            }
+            else
+            {
+                _logger!.LogWarning("Cached data mismatch or not found");
+            }
+            
+            _logger!.LogInformation("===============================================");
+            _logger!.LogInformation(" Modular test completed successfully!");
+            
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            _logger!.LogError(ex, "Error during modular test");
+            return 1;
         }
     }
 }

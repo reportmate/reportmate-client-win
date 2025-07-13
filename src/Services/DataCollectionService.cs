@@ -3,10 +3,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using ReportMate.WindowsClient.Models;
+using ReportMate.WindowsClient.DataProcessing;
 
 namespace ReportMate.WindowsClient.Services;
 
@@ -15,8 +17,8 @@ namespace ReportMate.WindowsClient.Services;
 /// </summary>
 public interface IDataCollectionService
 {
-    Task<bool> CollectAndSendDataAsync(bool forceCollection = false);
-    Task<Dictionary<string, object>> CollectDataAsync();
+    Task<bool> CollectAndSendDataAsync(bool forceCollection = false, bool collectOnly = false);
+    Task<DeviceDataRequest> CollectDataAsync();
 }
 
 public class DataCollectionService : IDataCollectionService
@@ -26,22 +28,25 @@ public class DataCollectionService : IDataCollectionService
     private readonly IDeviceInfoService _deviceInfoService;
     private readonly IApiService _apiService;
     private readonly IConfigurationService _configurationService;
+    private readonly IModularDataCollectionService _modularDataCollectionService;
 
     public DataCollectionService(
         ILogger<DataCollectionService> logger,
         IConfiguration configuration,
         IDeviceInfoService deviceInfoService,
         IApiService apiService,
-        IConfigurationService configurationService)
+        IConfigurationService configurationService,
+        IModularDataCollectionService modularDataCollectionService)
     {
         _logger = logger;
         _configuration = configuration;
         _deviceInfoService = deviceInfoService;
         _apiService = apiService;
         _configurationService = configurationService;
+        _modularDataCollectionService = modularDataCollectionService;
     }
 
-    public async Task<bool> CollectAndSendDataAsync(bool forceCollection = false)
+    public async Task<bool> CollectAndSendDataAsync(bool forceCollection = false, bool collectOnly = false)
     {
         try
         {
@@ -61,12 +66,12 @@ public class DataCollectionService : IDataCollectionService
             var configValidation = await _configurationService.ValidateConfigurationAsync();
             if (!configValidation.IsValid)
             {
-                _logger.LogError("❌ Configuration validation failed: {Errors}", 
+                _logger.LogError("Configuration validation failed: {Errors}", 
                     string.Join(", ", configValidation.Errors));
                 return false;
             }
 
-            _logger.LogInformation("✅ Configuration validated successfully");
+            _logger.LogInformation("Configuration validated successfully");
 
             // Log warnings but continue
             foreach (var warning in configValidation.Warnings)
@@ -74,69 +79,103 @@ public class DataCollectionService : IDataCollectionService
                 _logger.LogWarning("Configuration warning: {Warning}", warning);
             }
 
-            // Collect basic device info first for registration
-            _logger.LogInformation("=== STEP 2: DEVICE INFORMATION COLLECTION ===");
-            _logger.LogInformation("Getting device information for registration check...");
-            var deviceInfo = await _deviceInfoService.GetBasicDeviceInfoAsync();
+            // Get consistent device identification using modular data collection
+            _logger.LogInformation("=== STEP 2: DEVICE IDENTIFICATION ===");
+            _logger.LogInformation("Getting device identity using modular service...");
+            
+            // Use modular data collection to get device identification AND collect all data in one pass
+            var deviceModularPayload = await _modularDataCollectionService.CollectAllModuleDataAsync();
+            var deviceId = deviceModularPayload.DeviceId; // This should be the UUID
+            var serialNumber = deviceModularPayload.Inventory?.SerialNumber ?? "Unknown";
+            var computerName = deviceModularPayload.Inventory?.DeviceName ?? "Unknown";
+            var domain = ""; // Domain not collected in modular service yet
             
             _logger.LogInformation("=== DEVICE IDENTIFICATION RESULTS ===");
-            _logger.LogInformation("Device ID: {DeviceId} (PRIMARY IDENTIFIER)", deviceInfo.DeviceId);
-            _logger.LogInformation("Serial Number: {SerialNumber}", deviceInfo.SerialNumber);
-            _logger.LogInformation("Computer Name: {ComputerName}", deviceInfo.ComputerName);
-            _logger.LogInformation("Domain: {Domain}", deviceInfo.Domain);
+            _logger.LogInformation("Device UUID (DeviceId): {DeviceId}", deviceId);
+            _logger.LogInformation("Device Serial Number: {SerialNumber}", serialNumber);
+            _logger.LogInformation("Computer Name: {ComputerName}", computerName);
+            _logger.LogInformation("Domain: {Domain}", domain);
+            _logger.LogInformation("Expected Dashboard URL: /device/{SerialNumber}", serialNumber);
 
             // CRITICAL: DEVICE REGISTRATION CHECK AND AUTO-REGISTRATION
             // Check if device is registered, if not, register it via "new_client" event
             _logger.LogInformation("=== STEP 3: DEVICE REGISTRATION CHECK ===");
-            _logger.LogInformation("� Checking if device {DeviceId} is registered...", deviceInfo.DeviceId);
+            _logger.LogInformation("Checking if device {DeviceId} is registered...", deviceId);
             
-            var isRegistered = await _apiService.IsDeviceRegisteredAsync(deviceInfo.DeviceId);
+            var isRegistered = await _apiService.IsDeviceRegisteredAsync(deviceId);
             _logger.LogInformation("Device {DeviceId} registration status: {Status}", 
-                deviceInfo.DeviceId, isRegistered ? "✅ REGISTERED" : "❌ NOT REGISTERED");
+                deviceId, isRegistered ? "REGISTERED" : "NOT REGISTERED");
             
             if (!isRegistered)
             {
-                _logger.LogInformation("🚨 UNREGISTERED DEVICE - Initiating auto-registration");
-                _logger.LogInformation("📝 Registering device {DeviceId} as 'New Client'", deviceInfo.DeviceId);
+                _logger.LogInformation(" UNREGISTERED DEVICE - Initiating auto-registration");
+                _logger.LogInformation(" Registering device {DeviceId} as 'New Client'", deviceId);
                 
-                var registrationSuccess = await _apiService.RegisterDeviceAsync(deviceInfo);
+                // Create minimal device info for registration
+                var minimalDeviceInfo = new DeviceInfo
+                {
+                    DeviceId = deviceId,
+                    SerialNumber = serialNumber, // Use actual serial number for URL routing
+                    ComputerName = computerName,
+                    Domain = domain
+                };
+                
+                var registrationSuccess = await _apiService.RegisterDeviceAsync(minimalDeviceInfo);
                 _logger.LogInformation("Registration attempt result: {Success}", registrationSuccess);
                 
                 if (!registrationSuccess)
                 {
-                    _logger.LogError("❌ Device registration failed for {DeviceId}", deviceInfo.DeviceId);
-                    _logger.LogError("⚠️  Proceeding with data collection anyway - device may register on next run");
+                    _logger.LogError("Device registration failed for {DeviceId}", deviceId);
+                    _logger.LogError(" Proceeding with data collection anyway - device may register on next run");
                 }
                 else
                 {
-                    _logger.LogInformation("✅ Device {DeviceId} registered successfully", deviceInfo.DeviceId);
-                    _logger.LogInformation("✅ New Client event should be visible in dashboard at /device/{DeviceId}", deviceInfo.DeviceId);
+                    _logger.LogInformation("Device {DeviceId} registered successfully", deviceId);
+                    _logger.LogInformation("New Client event should be visible in dashboard at /device/{DeviceId}", deviceId);
                 }
             }
             else
             {
-                _logger.LogInformation("✅ Device {DeviceId} is already registered", deviceInfo.DeviceId);
+                _logger.LogInformation("Device {DeviceId} is already registered", deviceId);
             }
 
-            // Now collect comprehensive data - ONLY after registration is confirmed
-            _logger.LogInformation("=== STEP 4: COMPREHENSIVE DATA COLLECTION ===");
-            _logger.LogInformation("🔓 AUTHORIZED: Device registration verified, proceeding with data collection");
-            _logger.LogInformation("📊 COLLECTING: Comprehensive device data including osquery results");
+            // Data already collected during device identification - skip redundant collection
+            _logger.LogInformation("=== STEP 4: MODULAR DATA COLLECTION ===");
+            _logger.LogInformation(" AUTHORIZED: Device registration verified, proceeding with modular data collection");
+            _logger.LogInformation("COLLECTING: Modular device data with individual cache files");
             
-            var deviceData = await CollectDataAsync();
+            // Reuse the modular payload from device identification step (no need to collect again)
+            var modularPayload = deviceModularPayload;
+            
+            _logger.LogInformation("Modular data collection completed successfully");
+            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.DeviceId);
+            _logger.LogInformation(" Collection Time: {CollectedAt:yyyy-MM-dd HH:mm:ss}", modularPayload.CollectedAt);
+            _logger.LogInformation("Individual module cache files created in C:\\ProgramData\\ManagedReports\\cache\\");
 
-            _logger.LogInformation("✅ Data collection completed successfully");
-            LogCollectionSummary(deviceData);
+            // Check if we should skip transmission
+            if (collectOnly)
+            {
+                _logger.LogInformation("=== COLLECT-ONLY MODE ===");
+                _logger.LogInformation("Data transmission SKIPPED (--collect-only flag specified)");
+                _logger.LogInformation("Data collection completed successfully without transmission");
+                _logger.LogInformation("Data saved to cache files only");
+                _logger.LogInformation(" To transmit data, run without --collect-only flag");
+                await _configurationService.UpdateLastRunTimeAsync();
+                return true;
+            }
 
             // Send to API
             _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");
-            _logger.LogInformation("🚀 Sending data to ReportMate API via /api/device");
+            _logger.LogInformation("Sending modular data to ReportMate API via /api/device");
+            
+            // Convert modular payload to API request format
+            var deviceData = ConvertModularPayloadToRequest(modularPayload);
             
             // Calculate data size safely without reflection-based serialization
             var dataSize = 0;
             try
             {
-                dataSize = System.Text.Json.JsonSerializer.Serialize(deviceData, ReportMateJsonContext.Default.DictionaryStringObject).Length;
+                dataSize = System.Text.Json.JsonSerializer.Serialize(deviceData, ReportMateJsonContext.Default.DeviceDataRequest).Length;
             }
             catch (Exception ex)
             {
@@ -145,35 +184,34 @@ public class DataCollectionService : IDataCollectionService
             }
             
             _logger.LogInformation("Data size: {DataSize} bytes", dataSize > 0 ? dataSize.ToString() : "Unknown");
-            _logger.LogInformation("Device ID: {DeviceId}", deviceInfo.DeviceId);
-            _logger.LogInformation("Serial Number: {SerialNumber}", deviceInfo.SerialNumber);
+            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.DeviceId);
+            _logger.LogInformation("Platform: {Platform}", modularPayload.Platform);
             
             var success = await _apiService.SendDeviceDataAsync(deviceData);
 
             if (success)
             {
-                _logger.LogInformation("✅ SUCCESS: Data transmission completed successfully");
-                _logger.LogInformation("✅ DASHBOARD: Data should be visible at /device/{SerialNumber}", deviceInfo.SerialNumber);
+                _logger.LogInformation("SUCCESS: Data transmission completed successfully");
+                _logger.LogInformation("DASHBOARD: Data should be visible at /device/{DeviceId}", modularPayload.DeviceId);
                 await _configurationService.UpdateLastRunTimeAsync();
                 return true;
             }
             else
             {
-                _logger.LogError("❌ TRANSMISSION FAILED: Data collection succeeded but transmission failed");
-                _logger.LogError("❌ Device Serial: {SerialNumber}", deviceInfo.SerialNumber);
-                _logger.LogError("❌ Device ID: {DeviceId}", deviceInfo.DeviceId);
-                _logger.LogError("❌ Computer Name: {ComputerName}", deviceInfo.ComputerName);
+                _logger.LogError("TRANSMISSION FAILED: Data collection succeeded but transmission failed");
+                _logger.LogError("Device ID: {DeviceId}", modularPayload.DeviceId);
+                _logger.LogError("Platform: {Platform}", modularPayload.Platform);
                 
                 // Use source-generated JSON serialization
                 var jsonOptions = new JsonSerializerOptions
                 {
                     TypeInfoResolver = ReportMateJsonContext.Default
                 };
-                _logger.LogError("❌ Data Size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData, jsonOptions).Length);
-                _logger.LogError("❌ NOTE: Will retry on next run");
-                _logger.LogError("❌ Data collection or transmission failed");
-                _logger.LogError("❌ IMPACT: Device may not be registered or API issues detected");
-                _logger.LogError("❌ ACTION REQUIRED: Check logs above for specific failure reasons");
+                _logger.LogError("Data Size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData, jsonOptions).Length);
+                _logger.LogError("NOTE: Will retry on next run");
+                _logger.LogError("Data collection or transmission failed");
+                _logger.LogError("IMPACT: Device may not be registered or API issues detected");
+                _logger.LogError("ACTION REQUIRED: Check logs above for specific failure reasons");
                 return false;
             }
         }
@@ -190,126 +228,155 @@ public class DataCollectionService : IDataCollectionService
                 _logger.LogError("Inner Exception Message: {InnerExceptionMessage}", ex.InnerException.Message);
             }
             
-            _logger.LogError("❌ CRITICAL ERROR: Data collection process failed");
-            _logger.LogError("❌ IMPACT: Device will not be updated in ReportMate");
-            _logger.LogError("❌ ACTION REQUIRED: Review error details above and check system configuration");
+            _logger.LogError("CRITICAL ERROR: Data collection process failed");
+            _logger.LogError("IMPACT: Device will not be updated in ReportMate");
+            _logger.LogError("ACTION REQUIRED: Review error details above and check system configuration");
             
             return false;
         }
     }
 
-    public async Task<Dictionary<string, object>> CollectDataAsync()
+    public async Task<DeviceDataRequest> CollectDataAsync()
     {
         try
         {
-            _logger.LogInformation("=== STREAMLINED DATA COLLECTION STARTING ===");
-            _logger.LogInformation("Collecting device and osquery data (system/security extracted from osquery on backend)...");
-
-            var deviceData = await _deviceInfoService.GetComprehensiveDeviceDataAsync();
+            _logger.LogInformation("MODULAR: Collecting data via modular service...");
             
-            _logger.LogInformation("Raw data collection completed. Analyzing collected data...");
+            // Use modular data collection service
+            var modularPayload = await _modularDataCollectionService.CollectAllModuleDataAsync();
+            
+            // Convert modular payload to request format
+            var deviceData = ConvertModularPayloadToRequest(modularPayload);
 
-            // Log detailed collection results for streamlined payload
-            if (deviceData.TryGetValue("device", out var deviceInfo))
-            {
-                _logger.LogInformation("✅ Device Info: Collected basic device information");
-                if (deviceInfo is DeviceInfo di)
-                {
-                    _logger.LogInformation("   Device ID: {DeviceId}", di.DeviceId);
-                    _logger.LogInformation("   Serial Number: {SerialNumber}", di.SerialNumber);
-                    _logger.LogInformation("   Computer Name: {ComputerName}", di.ComputerName);
-                    _logger.LogInformation("   Manufacturer: {Manufacturer}", di.Manufacturer);
-                    _logger.LogInformation("   Model: {Model}", di.Model);
-                }
-            }
-
-            _logger.LogInformation("⚠️  System Info: REMOVED - will be extracted from osquery data on backend");
-            _logger.LogInformation("⚠️  Security Info: REMOVED - will be extracted from osquery data on backend");
-
-            if (deviceData.TryGetValue("osquery", out var osqueryInfo))
-            {
-                _logger.LogInformation("✅ OSQuery Data: Collected osquery results");
-                if (osqueryInfo is Dictionary<string, object> osqueryDict)
-                {
-                    _logger.LogInformation("   OSQuery queries executed: {QueryCount}", osqueryDict.Keys.Count);
-                    foreach (var queryName in osqueryDict.Keys)
-                    {
-                        _logger.LogInformation("   - Query: {QueryName}", queryName);
-                    }
-                    _logger.LogInformation("   Backend will extract system and security data from these osquery results");
-                }
-            }
-            else
-            {
-                _logger.LogWarning("⚠️  OSQuery Data: No osquery data found - system and security data will be limited");
-            }
-
-            // Sanitize the device data to ensure it's JSON serializable
-            _logger.LogInformation("Sanitizing streamlined data for JSON serialization...");
-            var sanitizedData = SanitizeForSerialization(deviceData);
-
-            // Add ReportMate client metadata with enhanced info
-            _logger.LogInformation("Adding ReportMate client metadata...");
-            sanitizedData["reportmate_client"] = new Dictionary<string, object>
-            {
-                { "version", "2025.7.1.3" },
-                { "platform", "windows" },
-                { "collection_time", DateTime.UtcNow.ToString("O") },
-                { "client_type", "windows_cimian" }, // Specify this is for Windows with Cimian support
-                { "managed_installs_system", "Cimian" }, // Use Cimian for Windows (vs Munki for Mac)
-                { "payload_format", "streamlined" }, // Indicate this is the new streamlined format
-                { "data_sources", "device+osquery" } // Indicate what sections are included
-            };
-
-            // Add environment context with enhanced details
-            _logger.LogInformation("Adding environment context...");
-            sanitizedData["environment"] = new Dictionary<string, object>
-            {
-                { "is_domain_joined", !string.IsNullOrEmpty(Environment.UserDomainName) && Environment.UserDomainName != Environment.MachineName },
-                { "user_interactive", Environment.UserInteractive },
-                { "current_directory", Environment.CurrentDirectory },
-                { "machine_name", Environment.MachineName },
-                { "user_domain_name", Environment.UserDomainName },
-                { "processor_count", Environment.ProcessorCount },
-                { "is_64bit_os", Environment.Is64BitOperatingSystem },
-                { "is_64bit_process", Environment.Is64BitProcess },
-                { "clr_version", Environment.Version.ToString() },
-                { "collection_method", "runner.exe" },
-                { "elevation_required", true }, // runner.exe requires admin
-                { "data_source", "comprehensive" }
-            };
-
-            // Calculate and log data size
-            try 
-            {
-                var jsonOptions = new JsonSerializerOptions { TypeInfoResolver = ReportMateJsonContext.Default };
-                var serialized = System.Text.Json.JsonSerializer.Serialize(sanitizedData, ReportMateJsonContext.Default.DictionaryStringObject);
-                var dataSizeKB = Math.Round(serialized.Length / 1024.0, 2);
-                
-                _logger.LogInformation("✅ Data collection completed successfully");
-                _logger.LogInformation("📊 Final streamlined data size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, serialized.Length);
-                _logger.LogInformation("📋 Payload format: device + osquery (system/security extracted on backend)");
-                
-                if (dataSizeKB > 10000) // Log warning for large payloads
-                {
-                    _logger.LogWarning("⚠️  Large payload detected: {DataSize} KB - this may cause browser performance issues", dataSizeKB);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Error calculating data size for logging");
-                _logger.LogInformation("✅ Device data collection completed (size calculation failed)");
-            }
-
-            _logger.LogInformation("=== STREAMLINED DATA COLLECTION COMPLETED ===");
-            return sanitizedData;
+            _logger.LogInformation("MODULAR: Data collection completed using modular service");
+            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.DeviceId);
+            _logger.LogInformation("Individual module cache files created");
+            
+            return deviceData;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Error collecting comprehensive device data");
+            _logger.LogError(ex, "Error collecting modular device data");
             throw;
         }
     }
+
+
+
+    /// <summary>
+    /// Converts UnifiedDevicePayload to API request format
+    /// </summary>
+    private DeviceDataRequest ConvertModularPayloadToRequest(UnifiedDevicePayload modularPayload)
+    {
+        // Extract network information - look for primary interface or first available
+        string ipAddressV4 = "";
+        string macAddress = "";
+        if (modularPayload.Network?.Interfaces?.Count > 0)
+        {
+            var primaryInterface = modularPayload.Network.Interfaces.FirstOrDefault();
+            if (primaryInterface != null)
+            {
+                macAddress = primaryInterface.MacAddress;
+                ipAddressV4 = primaryInterface.IpAddresses?.FirstOrDefault() ?? "";
+            }
+        }
+
+        // Extract basic device information from the modular payload
+        var deviceDict = new Dictionary<string, object>
+        {
+            ["DeviceId"] = modularPayload.DeviceId,
+            ["SerialNumber"] = modularPayload.Inventory?.SerialNumber ?? "",
+            ["ComputerName"] = modularPayload.Inventory?.DeviceName ?? Environment.MachineName,
+            ["Domain"] = "",
+            ["Manufacturer"] = modularPayload.Hardware?.Manufacturer ?? "",
+            ["Model"] = modularPayload.Hardware?.Model ?? "",
+            ["TotalMemoryGB"] = modularPayload.Hardware?.Memory?.TotalPhysical / (1024 * 1024 * 1024) ?? 0,
+            ["LastSeen"] = DateTime.UtcNow,
+            ["ClientVersion"] = modularPayload.ClientVersion,
+            ["AssetTag"] = modularPayload.Inventory?.AssetTag ?? "",
+            ["OsName"] = modularPayload.System?.OperatingSystem?.Name ?? "",
+            ["OsVersion"] = modularPayload.System?.OperatingSystem?.Version ?? "",
+            ["OsBuild"] = modularPayload.System?.OperatingSystem?.Build ?? "",
+            ["OsArchitecture"] = modularPayload.System?.OperatingSystem?.Architecture ?? "",
+            ["IpAddressV4"] = ipAddressV4,
+            ["IpAddressV6"] = "",
+            ["MacAddress"] = macAddress,
+            ["MdmEnrollmentId"] = modularPayload.Management?.MdmEnrollment?.EnrollmentId ?? "",
+            ["MdmEnrollmentType"] = modularPayload.Management?.MdmEnrollment?.Provider ?? "",
+            ["MdmEnrollmentState"] = modularPayload.Management?.MdmEnrollment?.IsEnrolled.ToString() ?? "",
+            ["MdmManagementUrl"] = modularPayload.Management?.MdmEnrollment?.ManagementUrl ?? "",
+            ["Status"] = "online"
+        };
+
+        var payload = new DeviceDataPayload
+        {
+            Device = deviceDict,
+            CollectionTimestamp = modularPayload.CollectedAt.ToString("O"),
+            ClientVersion = modularPayload.ClientVersion,
+            CollectionType = "modular",
+            ManagedInstallsSystem = "Cimian",
+            Source = "runner.exe"
+        };
+
+        // Add modular data to OsQuery section
+        var osQueryDict = new Dictionary<string, object>();
+        if (modularPayload.System != null) osQueryDict["system"] = modularPayload.System;
+        if (modularPayload.Hardware != null) osQueryDict["hardware"] = modularPayload.Hardware;
+        if (modularPayload.Network != null) osQueryDict["network"] = modularPayload.Network;
+        if (modularPayload.Applications != null) osQueryDict["applications"] = modularPayload.Applications;
+        if (modularPayload.Security != null) osQueryDict["security"] = modularPayload.Security;
+        if (modularPayload.Management != null) osQueryDict["management"] = modularPayload.Management;
+        if (modularPayload.Inventory != null) osQueryDict["inventory"] = modularPayload.Inventory;
+        if (modularPayload.Installs != null) osQueryDict["installs"] = modularPayload.Installs;
+        if (modularPayload.Profiles != null) osQueryDict["profiles"] = modularPayload.Profiles;
+        
+        payload.OsQuery = osQueryDict;
+
+        return new DeviceDataRequest
+        {
+            Device = modularPayload.DeviceId,
+            SerialNumber = modularPayload.Inventory?.SerialNumber ?? "",
+            Kind = "Info",
+            Ts = DateTime.UtcNow.ToString("O"),
+            Payload = payload
+        };
+    }
+
+    /// <summary>
+    /// Logs summary of processed data collection
+    /// </summary>
+    private void LogProcessedDataSummary(ProcessedDeviceData processedData)
+    {
+        try
+        {
+            _logger.LogInformation("=== PROCESSED DATA COLLECTION SUMMARY ===");
+            _logger.LogInformation("Device: {DeviceName} ({Manufacturer} {Model})", 
+                processedData.BasicInfo.Name, 
+                processedData.BasicInfo.Manufacturer, 
+                processedData.BasicInfo.Model);
+            _logger.LogInformation("Processor: {Processor} ({Cores} cores)", 
+                processedData.Hardware.Processor, 
+                processedData.Hardware.Cores);
+            _logger.LogInformation("Graphics: {Graphics}", processedData.Hardware.Graphics);
+            _logger.LogInformation("Memory: {Memory}", processedData.Hardware.Memory);
+            _logger.LogInformation("OS: {OsName} {OsVersion} (Build {OsBuild})", 
+                processedData.OperatingSystem.Name, 
+                processedData.OperatingSystem.Version, 
+                processedData.OperatingSystem.Build);
+            _logger.LogInformation("Network: {IpAddress} (MAC: {MacAddress})", 
+                processedData.Network.IpAddress, 
+                processedData.Network.MacAddress);
+            _logger.LogInformation("Client Version: {ClientVersion}", processedData.ClientVersion);
+            _logger.LogInformation("Last Updated: {LastUpdated}", processedData.LastUpdated);
+            _logger.LogInformation("=====================================");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error logging processed data summary");
+        }
+    }
+
+
 
     private void LogCollectionSummary(Dictionary<string, object> deviceData)
     {
@@ -328,7 +395,7 @@ public class DataCollectionService : IDataCollectionService
 
             if (deviceData.TryGetValue("osquery", out var osqueryInfo))
             {
-                summary.Add($"osquery data collected");
+                summary.Add($"osquery data collected (SINGLE PASS - no redundancy)");
             }
 
             if (deviceData.TryGetValue("reportmate_client", out var clientInfo))
@@ -336,7 +403,7 @@ public class DataCollectionService : IDataCollectionService
                 summary.Add($"ReportMate client metadata collected");
             }
 
-            _logger.LogInformation("Streamlined collection summary: {Summary}", string.Join(", ", summary));
+            _logger.LogInformation("Optimized collection summary: {Summary}", string.Join(", ", summary));
         }
         catch (Exception ex)
         {
@@ -543,6 +610,32 @@ public class DataCollectionService : IDataCollectionService
                 return dict;
             default:
                 return element.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Gets simple device identification without full osquery data collection
+    /// </summary>
+    private Task<string> GetSimpleDeviceIdAsync()
+    {
+        try
+        {
+            // Use only basic system info for device ID - no full osquery collection
+            var computerName = Environment.MachineName;
+            var userName = Environment.UserName;
+            var osVersion = Environment.OSVersion.ToString();
+            
+            // Create a simple device ID based on available system info
+            var deviceId = $"{computerName}_{userName}_{osVersion.GetHashCode()}";
+            
+            _logger.LogInformation("Generated simple device ID: {DeviceId}", deviceId);
+            return Task.FromResult(deviceId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error generating simple device ID");
+            // Fallback to machine name if something goes wrong
+            return Task.FromResult(Environment.MachineName);
         }
     }
 }

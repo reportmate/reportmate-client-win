@@ -47,10 +47,13 @@ public class OsQueryService : IOsQueryService
 
             _logger.LogDebug("Executing osquery: {Query}", query);
 
+            var arguments = $"--json \"{query}\"";
+            _logger.LogDebug("osquery command: {FileName} {Arguments}", _osqueryPath, arguments);
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = _osqueryPath,
-                Arguments = $"--json \"{query}\"",
+                Arguments = arguments,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -163,8 +166,15 @@ public class OsQueryService : IOsQueryService
     {
         try
         {
+            if (string.IsNullOrEmpty(queryFilePath))
+            {
+                _logger.LogError("Query file path is null or empty");
+                return new Dictionary<string, List<Dictionary<string, object>>>();
+            }
+            
             if (!File.Exists(queryFilePath))
             {
+                _logger.LogError("Query file not found: {QueryFile}", queryFilePath);
                 throw new FileNotFoundException($"Query file not found: {queryFilePath}");
             }
 
@@ -175,6 +185,7 @@ public class OsQueryService : IOsQueryService
 
             if (queries == null)
             {
+                _logger.LogError("Failed to deserialize queries from file: {QueryFile}", queryFilePath);
                 throw new InvalidOperationException("Failed to parse queries file");
             }
 
@@ -184,25 +195,29 @@ public class OsQueryService : IOsQueryService
             {
                 try
                 {
-                    _logger.LogDebug("Executing query '{QueryName}': {Query}", kvp.Key, kvp.Value);
-                    
                     var queryResult = await ExecuteQueryAsync(kvp.Value);
                     
                     // Ensure result is a list
                     if (queryResult.ContainsKey("results") && queryResult["results"] is List<Dictionary<string, object>> list)
                     {
+                        // Multiple results case
                         results[kvp.Key] = list;
+                    }
+                    else if (queryResult.ContainsKey("result_count"))
+                    {
+                        // This shouldn't happen with current logic, but handle it
+                        results[kvp.Key] = new List<Dictionary<string, object>>();
                     }
                     else if (queryResult.Count > 0)
                     {
+                        // Single result case - wrap in list
                         results[kvp.Key] = new List<Dictionary<string, object>> { queryResult };
                     }
                     else
                     {
+                        // No results
                         results[kvp.Key] = new List<Dictionary<string, object>>();
                     }
-
-                    _logger.LogDebug("Query '{QueryName}' returned {Count} results", kvp.Key, results[kvp.Key].Count);
                 }
                 catch (Exception ex)
                 {
