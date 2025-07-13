@@ -122,9 +122,13 @@ public class WmiHelperService : IWmiHelperService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "WMI query failed: {Query} - {Message}", query, ex.Message);
-            // Mark WMI as unavailable if we get type initialization errors
-            if (ex is TypeInitializationException || ex.InnerException is TypeInitializationException)
+            
+            // Mark WMI as unavailable if we get type initialization errors (common on ARM64/.NET 8)
+            if (ex is TypeInitializationException || ex.InnerException is TypeInitializationException ||
+                ex is TypeLoadException || ex.Message.Contains("WmiNetUtilsHelper") || 
+                ex.Message.Contains("ManagementPath"))
             {
+                _logger.LogWarning("WMI System.Management library compatibility issue detected - disabling WMI queries");
                 _wmiAvailable = false;
             }
         }
