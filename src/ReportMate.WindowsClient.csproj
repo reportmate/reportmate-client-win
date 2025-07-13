@@ -13,8 +13,8 @@
     <AssemblyDescription>Windows client for ReportMate device management and security monitoring</AssemblyDescription>
     <AssemblyCompany>ReportMate</AssemblyCompany>
     <AssemblyProduct>ReportMate</AssemblyProduct>
-    <AssemblyVersion>2025.07.10.0</AssemblyVersion>
-    <FileVersion>2025.07.10.0</FileVersion>
+    <AssemblyVersion>2025.07.12.0</AssemblyVersion>
+    <FileVersion>2025.07.12.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     
     <!-- Suppress trim warnings for assemblies that are not fully trim-compatible -->
@@ -54,7 +54,7 @@
     <None Include="appsettings.yaml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="osquery-queries.json">
+    <None Include="osquery\**\*.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
   </ItemGroup>
@@ -66,6 +66,91 @@
   </ItemGroup>
 
 </Project>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -161,7 +161,15 @@ C:\Program Files\ReportMate\
 C:\ProgramData\ManagedReports\
 ├── appsettings.yaml             # Runtime configuration
 ├── appsettings.template.yaml    # Enterprise template
-└── queries.json                 # OSquery definitions
+└── osquery\                     # Modular osquery configuration
+    ├── enabled-modules.json     # Module configuration
+    └── modules\                 # Individual module query files
+        ├── hardware.json        # Hardware detection queries
+        ├── system.json          # OS and system queries
+        ├── network.json         # Network configuration queries
+        ├── security.json        # Security feature queries
+        ├── applications.json    # Software inventory queries
+        └── inventory.json       # Device identification queries
 
 C:\Program Files\Cimian\         # (NUPKG only)
 └── postflight.ps1              # Cimian integration script
