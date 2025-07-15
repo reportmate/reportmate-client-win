@@ -1,32 +1,57 @@
 {
   "module": "installs",
-  "version": "1.0.0",
-  "description": "Managed software installation and deployment system logs",
+  "version": "4.0.0",
+  "description": "Cimian managed software installation tracking using structured reports data from C:\\ProgramData\\ManagedInstalls\\reports",
   "queries": {
-    "cimian_install_history": {
-      "query": "SELECT name, version, install_date, install_location, uninstall_string FROM programs WHERE publisher LIKE '%Cimian%' OR name LIKE '%Cimian%';",
-      "interval": 3600,
-      "description": "Cimian managed software installations"
+    "cimian_reports_sessions": {
+      "query": "SELECT 'sessions_report' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\reports\\sessions.json' AND type = 'regular';",
+      "interval": 300,
+      "description": "Cimian session reports with run types, status, duration, and action counts"
     },
-    "recent_installs": {
-      "query": "SELECT name, version, install_date, install_location, publisher FROM programs WHERE install_date >= date('now', '-30 days') AND install_date != '';",
-      "interval": 3600,
-      "description": "Recent software installations (last 30 days)"
+    "cimian_reports_items": {
+      "query": "SELECT 'items_report' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\reports\\items.json' AND type = 'regular';",
+      "interval": 300,
+      "description": "Cimian managed items reports with install history, loop detection, and recent attempts"
     },
-    "software_deployments": {
-      "query": "SELECT name, path, cmdline, start_time FROM processes WHERE name LIKE '%installer%' OR name LIKE '%setup%' OR name LIKE '%deploy%';",
-      "interval": 600,
-      "description": "Active software deployment processes"
+    "cimian_reports_events": {
+      "query": "SELECT 'events_report' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\reports\\events.json' AND type = 'regular';",
+      "interval": 180,
+      "description": "Cimian detailed event logs with timestamps, levels, types, actions, and status messages"
     },
-    "managed_installs_registry": {
-      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\%' AND name = 'DisplayName' AND data != '';",
-      "interval": 3600,
-      "description": "Installed software from Windows registry"
+    "cimian_configuration": {
+      "query": "SELECT 'config_file' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\config.yaml' AND type = 'regular';",
+      "interval": 1800,
+      "description": "Cimian main configuration and client identifier"
     },
-    "deployment_logs": {
-      "query": "SELECT datetime, source, data FROM windows_events WHERE source LIKE '%MSI%' OR source LIKE '%install%' OR source LIKE '%deploy%' AND datetime > datetime('now', '-24 hours');",
-      "interval": 3600,
-      "description": "Recent installation and deployment events"
+    "cimian_manifests_structure": {
+      "query": "SELECT replace(directory, 'C:\\ProgramData\\ManagedInstalls\\manifests\\', '') as manifest_path, filename as manifest_name, size, mtime, path FROM file WHERE directory LIKE 'C:\\ProgramData\\ManagedInstalls\\manifests%' AND filename LIKE '%.yaml' AND type = 'regular';",
+      "interval": 1800,
+      "description": "Cimian manifest hierarchy with YAML files containing managed_installs, managed_profiles, optional_installs, and managed_updates"
+    },
+    "cimian_self_serve_manifest": {
+      "query": "SELECT 'self_serve' as type, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\SelfServeManifest.yaml' AND type = 'regular';",
+      "interval": 900,
+      "description": "User self-service requested installs manifest with managed_installs content"
+    },
+    "cimian_catalogs_info": {
+      "query": "SELECT filename as catalog_name, size, mtime, directory, path FROM file WHERE directory = 'C:\\ProgramData\\ManagedInstalls\\catalogs' AND filename LIKE '%.yaml' AND type = 'regular';",
+      "interval": 1800,
+      "description": "Available Cimian software catalogs with package definitions and last update times"
+    },
+    "cimian_cached_packages": {
+      "query": "SELECT replace(directory, 'C:\\ProgramData\\ManagedInstalls\\cache\\', '') as package_category, filename as package_file, size, mtime FROM file WHERE directory LIKE 'C:\\ProgramData\\ManagedInstalls\\cache%' AND (filename LIKE '%.nupkg' OR filename LIKE '%.exe' OR filename LIKE '%.msi') AND type = 'regular';",
+      "interval": 1800,
+      "description": "Cached installation packages by category (apps, mgmt, etc.)"
+    },
+    "cimian_bootstrap_status": {
+      "query": "SELECT filename, path, size, mtime FROM file WHERE path LIKE 'C:\\ProgramData\\ManagedInstalls\\.cimian.bootstrap%';",
+      "interval": 300,
+      "description": "Cimian bootstrap mode and test environment flags"
+    },
+    "cimian_service_status": {
+      "query": "SELECT name, status, start_type, path, description, pid FROM services WHERE name LIKE '%Cimian%' OR path LIKE '%Cimian%' OR description LIKE '%Cimian%';",
+      "interval": 300,
+      "description": "Cimian-related Windows services and their status"
     }
   }
 }
