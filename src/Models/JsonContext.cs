@@ -51,6 +51,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(HardwareData), TypeInfoPropertyName = "ModularHardwareData")]
 [JsonSerializable(typeof(InventoryData))]
 [JsonSerializable(typeof(InstallsData))]
+[JsonSerializable(typeof(CimianReportFileInfo))]
 [JsonSerializable(typeof(ManagementData), TypeInfoPropertyName = "ModularManagementData")]
 [JsonSerializable(typeof(NetworkData), TypeInfoPropertyName = "ModularNetworkData")]
 [JsonSerializable(typeof(ProfilesData))]
