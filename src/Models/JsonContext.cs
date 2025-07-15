@@ -63,16 +63,16 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Modules.InstalledApplication), TypeInfoPropertyName = "ModularInstalledApplication")]
 [JsonSerializable(typeof(Modules.NetworkInterface), TypeInfoPropertyName = "ModularNetworkInterface")]
 [JsonSerializable(typeof(Modules.WifiNetwork), TypeInfoPropertyName = "ModularWifiNetwork")]
-[JsonSerializable(typeof(Modules.ListeningPort), TypeInfoPropertyName = "ModularListeningPort")]
 
 [JsonSerializable(typeof(Modules.BitLockerInfo), TypeInfoPropertyName = "ModularBitLockerInfo")]
 [JsonSerializable(typeof(List<Modules.InstalledApplication>), TypeInfoPropertyName = "ModularInstalledApplicationList")]
 [JsonSerializable(typeof(List<Modules.NetworkInterface>), TypeInfoPropertyName = "ModularNetworkInterfaceList")]
 [JsonSerializable(typeof(List<Modules.WifiNetwork>), TypeInfoPropertyName = "ModularWifiNetworkList")]
-[JsonSerializable(typeof(List<Modules.ListeningPort>), TypeInfoPropertyName = "ModularListeningPortList")]
 // Modular osquery types
 [JsonSerializable(typeof(Services.EnabledModulesConfig))]
 [JsonSerializable(typeof(Services.OsQueryModule))]
+// Profile module policy collection result
+[JsonSerializable(typeof(Modules.PolicyCollectionResult[]), TypeInfoPropertyName = "PolicyCollectionResultArray")]
 // Anonymous types used in data transmission
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(object))]

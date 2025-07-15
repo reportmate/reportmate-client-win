@@ -5,6 +5,8 @@ using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Services;
 using ReportMate.WindowsClient.Services.Modules;
 using ReportMate.WindowsClient.Configuration;
+using ReportMate.WindowsClient.Models;
+using ReportMate.WindowsClient.Models.Modules;
 using System.CommandLine;
 using System.CommandLine.Builder;
 using System.CommandLine.Parsing;
@@ -13,6 +15,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Serilog;
@@ -491,27 +494,30 @@ public class Program
         var apiUrlOption = new Option<string>("--api-url", "Override API URL");
         var forceOption = new Option<bool>("--force", "Force data collection even if recent run detected");
         var collectOnlyOption = new Option<bool>("--collect-only", "Collect data only without transmitting to API");
+        var runModuleOption = new Option<string>("--run-module", "Run only a specific module (e.g., network, hardware, security)");
         
         // Add global options to root command
         rootCommand.AddGlobalOption(verboseOption);
         rootCommand.AddOption(forceOption);
         rootCommand.AddOption(collectOnlyOption);
+        rootCommand.AddOption(runModuleOption);
         rootCommand.AddOption(deviceIdOption);
         rootCommand.AddOption(apiUrlOption);
 
         // Set default handler for root command (when no subcommand is specified)
         // This makes running the binary without any command default to data collection
-        rootCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, deviceIdOption, apiUrlOption, verboseOption);
+        rootCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Run command - explicit run data collection (optional, since it's the default)
         var runCommand = new Command("run", "Run data collection and send to API (same as default behavior)")
         {
             forceOption,
             collectOnlyOption,
+            runModuleOption,
             deviceIdOption,
             apiUrlOption
         };
-        runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, deviceIdOption, apiUrlOption, verboseOption);
+        runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Test command - validate configuration and connectivity
         var testCommand = new Command("test", "Test configuration and API connectivity");
@@ -553,7 +559,7 @@ public class Program
         return rootCommand;
     }
 
-    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, string? deviceId, string? apiUrl, int verbose)
+    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, string? runModule, string? deviceId, string? apiUrl, int verbose)
     {
         try
         {
@@ -570,6 +576,7 @@ public class Program
                     ["Command"] = "run",
                     ["Force"] = force,
                     ["Collect Only"] = collectOnly,
+                    ["Run Module"] = runModule ?? "ALL (full collection)",
                     ["Custom Device ID"] = deviceId ?? "NONE (will auto-detect)",
                     ["Custom API URL"] = apiUrl ?? "NONE (using config)",
                     ["Verbose Level"] = $"{verbose} ({GetVerboseLevelName(verbose)})"
@@ -582,6 +589,20 @@ public class Program
             
             _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", 
                 System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
+            
+            // Handle single module data collection if specified
+            if (!string.IsNullOrEmpty(runModule))
+            {
+                if (verbose > 0)
+                {
+                    Logger.Section("Single Module Collection", $"Collecting data for module: {runModule}");
+                    Logger.Info("Mode: Single module collection (modular architecture)");
+                    Logger.Info("Module: {0}", runModule);
+                    Logger.Info("Output: JSON data will be displayed and cached locally");
+                }
+                
+                return await HandleSingleModuleCollection(runModule, verbose);
+            }
             
             var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
             
@@ -1028,5 +1049,88 @@ public class Program
         }
         
         return processedArgs.ToArray();
+    }
+    
+    /// <summary>
+    /// Handle single module data collection
+    /// </summary>
+    private static async Task<int> HandleSingleModuleCollection(string moduleId, int verbose)
+    {
+        try
+        {
+            if (verbose > 0)
+            {
+                Logger.Info("Initializing modular data collection service...");
+            }
+            
+            var modularService = _serviceProvider!.GetRequiredService<IModularDataCollectionService>();
+            
+            if (verbose > 0)
+            {
+                Logger.Info("Starting single module collection for: {0}", moduleId);
+            }
+            
+            _logger!.LogInformation("Starting single module collection for: {ModuleId}", moduleId);
+            
+            // Use the efficient single module collection method
+            var moduleData = await modularService.CollectSingleModuleDataAsync(moduleId);
+            
+            if (moduleData == null)
+            {
+                if (verbose > 0)
+                {
+                    Logger.Error("Module '{0}' not found or failed to collect data", moduleId);
+                    Logger.Error("Available modules: applications, hardware, inventory, installs, management, network, profiles, security, system");
+                }
+                _logger!.LogError("Module '{ModuleId}' not found or failed to collect data", moduleId);
+                return 1;
+            }
+            
+            // Serialize the module data to JSON for display
+            var jsonOptions = new JsonSerializerOptions(ReportMateJsonContext.Default.Options)
+            {
+                WriteIndented = true
+            };
+            
+            var jsonData = JsonSerializer.Serialize(moduleData, moduleData.GetType(), jsonOptions);
+            
+            if (verbose > 0)
+            {
+                Logger.Section("Module Data", $"Collected data for module: {moduleId}");
+                Logger.Info("Module: {0}", moduleData.ModuleId);
+                Logger.Info("Version: {0}", moduleData.Version);
+                Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", moduleData.CollectedAt);
+                Logger.Info("Device ID: {0}", moduleData.DeviceId);
+                Console.WriteLine();
+                Logger.Section("JSON Output", "Raw module data in JSON format");
+            }
+            
+            // Output the JSON data
+            Console.WriteLine(jsonData);
+            
+            if (verbose > 0)
+            {
+                Console.WriteLine();
+                Logger.Info("✅ Single module collection completed successfully");
+                Logger.Info("TIP: Use --collect-only with full collection to save all modules without transmission");
+            }
+            
+            _logger!.LogInformation("Single module collection completed successfully for: {ModuleId}", moduleId);
+            
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            if (verbose > 0)
+            {
+                Logger.Error("Error during single module collection: {0}", ex.Message);
+                if (verbose >= 3)
+                {
+                    Logger.Debug("Stack trace: {0}", ex.StackTrace ?? "No stack trace available");
+                }
+            }
+            _logger!.LogError(ex, "Error during single module collection for: {ModuleId}", moduleId);
+            return 1;
+        }
     }
 }

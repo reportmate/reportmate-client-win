@@ -128,6 +128,84 @@ namespace ReportMate.WindowsClient.Services
             }
         }
 
+        /// <summary>
+        /// Load queries for a specific module only
+        /// </summary>
+        public Dictionary<string, object> LoadModuleQueries(string moduleId)
+        {
+            try
+            {
+                var moduleQueries = new Dictionary<string, object>();
+                
+                // Find the modular osquery directory
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                var osqueryDir = Path.Combine(baseDir, "osquery");
+                var modulesDir = Path.Combine(osqueryDir, "modules");
+
+                if (!Directory.Exists(modulesDir))
+                {
+                    _logger.LogWarning("Modular osquery directory not found for module {ModuleId}", moduleId);
+                    return new Dictionary<string, object>();
+                }
+
+                // Also load system_info for device UUID extraction (needed for all modules)
+                var systemModuleFile = Path.Combine(modulesDir, "system.json");
+                if (File.Exists(systemModuleFile))
+                {
+                    LoadSpecificQueriesFromModule(systemModuleFile, moduleQueries, new[] { "system_info" });
+                }
+
+                // Load the specific module
+                var moduleFile = Path.Combine(modulesDir, $"{moduleId}.json");
+                if (!File.Exists(moduleFile))
+                {
+                    _logger.LogError("Module file not found for {ModuleId}: {ModuleFile}", moduleId, moduleFile);
+                    return new Dictionary<string, object>();
+                }
+
+                _logger.LogInformation("Loading queries for single module: {ModuleId}", moduleId);
+                LoadModule(moduleFile, moduleQueries);
+
+                _logger.LogInformation("Loaded {QueryCount} queries for module {ModuleId}", moduleQueries.Count, moduleId);
+                return moduleQueries;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error loading queries for module {ModuleId}", moduleId);
+                return new Dictionary<string, object>();
+            }
+        }
+
+        /// <summary>
+        /// Load specific queries from a module file
+        /// </summary>
+        private void LoadSpecificQueriesFromModule(string moduleFile, Dictionary<string, object> combinedQueries, string[] queryNames)
+        {
+            try
+            {
+                var moduleJson = File.ReadAllText(moduleFile);
+                var module = JsonSerializer.Deserialize(moduleJson, ReportMateJsonContext.Default.OsQueryModule);
+
+                if (module?.Queries != null)
+                {
+                    var moduleName = Path.GetFileNameWithoutExtension(moduleFile);
+                    
+                    foreach (var queryName in queryNames)
+                    {
+                        if (module.Queries.TryGetValue(queryName, out var query))
+                        {
+                            combinedQueries[queryName] = query;
+                            _logger.LogDebug("Added specific query: {QueryName} from module {ModuleName}", queryName, moduleName);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error loading specific queries from module: {ModuleFile}", moduleFile);
+            }
+        }
+
         private Dictionary<string, object> LoadUnifiedQueries()
         {
             try

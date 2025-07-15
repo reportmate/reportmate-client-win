@@ -21,6 +21,7 @@ namespace ReportMate.WindowsClient.Services
     {
         Task<UnifiedDevicePayload> CollectAllModuleDataAsync();
         Task<T?> CollectModuleDataAsync<T>(string moduleId) where T : BaseModuleData;
+        Task<BaseModuleData?> CollectSingleModuleDataAsync(string moduleId);
         Task SaveModuleDataLocallyAsync<T>(string moduleId, T data) where T : BaseModuleData;
         Task<UnifiedDevicePayload> LoadCachedDataAsync();
         Task<bool> ValidateModuleDataAsync(string moduleId, object data);
@@ -159,6 +160,59 @@ namespace ReportMate.WindowsClient.Services
             var deviceId = ExtractDeviceUuid(osqueryResults);
 
             return await processor.ProcessModuleAsync(osqueryResults, deviceId);
+        }
+
+        /// <summary>
+        /// Collect data from a single specific module (efficient version for --run-module flag)
+        /// </summary>
+        public async Task<BaseModuleData?> CollectSingleModuleDataAsync(string moduleId)
+        {
+            _logger.LogInformation("Starting single module collection for: {ModuleId}", moduleId);
+
+            try
+            {
+                // Get the processor for this module
+                var processor = _moduleProcessorFactory.GetProcessor(moduleId);
+                if (processor == null)
+                {
+                    _logger.LogWarning("No processor found for module: {ModuleId}", moduleId);
+                    return null;
+                }
+
+                // Load queries for ONLY this specific module (plus system_info for device UUID)
+                _logger.LogInformation("Loading queries for single module: {ModuleId}", moduleId);
+                var moduleQueries = _modularOsQueryService.LoadModuleQueries(moduleId);
+                _logger.LogInformation("Loaded {QueryCount} queries for module {ModuleId}", moduleQueries.Count, moduleId);
+                
+                // Execute only the queries for this specific module
+                var osqueryResults = await ExecuteModularQueriesAsync(moduleQueries);
+                _logger.LogInformation("Executed {ResultCount} queries for module {ModuleId}", osqueryResults.Count, moduleId);
+                
+                // Extract device UUID for individual modules
+                var deviceId = ExtractDeviceUuid(osqueryResults);
+
+                // Process the module data
+                _logger.LogInformation("Processing module: {ModuleId}", processor.ModuleId);
+                var moduleData = await processor.ProcessModuleAsync(osqueryResults, deviceId);
+                
+                // Validate the module data
+                var isValid = await processor.ValidateModuleDataAsync(moduleData);
+                if (!isValid)
+                {
+                    _logger.LogWarning("Module {ModuleId} data validation failed", processor.ModuleId);
+                }
+
+                // Save module data locally
+                await SaveModuleDataWithRuntimeType(processor.ModuleId, moduleData);
+
+                _logger.LogInformation("✓ Single module {ModuleId} collection completed", processor.ModuleId);
+                return moduleData;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during single module collection for {ModuleId}", moduleId);
+                return null;
+            }
         }
 
         /// <summary>
