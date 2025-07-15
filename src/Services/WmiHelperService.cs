@@ -50,14 +50,48 @@ public class WmiHelperService : IWmiHelperService
             {
                 _logger.LogDebug("Testing WMI availability...");
                 
-                // Use a simple PowerShell test instead of direct WMI to avoid TypeInitializationException
+                // Test System.Management library directly to catch TypeInitializationException early
+                try
+                {
+                    using var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_ComputerSystem");
+                    using var results = searcher.Get();
+                    
+                    // If we can create the searcher and get results without exception, WMI is available
+                    foreach (ManagementObject obj in results)
+                    {
+                        using (obj)
+                        {
+                            var name = obj["Name"]?.ToString();
+                            if (!string.IsNullOrWhiteSpace(name))
+                            {
+                                _wmiAvailable = true;
+                                _logger.LogInformation("WMI System.Management library is available and functional");
+                                return Task.FromResult(true);
+                            }
+                        }
+                    }
+                }
+                catch (TypeInitializationException ex) when (ex.Message.Contains("ManagementPath") || ex.Message.Contains("WmiNetUtilsHelper"))
+                {
+                    _wmiAvailable = false;
+                    _logger.LogWarning("WMI System.Management library has compatibility issues (likely ARM64/.NET 8) - disabling direct WMI queries: {Message}", ex.Message);
+                    return Task.FromResult(false);
+                }
+                catch (TypeLoadException ex)
+                {
+                    _wmiAvailable = false;
+                    _logger.LogWarning("WMI System.Management library type load error - disabling direct WMI queries: {Message}", ex.Message);
+                    return Task.FromResult(false);
+                }
+                
+                // If direct WMI test didn't work, fall back to PowerShell test
                 var testResult = ExecutePowerShellCommandAsync("Get-WmiObject -Class Win32_ComputerSystem -Property Name | Select-Object -ExpandProperty Name").Result;
                 
                 if (!string.IsNullOrWhiteSpace(testResult))
                 {
-                    _wmiAvailable = true;
-                    _logger.LogInformation("WMI is available and functional");
-                    return Task.FromResult(true);
+                    _wmiAvailable = false; // PowerShell WMI works but System.Management doesn't
+                    _logger.LogWarning("WMI available via PowerShell but System.Management library has issues - using PowerShell fallbacks only");
+                    return Task.FromResult(false);
                 }
                 else
                 {
