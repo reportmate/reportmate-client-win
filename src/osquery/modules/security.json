@@ -13,20 +13,70 @@
       "interval": 600,
       "description": "Security products information"
     },
+    "antivirus_products": {
+      "query": "SELECT name, type, state FROM windows_security_products WHERE type = 'Antivirus';",
+      "interval": 600,
+      "description": "Antivirus product information"
+    },
+    "firewall_products": {
+      "query": "SELECT name, type, state FROM windows_security_products WHERE type = 'Firewall';",
+      "interval": 600,
+      "description": "Firewall product information"
+    },
     "bitlocker_info": {
       "query": "SELECT device_id, drive_letter, conversion_status, lock_status, encryption_method, version FROM bitlocker_info;",
       "interval": 3600,
       "description": "BitLocker encryption status"
+    },
+    "bitlocker_registry": {
+      "query": "SELECT path, name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\FVE\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\BitLocker\\%';",
+      "interval": 3600,
+      "description": "BitLocker configuration from registry"
     },
     "tpm_info": {
       "query": "SELECT activated, enabled, owned, manufacturer_version, manufacturer_id FROM tpm_info;",
       "interval": 3600,
       "description": "TPM (Trusted Platform Module) information"
     },
+    "windows_defender_status": {
+      "query": "SELECT name, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection';",
+      "interval": 600,
+      "description": "Windows Defender real-time protection status"
+    },
+    "windows_defender_signatures": {
+      "query": "SELECT name, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender\\Signature Updates';",
+      "interval": 600,
+      "description": "Windows Defender signature information"
+    },
+    "firewall_status": {
+      "query": "SELECT name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy\\%Profile\\%' AND name IN ('EnableFirewall', 'DoNotAllowExceptions', 'DisableNotifications');",
+      "interval": 600,
+      "description": "Windows Firewall status from registry"
+    },
+    "security_patches": {
+      "query": "SELECT hotfix_id, description, installed_on FROM patches WHERE description LIKE '%Security%' OR description LIKE '%Critical%';",
+      "interval": 3600,
+      "description": "Security-related Windows patches"
+    },
+    "windows_updates": {
+      "query": "SELECT name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\%' AND name IN ('LastSearchSuccessDate', 'LastInstallationSuccessDate');",
+      "interval": 3600,
+      "description": "Windows Update status"
+    },
+    "device_encryption": {
+      "query": "SELECT name, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\BitLocker' AND name = 'PreventDeviceEncryption';",
+      "interval": 3600,
+      "description": "Device encryption policy status"
+    },
     "certificates": {
       "query": "SELECT common_name, issuer, self_signed, not_valid_before, not_valid_after, signing_algorithm, key_algorithm, subject FROM certificates WHERE store_location = 'LocalMachine' AND store = 'My';",
       "interval": 3600,
       "description": "System certificates"
+    },
+    "security_events": {
+      "query": "SELECT eventid, source, level, datetime, data FROM windows_events WHERE eventid IN (4624, 4625, 4648, 4719, 4720, 4722, 4723, 4724, 4725, 4726, 4727, 4728, 4729, 4730, 4731, 4732, 4733, 4734, 4735, 4737, 4738, 4739, 4740, 4741, 4742, 4743, 4756, 4757, 4758, 4764, 4765, 4766, 4767, 4768, 4769, 4770, 4771, 4772, 4776, 4777, 4778, 4779, 4781, 4793) AND datetime > datetime('now', '-24 hours');",
+      "interval": 1800,
+      "description": "Recent security events from Windows Event Log"
     }
   }
 }
