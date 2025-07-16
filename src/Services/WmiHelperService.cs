@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Management;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 
 namespace ReportMate.WindowsClient.Services;
@@ -74,7 +75,16 @@ public class WmiHelperService : IWmiHelperService
                 catch (TypeInitializationException ex) when (ex.Message.Contains("ManagementPath") || ex.Message.Contains("WmiNetUtilsHelper"))
                 {
                     _wmiAvailable = false;
-                    _logger.LogWarning("WMI System.Management library has compatibility issues (likely ARM64/.NET 8) - disabling direct WMI queries: {Message}", ex.Message);
+                    
+                    // Check if this is a known compatibility issue on ARM64 systems
+                    if (IsArm64Platform())
+                    {
+                        _logger.LogInformation("WMI System.Management library unavailable on ARM64 platform - using PowerShell and registry fallbacks for data collection");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("WMI System.Management library has compatibility issues - disabling direct WMI queries: {Message}", ex.Message);
+                    }
                     return Task.FromResult(false);
                 }
                 catch (TypeLoadException ex)
@@ -90,13 +100,13 @@ public class WmiHelperService : IWmiHelperService
                 if (!string.IsNullOrWhiteSpace(testResult))
                 {
                     _wmiAvailable = false; // PowerShell WMI works but System.Management doesn't
-                    _logger.LogWarning("WMI available via PowerShell but System.Management library has issues - using PowerShell fallbacks only");
+                    _logger.LogInformation("WMI available via PowerShell - using PowerShell fallbacks instead of System.Management library");
                     return Task.FromResult(false);
                 }
                 else
                 {
                     _wmiAvailable = false;
-                    _logger.LogWarning("WMI test returned empty result - WMI may not be available");
+                    _logger.LogWarning("WMI test returned empty result - WMI may not be available on this system");
                     return Task.FromResult(false);
                 }
             }
@@ -115,7 +125,7 @@ public class WmiHelperService : IWmiHelperService
 
         if (!await IsWmiAvailableAsync())
         {
-            _logger.LogWarning("WMI not available, skipping query: {Query}", query);
+            _logger.LogDebug("WMI not available, skipping query: {Query}", query);
             return result;
         }
 
@@ -162,7 +172,14 @@ public class WmiHelperService : IWmiHelperService
                 ex is TypeLoadException || ex.Message.Contains("WmiNetUtilsHelper") || 
                 ex.Message.Contains("ManagementPath"))
             {
-                _logger.LogWarning("WMI System.Management library compatibility issue detected - disabling WMI queries");
+                if (IsArm64Platform())
+                {
+                    _logger.LogDebug("WMI System.Management library compatibility issue on ARM64 platform - using alternative data collection methods");
+                }
+                else
+                {
+                    _logger.LogWarning("WMI System.Management library compatibility issue detected - disabling WMI queries");
+                }
                 _wmiAvailable = false;
             }
         }
@@ -317,5 +334,15 @@ public class WmiHelperService : IWmiHelperService
             _logger.LogError(ex, "Error executing PowerShell command: {Command}", command);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Detects if the current system is running on ARM64 architecture
+    /// </summary>
+    private static bool IsArm64Platform()
+    {
+        return Environment.Is64BitProcess && 
+               (Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")?.Contains("ARM") == true ||
+                RuntimeInformation.ProcessArchitecture == Architecture.Arm64);
     }
 }
