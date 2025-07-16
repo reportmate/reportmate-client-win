@@ -36,6 +36,13 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             _logger.LogDebug("Processing Hardware module for device {DeviceId}", deviceId);
 
+            // Check WMI availability and log appropriate message
+            var isWmiAvailable = await _wmiHelperService.IsWmiAvailableAsync();
+            if (!isWmiAvailable)
+            {
+                _logger.LogDebug("Hardware module using fallback data collection methods (osquery, registry, PowerShell) - WMI unavailable");
+            }
+
             var data = new HardwareData
             {
                 ModuleId = ModuleId,
