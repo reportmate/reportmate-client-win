@@ -302,6 +302,8 @@ namespace ReportMate.WindowsClient.Services
                             "installs" => JsonSerializer.Deserialize<InstallsData>(json),
                             "management" => JsonSerializer.Deserialize<ManagementData>(json),
                             "network" => JsonSerializer.Deserialize<NetworkData>(json),
+                            "printers" => JsonSerializer.Deserialize<PrinterData>(json),
+                            "displays" => JsonSerializer.Deserialize<DisplayData>(json),
                             "profiles" => JsonSerializer.Deserialize<ProfilesData>(json),
                             "security" => JsonSerializer.Deserialize<SecurityData>(json),
                             "system" => JsonSerializer.Deserialize<SystemData>(json),
@@ -517,6 +519,12 @@ namespace ReportMate.WindowsClient.Services
                     break;
                 case NetworkData networkData:
                     payload.Network = networkData;
+                    break;
+                case PrinterData printerData:
+                    payload.Printers = printerData;
+                    break;
+                case DisplayData displayData:
+                    payload.Displays = displayData;
                     break;
                 case ProfilesData profilesData:
                     payload.Profiles = profilesData;

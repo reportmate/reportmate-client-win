@@ -54,11 +54,13 @@ namespace ReportMate.WindowsClient.Services
             _processorTypes = new Dictionary<string, Type>
             {
                 ["applications"] = typeof(ApplicationsModuleProcessor),
+                ["display"] = typeof(DisplayModuleProcessor),
                 ["hardware"] = typeof(HardwareModuleProcessor),
                 ["inventory"] = typeof(InventoryModuleProcessor),
                 ["installs"] = typeof(InstallsModuleProcessor),
                 ["management"] = typeof(ManagementModuleProcessor),
                 ["network"] = typeof(NetworkModuleProcessor),
+                ["printer"] = typeof(PrinterModuleProcessor),
                 ["profiles"] = typeof(ProfilesModuleProcessor),
                 ["security"] = typeof(SecurityModuleProcessor),
                 ["system"] = typeof(SystemModuleProcessor)
@@ -68,11 +70,13 @@ namespace ReportMate.WindowsClient.Services
             _dataTypeToProcessorType = new Dictionary<Type, Type>
             {
                 [typeof(ApplicationsData)] = typeof(ApplicationsModuleProcessor),
+                [typeof(DisplayData)] = typeof(DisplayModuleProcessor),
                 [typeof(HardwareData)] = typeof(HardwareModuleProcessor),
                 [typeof(InventoryData)] = typeof(InventoryModuleProcessor),
                 [typeof(InstallsData)] = typeof(InstallsModuleProcessor),
                 [typeof(ManagementData)] = typeof(ManagementModuleProcessor),
                 [typeof(NetworkData)] = typeof(NetworkModuleProcessor),
+                [typeof(PrinterData)] = typeof(PrinterModuleProcessor),
                 [typeof(ProfilesData)] = typeof(ProfilesModuleProcessor),
                 [typeof(SecurityData)] = typeof(SecurityModuleProcessor),
                 [typeof(SystemData)] = typeof(SystemModuleProcessor)
@@ -141,11 +145,13 @@ namespace ReportMate.WindowsClient.Services
             var enabledModules = new[]
             {
                 "applications",
+                "display",
                 "hardware", 
                 "inventory",
                 "installs",
                 "management",
                 "network",
+                "printer",
                 "profiles",
                 "security",
                 "system"
