@@ -33,6 +33,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public InstallsData? Installs { get; set; }
         public ManagementData? Management { get; set; }
         public NetworkData? Network { get; set; }
+        public PrinterData? Printers { get; set; }
+        public DisplayData? Displays { get; set; }
         public ProfilesData? Profiles { get; set; }
         public SecurityData? Security { get; set; }
         public SystemData? System { get; set; }
