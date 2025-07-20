@@ -467,11 +467,13 @@ public class Program
         // Register module processors
         services.AddScoped<IModuleProcessorFactory, ModuleProcessorFactory>();
         services.AddScoped<ApplicationsModuleProcessor>();
+        services.AddScoped<DisplayModuleProcessor>();
         services.AddScoped<HardwareModuleProcessor>();
         services.AddScoped<InventoryModuleProcessor>();
         services.AddScoped<InstallsModuleProcessor>();
         services.AddScoped<ManagementModuleProcessor>();
         services.AddScoped<NetworkModuleProcessor>();
+        services.AddScoped<PrinterModuleProcessor>();
         services.AddScoped<ProfilesModuleProcessor>();
         services.AddScoped<SecurityModuleProcessor>();
         services.AddScoped<SystemModuleProcessor>();
@@ -1080,7 +1082,7 @@ public class Program
                 if (verbose > 0)
                 {
                     Logger.Error("Module '{0}' not found or failed to collect data", moduleId);
-                    Logger.Error("Available modules: applications, hardware, inventory, installs, management, network, profiles, security, system");
+                    Logger.Error("Available modules: applications, hardware, inventory, installs, management, network, printer, profiles, security, system");
                 }
                 _logger!.LogError("Module '{ModuleId}' not found or failed to collect data", moduleId);
                 return 1;
