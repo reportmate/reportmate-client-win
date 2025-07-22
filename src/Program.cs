@@ -16,6 +16,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Serilog;
@@ -1185,60 +1187,102 @@ public class Program
         {
             if (verbose > 0)
             {
-                Logger.Section("Transmit Only Mode", "Sending cached data without collection");
+                Logger.Section("Transmit Only Mode", "Sending cached raw module data without collection");
                 Logger.Info("Mode: Transmission only (no data collection)");
-                Logger.Info("Source: Cached module data from previous collection");
-                Logger.Info("Action: Load cache, validate, and transmit to API");
+                Logger.Info("Source: Raw osquery module data from previous collection");
+                Logger.Info("Action: Load raw cache files, validate, and transmit to API");
             }
             
             _logger!.LogInformation("ReportMate v{Version} - Transmit Only Mode", 
                 System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
             
-            // Get the modular data collection service to load cached data
-            var modularDataService = _serviceProvider!.GetRequiredService<IModularDataCollectionService>();
-            var apiService = _serviceProvider!.GetRequiredService<IApiService>();
-            
-            if (verbose > 0)
+            // Find the most recent cache directory
+            var baseCacheDir = @"C:\ProgramData\ManagedReports\cache";
+            if (!Directory.Exists(baseCacheDir))
             {
-                Logger.Info("Loading cached data from previous collection...");
-            }
-            
-            // Load cached data
-            var cachedData = await modularDataService.LoadCachedDataAsync();
-            
-            if (cachedData == null || string.IsNullOrEmpty(cachedData.DeviceId))
-            {
-                _logger!.LogError("No cached data found or cached data is invalid");
+                _logger!.LogError("Cache directory not found: {CacheDir}", baseCacheDir);
                 if (verbose > 0)
                 {
-                    Logger.Error("CACHE MISS: No valid cached data found");
-                    Logger.Info("ACTION REQUIRED: Run data collection first with:");
-                    Logger.Info("  runner.exe --collect-only    # Collect data and cache locally");
-                    Logger.Info("  runner.exe                   # Full collection and transmission");
+                    Logger.Error("CACHE MISS: Cache directory not found");
+                    Logger.Info("ACTION REQUIRED: Run data collection first");
                 }
                 return 1;
             }
-            
+
+            var cacheDirs = Directory.GetDirectories(baseCacheDir)
+                .Where(d => Path.GetFileName(d).Length == 17) // YYYY-MM-DD-HHmmss format
+                .OrderByDescending(d => Path.GetFileName(d))
+                .ToList();
+
+            if (!cacheDirs.Any())
+            {
+                _logger!.LogError("No timestamped cache directories found in: {CacheDir}", baseCacheDir);
+                if (verbose > 0)
+                {
+                    Logger.Error("CACHE MISS: No valid cache directories found");
+                    Logger.Info("ACTION REQUIRED: Run data collection first");
+                }
+                return 1;
+            }
+
+            var latestCacheDir = cacheDirs.First();
             if (verbose > 0)
             {
-                Logger.Info("Cached data loaded successfully");
-                Logger.Info("Device ID: {0}", cachedData.DeviceId);
-                Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", cachedData.CollectedAt);
-                
-                // Log summary of cached modules
-                var moduleCount = 0;
-                if (cachedData.System != null) moduleCount++;
-                if (cachedData.Hardware != null) moduleCount++;
-                if (cachedData.Network != null) moduleCount++;
-                if (cachedData.Applications != null) moduleCount++;
-                if (cachedData.Security != null) moduleCount++;
-                if (cachedData.Management != null) moduleCount++;
-                if (cachedData.Inventory != null) moduleCount++;
-                if (cachedData.Installs != null) moduleCount++;
-                if (cachedData.Profiles != null) moduleCount++;
-                
-                Logger.Info("Cached Modules: {0}/9 modules available", moduleCount);
+                Logger.Info("Using latest cache directory: {0}", Path.GetFileName(latestCacheDir));
             }
+
+            // Load unified payload to get device info
+            var unifiedPayloadPath = Path.Combine(latestCacheDir, "event.json");
+            if (!File.Exists(unifiedPayloadPath))
+            {
+                _logger!.LogError("Unified payload not found: {FilePath}", unifiedPayloadPath);
+                return 1;
+            }
+
+            var unifiedPayloadJson = await File.ReadAllTextAsync(unifiedPayloadPath);
+            var unifiedPayload = JsonSerializer.Deserialize<UnifiedDevicePayload>(unifiedPayloadJson, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                TypeInfoResolver = ReportMateJsonContext.Default
+            });
+
+            if (unifiedPayload == null)
+            {
+                _logger!.LogError("Failed to deserialize unified payload");
+                return 1;
+            }
+
+            if (verbose > 0)
+            {
+                Logger.Info("Device ID: {0}", unifiedPayload.DeviceId);
+                Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", unifiedPayload.CollectedAt);
+            }
+
+            // MODULAR PER-JSON TRANSMISSION
+            // Load and transmit each module file individually for better modularity
+            var moduleFiles = Directory.GetFiles(latestCacheDir, "*.json")
+                .Where(f => !Path.GetFileName(f).Equals("event.json", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (verbose > 0)
+            {
+                Logger.Info("MODULAR TRANSMISSION: Processing {0} individual module files...", moduleFiles.Count);
+                Logger.Info("Each module will be transmitted individually to enable proper database storage");
+            }
+
+            if (!moduleFiles.Any())
+            {
+                _logger!.LogError("No module data files found in cache directory: {CacheDir}", latestCacheDir);
+                if (verbose > 0)
+                {
+                    Logger.Error("CACHE MISS: No module .json files found");
+                    Logger.Info("ACTION REQUIRED: Run data collection first to generate module cache");
+                }
+                return 1;
+            }
+
+            // Get API service
+            var apiService = _serviceProvider!.GetRequiredService<IApiService>();
             
             // Test API connectivity first
             if (verbose > 0)
@@ -1257,82 +1301,173 @@ public class Program
                 }
                 return 1;
             }
-            
+
             if (verbose > 0)
             {
                 Logger.Info("API connectivity confirmed");
-                Logger.Info("Transmitting cached data to API...");
+                Logger.Info("Starting modular transmission...");
             }
-            
-            // Convert cached data to API request format
-            var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
-            
-            // Use the existing conversion method from DataCollectionService
-            // First we need to call the ConvertModularPayloadToRequest method
-            // Since it's private, we'll create a DeviceDataRequest manually using the same structure
-            var deviceDataRequest = new DeviceDataRequest
+
+            // INDIVIDUAL MODULE TRANSMISSION
+            int successfulTransmissions = 0;
+            int failedTransmissions = 0;
+            var transmissionResults = new List<(string moduleId, bool success, string error)>();
+
+            foreach (var moduleFile in moduleFiles)
             {
-                Device = cachedData.DeviceId,
-                SerialNumber = cachedData.Inventory?.SerialNumber ?? "",
-                Kind = "Info",
-                Ts = DateTime.UtcNow.ToString("O"),
-                Payload = new DeviceDataPayload
+                try
                 {
-                    Device = new Dictionary<string, object>
+                    var moduleId = Path.GetFileNameWithoutExtension(moduleFile);
+                    var moduleJson = await File.ReadAllTextAsync(moduleFile);
+                    
+                    if (verbose > 0)
                     {
-                        ["DeviceId"] = cachedData.DeviceId,
-                        ["SerialNumber"] = cachedData.Inventory?.SerialNumber ?? "",
-                        ["ComputerName"] = cachedData.Inventory?.DeviceName ?? Environment.MachineName,
-                        ["Domain"] = "",
-                        ["Manufacturer"] = cachedData.Hardware?.Manufacturer ?? "",
-                        ["Model"] = cachedData.Hardware?.Model ?? "",
-                        ["LastSeen"] = DateTime.UtcNow,
-                        ["ClientVersion"] = cachedData.ClientVersion,
-                        ["Status"] = "online"
-                    },
-                    CollectionTimestamp = cachedData.CollectedAt.ToString("O"),
-                    ClientVersion = cachedData.ClientVersion,
-                    CollectionType = "transmit-only",
-                    ManagedInstallsSystem = "Cimian",
-                    Source = "runner.exe --transmit-only"
+                        Logger.Info("Transmitting module: {0}...", moduleId);
+                    }
+                    
+                    // Parse as generic JSON data instead of typed objects
+                    using var jsonDoc = JsonDocument.Parse(moduleJson);
+                    var moduleDataElement = jsonDoc.RootElement;
+
+                    if (moduleDataElement.ValueKind != JsonValueKind.Null && moduleDataElement.ValueKind != JsonValueKind.Undefined)
+                    {
+                        // Convert the JSON element to a dictionary for API transmission
+                        var moduleApiData = new List<Dictionary<string, object>>
+                        {
+                            JsonSerializer.Deserialize<Dictionary<string, object>>(moduleJson, new JsonSerializerOptions
+                            {
+                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                                TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+                            }) ?? new Dictionary<string, object>()
+                        };
+
+                        // Create individual module payload
+                        var modulePayload = new Dictionary<string, object>
+                        {
+                            [moduleId] = moduleApiData
+                        };
+
+                        // Create device data request for this specific module
+                        var moduleDataRequest = new DeviceDataRequest
+                        {
+                            Device = unifiedPayload.DeviceId,
+                            SerialNumber = unifiedPayload.Inventory?.SerialNumber ?? Environment.MachineName,
+                            Kind = "Info",
+                            Ts = DateTime.UtcNow.ToString("O"),
+                            Payload = new DeviceDataPayload
+                            {
+                                Device = new Dictionary<string, object>
+                                {
+                                    ["DeviceId"] = unifiedPayload.DeviceId,
+                                    ["SerialNumber"] = unifiedPayload.Inventory?.SerialNumber ?? "",
+                                    ["ComputerName"] = unifiedPayload.Inventory?.DeviceName ?? Environment.MachineName,
+                                    ["Domain"] = "",
+                                    ["Manufacturer"] = unifiedPayload.Hardware?.Manufacturer ?? "",
+                                    ["Model"] = unifiedPayload.Hardware?.Model ?? "",
+                                    ["LastSeen"] = DateTime.UtcNow,
+                                    ["ClientVersion"] = unifiedPayload.ClientVersion,
+                                    ["Status"] = "online"
+                                },
+                                OsQuery = modulePayload, // Individual module data only
+                                CollectionTimestamp = unifiedPayload.CollectedAt.ToString("O"),
+                                ClientVersion = unifiedPayload.ClientVersion,
+                                CollectionType = $"transmit-only-{moduleId}",
+                                ManagedInstallsSystem = "Cimian",
+                                Source = $"runner.exe --transmit-only (module: {moduleId})"
+                            }
+                        };
+
+                        // Send individual module data
+                        var moduleTransmissionResult = await apiService.SendDeviceDataAsync(moduleDataRequest);
+                        
+                        if (moduleTransmissionResult)
+                        {
+                            successfulTransmissions++;
+                            transmissionResults.Add((moduleId, true, ""));
+                            
+                            if (verbose > 0)
+                            {
+                                Logger.Info("✅ Module {0} transmitted successfully", moduleId);
+                            }
+                        }
+                        else
+                        {
+                            failedTransmissions++;
+                            transmissionResults.Add((moduleId, false, "API rejection"));
+                            
+                            if (verbose > 0)
+                            {
+                                Logger.Error("❌ Module {0} transmission failed", moduleId);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        failedTransmissions++;
+                        transmissionResults.Add((moduleId, false, "No valid data"));
+                        
+                        if (verbose > 0)
+                        {
+                            Logger.Warning("⚠️ Module {0} skipped - no valid data", moduleId);
+                        }
+                    }
                 }
-            };
-            
-            // Add modular data to OsQuery section
-            var osQueryDict = new Dictionary<string, object>();
-            if (cachedData.System != null) osQueryDict["system"] = cachedData.System;
-            if (cachedData.Hardware != null) osQueryDict["hardware"] = cachedData.Hardware;
-            if (cachedData.Network != null) osQueryDict["network"] = cachedData.Network;
-            if (cachedData.Applications != null) osQueryDict["applications"] = cachedData.Applications;
-            if (cachedData.Security != null) osQueryDict["security"] = cachedData.Security;
-            if (cachedData.Management != null) osQueryDict["management"] = cachedData.Management;
-            if (cachedData.Inventory != null) osQueryDict["inventory"] = cachedData.Inventory;
-            if (cachedData.Installs != null) osQueryDict["installs"] = cachedData.Installs;
-            if (cachedData.Profiles != null) osQueryDict["profiles"] = cachedData.Profiles;
-            
-            deviceDataRequest.Payload.OsQuery = osQueryDict;
-            
-            // Send the cached data
-            var transmissionResult = await apiService.SendDeviceDataAsync(deviceDataRequest);
-            
-            if (transmissionResult)
+                catch (Exception ex)
+                {
+                    failedTransmissions++;
+                    transmissionResults.Add((Path.GetFileNameWithoutExtension(moduleFile), false, ex.Message));
+                    
+                    _logger!.LogWarning(ex, "Failed to transmit module from: {ModuleFile}", moduleFile);
+                    if (verbose > 0)
+                    {
+                        Logger.Warning("❌ Module transmission failed: {0}", ex.Message);
+                    }
+                }
+            }
+
+            // Report transmission results
+            if (verbose > 0)
             {
-                _logger!.LogInformation("Cached data transmitted successfully");
+                Logger.Section("Transmission Summary", "Individual module transmission results");
+                Logger.Info("Successful transmissions: {0}", successfulTransmissions);
+                Logger.Info("Failed transmissions: {0}", failedTransmissions);
+                Logger.Info("Total modules processed: {0}", moduleFiles.Count);
+                
+                if (transmissionResults.Any())
+                {
+                    Console.WriteLine();
+                    Logger.Info("Module Results:");
+                    foreach (var (moduleId, success, error) in transmissionResults)
+                    {
+                        var status = success ? "✅ SUCCESS" : "❌ FAILED";
+                        var details = success ? "" : $" - {error}";
+                        Logger.Info("  {0}: {1}{2}", moduleId, status, details);
+                    }
+                }
+            }
+
+            if (successfulTransmissions > 0)
+            {
+                _logger!.LogInformation("Modular transmission completed - {SuccessCount}/{TotalCount} modules transmitted successfully", 
+                    successfulTransmissions, moduleFiles.Count);
+                
                 if (verbose > 0)
                 {
-                    Logger.Info("✅ Transmission completed successfully");
-                    Logger.Info("DASHBOARD: Check API dashboard for updated device data");
-                    Logger.Info("CACHE: Cached data remains available for future transmissions");
+                    Logger.Info("✅ Modular transmission completed");
+                    Logger.Info("DASHBOARD: Check API dashboard for individual module data updates");
+                    Logger.Info("DATABASE: Each module should now have its own table entries");
+                    Logger.Info("CACHE: Raw module data remains available for future transmissions");
                 }
-                return 0;
+                
+                return failedTransmissions > 0 ? 1 : 0; // Return error if any modules failed
             }
             else
             {
-                _logger!.LogError("Failed to transmit cached data");
+                _logger!.LogError("All module transmissions failed");
                 if (verbose > 0)
                 {
-                    Logger.Error("TRANSMISSION FAILED: API rejected the cached data");
-                    Logger.Info("ACTION REQUIRED: Check API logs for specific error details");
+                    Logger.Error("TRANSMISSION FAILED: All modules were rejected by the API");
+                    Logger.Info("ACTION REQUIRED: Check API logs and module data validity");
                 }
                 return 1;
             }

@@ -42,19 +42,22 @@ public class ApiService : IApiService
         _logger = logger;
         _configuration = configuration;
         
-        // Set up cache directory for transmission replay
-        _cacheDirectory = Path.Combine(@"C:\ProgramData\ManagedReports\cache");
+        // Set up logs directory for transmission tracking (separate from cache)
+        _cacheDirectory = Path.Combine(@"C:\ProgramData\ManagedReports\logs");
         try
         {
             if (!Directory.Exists(_cacheDirectory))
             {
                 Directory.CreateDirectory(_cacheDirectory);
-                _logger.LogInformation("Created transmission cache directory: {CacheDirectory}", _cacheDirectory);
+                _logger.LogInformation("Created transmission logs directory: {LogsDirectory}", _cacheDirectory);
             }
+            
+            // Clean up old payload_ files from cache directory (deprecated)
+            CleanupDeprecatedPayloadFiles();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to create cache directory, caching will be disabled");
+            _logger.LogWarning(ex, "Failed to create logs directory, transmission logging will be disabled");
             _cacheDirectory = null;
         }
         
@@ -460,9 +463,9 @@ public class ApiService : IApiService
             // Create a "new_client" event through the ingest endpoint
             var registrationPayload = new Dictionary<string, object>
             {
-                { "id", deviceInfo.DeviceId }, // Use DeviceId as the primary identifier
+                { "device", deviceInfo.DeviceId }, // Use DeviceId as the primary identifier - API expects "device" field (lowercase)
                 { "serialNumber", deviceInfo.SerialNumber }, // Also include serial number
-                { "name", deviceInfo.ComputerName },
+                { "computerName", deviceInfo.ComputerName },
                 { "model", deviceInfo.Model },
                 { "os", deviceInfo.OperatingSystem },
                 { "manufacturer", deviceInfo.Manufacturer },
@@ -565,24 +568,33 @@ public class ApiService : IApiService
     {
         if (string.IsNullOrEmpty(_cacheDirectory))
         {
-            return; // Caching disabled
+            return; // Logging disabled
         }
 
         try
         {
-            var timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
-            var filename = $"payload_{deviceSerial}_{timestamp}_attempt{attempt}.json";
-            var filepath = Path.Combine(_cacheDirectory, filename);
+            // Create timestamped directory structure like cache (YYYY-MM-DD-HHmmss)
+            var now = DateTime.UtcNow;
+            var timestamp = now.ToString("yyyy-MM-dd-HHmmss");
+            var logDir = Path.Combine(_cacheDirectory, timestamp);
+            
+            if (!Directory.Exists(logDir))
+            {
+                Directory.CreateDirectory(logDir);
+            }
+            
+            var filename = $"transmission_{deviceSerial}_attempt{attempt}.json";
+            var filepath = Path.Combine(logDir, filename);
             
             await File.WriteAllTextAsync(filepath, jsonContent);
-            _logger.LogDebug("Payload cached to: {FilePath}", filepath);
+            _logger.LogDebug("Transmission payload logged to: {FilePath}", filepath);
             
-            // Keep only the last 10 cache files per device to avoid disk space issues
+            // Keep only the last 10 transmission logs to avoid disk space issues
             await CleanupOldCacheFilesAsync(deviceSerial);
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to cache payload, continuing with transmission");
+            _logger.LogDebug(ex, "Failed to log transmission payload, continuing with transmission");
         }
     }
 
@@ -595,22 +607,64 @@ public class ApiService : IApiService
                 return Task.CompletedTask;
             }
 
-            var files = Directory.GetFiles(_cacheDirectory, $"payload_{deviceSerial}_*.json")
-                .OrderByDescending(f => File.GetCreationTime(f))
+            // Clean up old timestamped log directories (keep only last 10)
+            var logDirs = Directory.GetDirectories(_cacheDirectory)
+                .Where(d => Path.GetFileName(d).Length >= 19) // YYYY-MM-DD-HHmmss format
+                .OrderByDescending(d => Path.GetFileName(d))
                 .Skip(10)
                 .ToArray();
 
-            foreach (var file in files)
+            foreach (var dir in logDirs)
             {
-                File.Delete(file);
+                Directory.Delete(dir, true);
+                _logger.LogDebug("Deleted old transmission log directory: {DirName}", Path.GetFileName(dir));
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to cleanup old cache files");
+            _logger.LogDebug(ex, "Failed to cleanup old transmission log directories");
         }
         
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Clean up deprecated payload_ files from the old cache directory structure
+    /// These files are being deprecated in favor of the new logs directory organization
+    /// </summary>
+    private void CleanupDeprecatedPayloadFiles()
+    {
+        try
+        {
+            var oldCacheDir = @"C:\ProgramData\ManagedReports\cache";
+            if (!Directory.Exists(oldCacheDir))
+                return;
+
+            var payloadFiles = Directory.GetFiles(oldCacheDir, "payload_*.json");
+            if (payloadFiles.Any())
+            {
+                _logger.LogInformation("Cleaning up {FileCount} deprecated payload_ files from cache directory", payloadFiles.Length);
+                
+                foreach (var file in payloadFiles)
+                {
+                    try
+                    {
+                        File.Delete(file);
+                        _logger.LogDebug("Deleted deprecated payload file: {FileName}", Path.GetFileName(file));
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to delete deprecated payload file: {FileName}", Path.GetFileName(file));
+                    }
+                }
+                
+                _logger.LogInformation("Deprecated payload_ files cleanup completed");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to cleanup deprecated payload files");
+        }
     }
 
     private void ConfigureHttpClient()
