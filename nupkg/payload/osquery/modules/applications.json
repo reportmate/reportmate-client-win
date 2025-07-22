@@ -1,0 +1,22 @@
+{
+  "module": "applications",
+  "version": "1.0.0", 
+  "description": "Software inventory and running processes",
+  "queries": {
+    "programs": {
+      "query": "SELECT name, version, install_location, install_date, publisher, uninstall_string FROM programs WHERE name != '';",
+      "interval": 3600,
+      "description": "Installed programs and applications"
+    },
+    "startup_items": {
+      "query": "SELECT name, path, args, type, source, status FROM startup_items;",
+      "interval": 3600,
+      "description": "Startup items and services"
+    },
+    "processes": {
+      "query": "SELECT pid, name, path, cmdline, state, resident_size as memory, start_time FROM processes WHERE state != 'Z';",
+      "interval": 300,
+      "description": "Running processes"
+    }
+  }
+}

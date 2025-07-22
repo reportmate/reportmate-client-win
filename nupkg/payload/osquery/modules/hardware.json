@@ -1,0 +1,147 @@
+{
+  "module": "hardware",
+  "version": "1.0.0",
+  "description": "Physical device hardware information collection",
+  "queries": {
+    "hardware_system_info": {
+      "query": "SELECT hostname, computer_name, hardware_serial, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory, cpu_subtype, hardware_vendor, hardware_model FROM system_info;",
+      "interval": 3600,
+      "description": "Basic system information including CPU and memory"
+    },
+    "logical_drives": {
+      "query": "SELECT device_id, type, size, free_space, file_system FROM logical_drives;",
+      "interval": 3600,
+      "description": "Logical drive information"
+    },
+    "disk_info": {
+      "query": "SELECT name, type, disk_size, manufacturer, hardware_model, serial, description FROM disk_info;",
+      "interval": 3600,
+      "description": "Physical disk hardware information"
+    },
+    "memory_devices": {
+      "query": "SELECT handle, device_locator, manufacturer, part_number, size, configured_clock_speed, memory_type FROM memory_devices;",
+      "interval": 3600,
+      "description": "Physical memory module information including part numbers"
+    },
+    "processor_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\ProcessorNameString';",
+      "interval": 3600,
+      "description": "Enhanced processor name from registry"
+    },
+    "processor_identifier_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\Identifier';",
+      "interval": 3600,
+      "description": "Processor identifier and architecture info from registry"
+    },
+    "processor_vendor_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\VendorIdentifier';",
+      "interval": 3600,
+      "description": "Processor vendor from registry"
+    },
+    "cpu_speed_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0\\~MHz';",
+      "interval": 3600,
+      "description": "CPU speed from registry"
+    },
+    "graphics_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverDesc';",
+      "interval": 3600,
+      "description": "Graphics card information from registry"
+    },
+    "graphics_memory_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\HardwareInformation.MemorySize';",
+      "interval": 3600,
+      "description": "Graphics memory from registry"
+    },
+    "graphics_driver_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverVersion';",
+      "interval": 3600,
+      "description": "Graphics driver version from registry"
+    },
+    "wmi_bios_info": {
+      "query": "SELECT name, value FROM wmi_bios_info WHERE name IN ('SerialNumber', 'Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate');",
+      "interval": 3600,
+      "description": "BIOS information via WMI"
+    },
+    "cpu_info": {
+      "query": "SELECT model, manufacturer, max_clock_speed, current_clock_speed, socket_designation, number_of_cores, logical_processors FROM cpu_info;",
+      "interval": 3600,
+      "description": "Detailed CPU information"
+    },
+    "video_info": {
+      "query": "SELECT model, manufacturer, driver_version, driver_date FROM video_info;",
+      "interval": 3600,
+      "description": "Graphics card information"
+    },
+    "battery": {
+      "query": "SELECT percent_remaining, charging, current_capacity, max_capacity, cycle_count, state, chemistry FROM battery;",
+      "interval": 3600,
+      "description": "Battery information for laptops"
+    },
+    "cpu_architecture_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\\PROCESSOR_ARCHITECTURE';",
+      "interval": 3600,
+      "description": "CPU architecture from registry"
+    },
+    "memory_type_wmi": {
+      "query": "SELECT device_locator, memory_type, form_factor, size, manufacturer FROM memory_devices WHERE memory_type IS NOT NULL AND size > 0;",
+      "interval": 3600,
+      "description": "Memory type information from memory_devices table with enhanced fields"
+    },
+    "physical_disk_performance": {
+      "query": "SELECT name FROM physical_disk_performance WHERE name != '_Total';",
+      "interval": 3600,
+      "description": "Physical disk performance data for additional storage discovery"
+    },
+    "logical_drives_extended": {
+      "query": "SELECT device_id, type, size, free_space, file_system FROM logical_drives WHERE device_id NOT LIKE '%\\\\Device\\\\%';",
+      "interval": 3600,
+      "description": "Logical drive information with free space"
+    },
+    "graphics_driver_date_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverDate';",
+      "interval": 3600,
+      "description": "Graphics driver date from registry"
+    },
+    "memory_type_smbios": {
+      "query": "SELECT device_locator, memory_type, form_factor, total_width, data_width FROM memory_devices WHERE memory_type IS NOT NULL AND device_locator IS NOT NULL;",
+      "interval": 3600,
+      "description": "Enhanced memory type information from SMBIOS including form factor"
+    },
+    "memory_type_wmi_extended": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters\\%' OR path = 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\MultifunctionAdapter\\%\\DiskController\\0\\DiskPeripheral\\%\\Identifier';",
+      "interval": 3600,
+      "description": "Memory type information from registry"
+    },
+    "graphics_memory_wmi": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\MemorySize';",
+      "interval": 3600,
+      "description": "Graphics memory from registry MemorySize"
+    },
+    "graphics_memory_dxdiag": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\AdapterMemorySize';",
+      "interval": 3600,
+      "description": "Adapter memory size from registry"
+    },
+    "graphics_memory_alternative_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\VideoMemorySize';",
+      "interval": 3600,
+      "description": "Alternative graphics memory registry path"
+    },
+    "graphics_memory_dword_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DedicatedVideoMemory';",
+      "interval": 3600,
+      "description": "Dedicated video memory from registry (DWORD)"
+    },
+    "memory_type_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\MultifunctionAdapter\\%\\DiskController\\0\\DiskPeripheral\\%\\Identifier';",
+      "interval": 3600,
+      "description": "Memory information from hardware description registry"
+    },
+    "memory_speed_registry": {
+      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e965-e325-11ce-bfc1-08002be10318}\\%\\Speed';",
+      "interval": 3600,
+      "description": "Memory speed from registry"
+    }
+  }
+}

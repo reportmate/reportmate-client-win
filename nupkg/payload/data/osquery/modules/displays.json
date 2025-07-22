@@ -1,0 +1,52 @@
+{
+  "module": "displays",
+  "version": "1.0.0",
+  "description": "Comprehensive display device and configuration information collection",
+  "queries": {
+    "video_info": {
+      "query": "SELECT model, manufacturer, driver_version, driver_date FROM video_info;",
+      "interval": 3600,
+      "description": "Graphics card information from osquery video_info table"
+    },
+    "display_registry_adapters": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverDesc' AND data != '';",
+      "interval": 3600,
+      "description": "Display adapter information from registry"
+    },
+    "display_driver_versions": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverVersion' AND data != '';",
+      "interval": 3600,
+      "description": "Display driver versions from registry"
+    },
+    "display_driver_dates": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverDate' AND data != '';",
+      "interval": 3600,
+      "description": "Display driver dates from registry"
+    },
+    "display_memory_info": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\MemorySize' AND data != '';",
+      "interval": 3600,
+      "description": "Display adapter memory size from registry"
+    },
+    "display_monitors": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Monitor device information from registry"
+    },
+    "display_current_settings": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_CURRENT_USER\\Control Panel\\Desktop\\%' AND name IN ('DPIScalingVer', 'Win8DpiScaling', 'LogPixels') AND data != '';",
+      "interval": 3600,
+      "description": "Current display DPI and scaling settings"
+    },
+    "display_accessibility": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path = 'HKEY_CURRENT_USER\\Control Panel\\Accessibility\\HighContrast' AND data != '';",
+      "interval": 3600,
+      "description": "Display accessibility settings and configurations"
+    },
+    "color_profiles_files": {
+      "query": "SELECT path, filename, size, mtime FROM file WHERE path LIKE 'C:\\\\Windows\\\\System32\\\\spool\\\\drivers\\\\color\\\\%.icm' OR path LIKE 'C:\\\\Windows\\\\System32\\\\spool\\\\drivers\\\\color\\\\%.icc';",
+      "interval": 3600,
+      "description": "Color profile files on the system"
+    }
+  }
+}
