@@ -1,16 +1,33 @@
 # ReportMate Post-Installation Script
 # Configures the ReportMate client after installation
-
-param(
-    [string]$ApiUrl = "",
-    [string]$DeviceId = "",
-    [string]$ApiKey = ""
-)
+# Can be configured via environment variables, registry, or CSP policies
 
 $ErrorActionPreference = "Continue"
 
+# Initialize configuration variables
+$ApiUrl = ""
+$ApiKey = ""
+
 Write-Host "ReportMate Post-Installation Script"
 Write-Host "=================================================="
+
+# Check for CSP policies first (managmenet configs)
+$CSPRegistryPath = "HKLM:\SOFTWARE\Policies\ReportMate"
+if (Test-Path $CSPRegistryPath) {
+    Write-Host "Found CSP policy configuration"
+    
+    $CSPApiUrl = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiUrl" -ErrorAction SilentlyContinue
+    if ($CSPApiUrl -and -not [string]::IsNullOrEmpty($CSPApiUrl.ApiUrl)) {
+        $ApiUrl = $CSPApiUrl.ApiUrl
+        Write-Host "Using CSP-configured API URL"
+    }
+    
+    $CSPApiKey = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiKey" -ErrorAction SilentlyContinue
+    if ($CSPApiKey -and -not [string]::IsNullOrEmpty($CSPApiKey.ApiKey)) {
+        $ApiKey = $CSPApiKey.ApiKey
+        Write-Host "Using CSP-configured API Key"
+    }
+}
 
 # Create registry key if it doesn't exist
 $RegistryPath = "HKLM:\SOFTWARE\ReportMate"
@@ -34,12 +51,15 @@ try {
     # Set osquery path (default)
     Set-ItemProperty -Path $RegistryPath -Name "OsQueryPath" -Value "C:\Program Files\osquery\osqueryi.exe" -Type String -ErrorAction SilentlyContinue
     
+    # Set osquery config path for ReportMate
+    Set-ItemProperty -Path $RegistryPath -Name "OsQueryConfigPath" -Value "C:\ProgramData\ManagedReports\osquery" -Type String -ErrorAction SilentlyContinue
+    
     Write-Host "Set default configuration values"
 } catch {
     Write-Warning "Failed to set default configuration: $_"
 }
 
-# Set API URL if provided via environment variable or parameter
+# Set API URL if provided via environment variable
 $EnvApiUrl = $env:REPORTMATE_API_URL
 if (-not [string]::IsNullOrEmpty($EnvApiUrl)) {
     $ApiUrl = $EnvApiUrl
@@ -51,21 +71,6 @@ if (-not [string]::IsNullOrEmpty($ApiUrl)) {
         Write-Host "Set API URL: $ApiUrl"
     } catch {
         Write-Warning "Failed to set API URL: $_"
-    }
-}
-
-# Set Device ID if provided
-$EnvDeviceId = $env:REPORTMATE_DEVICE_ID
-if (-not [string]::IsNullOrEmpty($EnvDeviceId)) {
-    $DeviceId = $EnvDeviceId
-}
-
-if (-not [string]::IsNullOrEmpty($DeviceId)) {
-    try {
-        Set-ItemProperty -Path $RegistryPath -Name "DeviceId" -Value $DeviceId -Type String
-        Write-Host "Set Device ID: $DeviceId"
-    } catch {
-        Write-Warning "Failed to set Device ID: $_"
     }
 }
 

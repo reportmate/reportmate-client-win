@@ -1,0 +1,17 @@
+{
+  "module": "inventory",
+  "version": "1.0.0",
+  "description": "Device identification and asset information",
+  "queries": {
+    "system_info": {
+      "query": "SELECT hostname, computer_name, hardware_serial, uuid FROM system_info;",
+      "interval": 3600,
+      "description": "System identification information including UUID and serial"
+    },
+    "system_info_extended": {
+      "query": "SELECT hardware_model, hardware_vendor, hardware_version FROM system_info;",
+      "interval": 3600,
+      "description": "Extended hardware information"
+    }
+  }
+}

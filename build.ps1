@@ -310,9 +310,9 @@ Write-Output ""
 $RootDir = $PSScriptRoot
 $SrcDir = "$RootDir/src"
 $NupkgDir = "$RootDir/nupkg"
-$ProgramFilesPayloadDir = "$NupkgDir/payload/Program Files/ReportMate"
-$ProgramDataPayloadDir = "$NupkgDir/payload/ProgramData/ManagedReports"
-$CimianPayloadDir = "$NupkgDir/payload/Program Files/Cimian"
+$ProgramFilesPayloadDir = "$NupkgDir/payload"
+$ProgramDataPayloadDir = "$NupkgDir/payload/data"
+$CimianPayloadDir = "$NupkgDir/payload/cimian"
 $PublishDir = "$RootDir/.publish"
 $OutputDir = "$RootDir/dist"
 
@@ -507,11 +507,11 @@ Write-Output ""
 # Prepare package payload
 Write-Step "Preparing package payload..."
 
-# Copy executable to Program Files/ReportMate
+# Copy executable to payload root (will be installed to Program Files/ReportMate)
 Copy-Item "$PublishDir/runner.exe" $ProgramFilesPayloadDir -Force
-Write-Verbose "Copied runner.exe to Program Files payload"
+Write-Verbose "Copied runner.exe to payload root"
 
-# Create version file
+# Create version file in payload root
 $versionContent = @"
 ReportMate
 Version: $Version
@@ -521,23 +521,30 @@ Commit: $env:GITHUB_SHA
 "@
 $versionContent | Out-File "$ProgramFilesPayloadDir/version.txt" -Encoding UTF8
 
-# Copy configuration files to ProgramData
+# Copy configuration files to data directory (will be installed to ProgramData/ManagedReports)
 Copy-Item "$SrcDir/appsettings.yaml" $ProgramDataPayloadDir -Force
 
 # Copy modular osquery configuration from source (single source of truth)
 $osquerySourceDir = "$SrcDir/osquery"
-$osqueryTargetDir = "$ProgramDataPayloadDir/osquery"
+$osqueryTargetDataDir = "$ProgramDataPayloadDir/osquery"
+$osqueryTargetProgramDir = "$ProgramFilesPayloadDir/osquery"
 
-# Always ensure target directory is clean first
-if (Test-Path $osqueryTargetDir) {
-    Remove-Item $osqueryTargetDir -Recurse -Force
-    Write-Verbose "Cleaned existing osquery target directory"
+# Always ensure target directories are clean first
+if (Test-Path $osqueryTargetDataDir) {
+    Remove-Item $osqueryTargetDataDir -Recurse -Force
+    Write-Verbose "Cleaned existing osquery data directory"
+}
+if (Test-Path $osqueryTargetProgramDir) {
+    Remove-Item $osqueryTargetProgramDir -Recurse -Force
+    Write-Verbose "Cleaned existing osquery program directory"
 }
 
 if (Test-Path $osquerySourceDir) {
     Write-Step "📋 Copying modular osquery configuration from src..."
+    # Copy to both locations - application directory (where code looks) and data directory (for backup/reference)
     Copy-Item $osquerySourceDir $ProgramDataPayloadDir -Recurse -Force
-    Write-Success "Modular osquery configuration copied from single source of truth"
+    Copy-Item $osquerySourceDir $ProgramFilesPayloadDir -Recurse -Force
+    Write-Success "Modular osquery configuration copied to both application and data directories"
 } else {
     Write-Warning "Modular osquery directory not found at: $osquerySourceDir"
     # Fallback to unified file if modular not available
@@ -548,7 +555,7 @@ if (Test-Path $osquerySourceDir) {
 }
 
 Copy-Item "$SrcDir/appsettings.yaml" "$ProgramDataPayloadDir/appsettings.template.yaml" -Force
-Write-Verbose "Copied configuration files to ProgramData payload"
+Write-Verbose "Copied configuration files to data payload directory"
 
 # Ensure Cimian postflight script exists
 if (-not (Test-Path "$CimianPayloadDir/postflight.ps1")) {
@@ -591,6 +598,220 @@ try {
 '@
     $postflightContent | Out-File "$CimianPayloadDir/postflight.ps1" -Encoding UTF8
 }
+
+# Create chocolatey install script for Cimian package
+$chocolateyInstallPath = "$NupkgDir/tools/chocolateyInstall.ps1"
+$chocolateyToolsDir = "$NupkgDir/tools"
+if (-not (Test-Path $chocolateyToolsDir)) {
+    New-Item -ItemType Directory -Path $chocolateyToolsDir -Force | Out-Null
+}
+
+$chocolateyInstallContent = @'
+$ErrorActionPreference = 'Stop'
+
+# Installation paths
+$programFilesLocation = 'C:\Program Files\ReportMate\'
+$programDataLocation = 'C:\ProgramData\ManagedReports\'
+
+# Create directories if they don't exist
+if ($programFilesLocation) { 
+    New-Item -ItemType Directory -Force -Path $programFilesLocation | Out-Null 
+}
+if ($programDataLocation) { 
+    New-Item -ItemType Directory -Force -Path $programDataLocation | Out-Null 
+}
+
+$payloadRoot = Join-Path $PSScriptRoot '..\payload'
+$payloadRoot = [System.IO.Path]::GetFullPath($payloadRoot)
+
+Write-Host "Installing ReportMate from payload: $payloadRoot"
+
+# Copy executable and version files to Program Files
+$programFilesFiles = @('runner.exe', 'version.txt')
+foreach ($file in $programFilesFiles) {
+    $sourcePath = Join-Path $payloadRoot $file
+    if (Test-Path $sourcePath) {
+        $destPath = Join-Path $programFilesLocation $file
+        Copy-Item -LiteralPath $sourcePath -Destination $destPath -Force
+        Write-Host "Copied $file to Program Files"
+        
+        if (-not (Test-Path -LiteralPath $destPath)) {
+            Write-Error "Failed to copy $file to Program Files"
+            exit 1
+        }
+    }
+}
+
+# Copy data directory contents to ProgramData
+$dataPayloadPath = Join-Path $payloadRoot 'data'
+if (Test-Path $dataPayloadPath) {
+    Write-Host "Copying data files to ProgramData..."
+    Get-ChildItem -Path $dataPayloadPath -Recurse | ForEach-Object {
+        $fullName = $_.FullName
+        $fullName = [Management.Automation.WildcardPattern]::Escape($fullName)
+        $relative = $fullName.Substring($dataPayloadPath.Length).TrimStart('\','/')
+        $dest = Join-Path $programDataLocation $relative
+        
+        if ($_.PSIsContainer) {
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        } else {
+            Copy-Item -LiteralPath $fullName -Destination $dest -Force
+            if (-not (Test-Path -LiteralPath $dest)) {
+                Write-Error "Failed to copy data file $fullName"
+                exit 1
+            }
+        }
+    }
+    Write-Host "Data files copied successfully"
+} else {
+    Write-Warning "No data payload directory found at: $dataPayloadPath"
+}
+
+Write-Host "ReportMate chocolatey installation completed successfully"
+
+'@ + @'
+# Post-install script: postinstall.ps1
+# ReportMate Post-Installation Script
+# Configures the ReportMate client after installation
+# Can be configured via environment variables, registry, or CSP policies
+
+$ErrorActionPreference = "Continue"
+
+# Initialize configuration variables
+$ApiUrl = ""
+$ApiKey = ""
+
+Write-Host "ReportMate Post-Installation Script"
+Write-Host "=================================================="
+
+# Check for CSP policies first (managmenet configs)
+$CSPRegistryPath = "HKLM:\SOFTWARE\Policies\ReportMate"
+if (Test-Path $CSPRegistryPath) {
+    Write-Host "Found CSP policy configuration"
+    
+    $CSPApiUrl = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiUrl" -ErrorAction SilentlyContinue
+    if ($CSPApiUrl -and -not [string]::IsNullOrEmpty($CSPApiUrl.ApiUrl)) {
+        $ApiUrl = $CSPApiUrl.ApiUrl
+        Write-Host "Using CSP-configured API URL"
+    }
+    
+    $CSPApiKey = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiKey" -ErrorAction SilentlyContinue
+    if ($CSPApiKey -and -not [string]::IsNullOrEmpty($CSPApiKey.ApiKey)) {
+        $ApiKey = $CSPApiKey.ApiKey
+        Write-Host "Using CSP-configured API Key"
+    }
+}
+
+# Create registry key if it doesn't exist
+$RegistryPath = "HKLM:\SOFTWARE\ReportMate"
+if (-not (Test-Path $RegistryPath)) {
+    try {
+        New-Item -Path $RegistryPath -Force | Out-Null
+        Write-Host "Created registry key: $RegistryPath"
+    } catch {
+        Write-Warning "Failed to create registry key: $_"
+    }
+}
+
+# Set default configuration values
+try {
+    # Set collection interval (default: 1 hour)
+    Set-ItemProperty -Path $RegistryPath -Name "CollectionInterval" -Value 3600 -Type DWord -ErrorAction SilentlyContinue
+    
+    # Set log level (default: Information)
+    Set-ItemProperty -Path $RegistryPath -Name "LogLevel" -Value "Information" -Type String -ErrorAction SilentlyContinue
+    
+    # Set osquery path (default)
+    Set-ItemProperty -Path $RegistryPath -Name "OsQueryPath" -Value "C:\Program Files\osquery\osqueryi.exe" -Type String -ErrorAction SilentlyContinue
+    
+    # Set osquery config path for ReportMate
+    Set-ItemProperty -Path $RegistryPath -Name "OsQueryConfigPath" -Value "C:\ProgramData\ManagedReports\osquery" -Type String -ErrorAction SilentlyContinue
+    
+    Write-Host "Set default configuration values"
+} catch {
+    Write-Warning "Failed to set default configuration: $_"
+}
+
+# Set API URL if provided via environment variable
+$EnvApiUrl = $env:REPORTMATE_API_URL
+if (-not [string]::IsNullOrEmpty($EnvApiUrl)) {
+    $ApiUrl = $EnvApiUrl
+}
+
+if (-not [string]::IsNullOrEmpty($ApiUrl)) {
+    try {
+        Set-ItemProperty -Path $RegistryPath -Name "ApiUrl" -Value $ApiUrl -Type String
+        Write-Host "Set API URL: $ApiUrl"
+    } catch {
+        Write-Warning "Failed to set API URL: $_"
+    }
+}
+
+# Set API Key if provided
+$EnvApiKey = $env:REPORTMATE_API_KEY
+if (-not [string]::IsNullOrEmpty($EnvApiKey)) {
+    $ApiKey = $EnvApiKey
+}
+
+if (-not [string]::IsNullOrEmpty($ApiKey)) {
+    try {
+        Set-ItemProperty -Path $RegistryPath -Name "ApiKey" -Value $ApiKey -Type String
+        Write-Host "Set API Key: [REDACTED]"
+    } catch {
+        Write-Warning "Failed to set API Key: $_"
+    }
+}
+
+# Create data directories
+$DataDirectories = @(
+    "C:\ProgramData\ManagedReports",
+    "C:\ProgramData\ManagedReports\config",
+    "C:\ProgramData\ManagedReports\logs",
+    "C:\ProgramData\ManagedReports\cache",
+    "C:\ProgramData\ManagedReports\data"
+)
+
+foreach ($Directory in $DataDirectories) {
+    if (-not (Test-Path $Directory)) {
+        try {
+            New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+            Write-Host "Created directory: $Directory"
+        } catch {
+            Write-Warning "Failed to create directory $Directory`: $_"
+        }
+    }
+}
+
+# Set permissions on data directory
+try {
+    $Acl = Get-Acl "C:\ProgramData\ManagedReports"
+    $AccessRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
+    )
+    $Acl.SetAccessRule($AccessRule)
+    Set-Acl -Path "C:\ProgramData\ManagedReports" -AclObject $Acl
+    Write-Host "Set permissions on data directory"
+} catch {
+    Write-Warning "Failed to set permissions on data directory: $_"
+}
+
+# Test installation
+$TestResult = & "C:\Program Files\ReportMate\runner.exe" info 2>&1
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "Installation test successful"
+} else {
+    Write-Warning "Installation test failed: $TestResult"
+}
+
+Write-Host "Post-installation script completed"
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "1. Configure API URL: Set-ItemProperty -Path 'HKLM:\SOFTWARE\ReportMate' -Name 'ApiUrl' -Value 'https://your-api.azurewebsites.net'"
+Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
+Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"
+'@
+
+$chocolateyInstallContent | Out-File $chocolateyInstallPath -Encoding UTF8
 
 # Update package build-info.yaml
 $buildInfoPath = "$NupkgDir/build-info.yaml"
@@ -681,12 +902,9 @@ if (-not $SkipNUPKG) {
         } finally {
             Pop-Location
             
-            # Clean up copied osquery files to prevent drift
-            if (Test-Path "$ProgramDataPayloadDir/osquery") {
-                Write-Verbose "🧹 Cleaning up copied osquery files from payload directory..."
-                Remove-Item "$ProgramDataPayloadDir/osquery" -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Verbose "Osquery files cleaned - maintaining single source of truth in src/"
-            }
+            # Keep osquery files in payload - they're required for installation
+            # The osquery configuration files must remain in the payload for deployment
+            Write-Verbose "✅ Keeping osquery files in payload for package deployment"
         }
     }
 } else {
