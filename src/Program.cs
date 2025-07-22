@@ -496,34 +496,45 @@ public class Program
         var apiUrlOption = new Option<string>("--api-url", "Override API URL");
         var forceOption = new Option<bool>("--force", "Force data collection even if recent run detected");
         var collectOnlyOption = new Option<bool>("--collect-only", "Collect data only without transmitting to API");
+        var transmitOnlyOption = new Option<bool>("--transmit-only", "Transmit cached data only without collecting new data");
         var runModuleOption = new Option<string>("--run-module", "Run only a specific module (e.g., network, hardware, security)");
         
         // Add global options to root command
         rootCommand.AddGlobalOption(verboseOption);
         rootCommand.AddOption(forceOption);
         rootCommand.AddOption(collectOnlyOption);
+        rootCommand.AddOption(transmitOnlyOption);
         rootCommand.AddOption(runModuleOption);
         rootCommand.AddOption(deviceIdOption);
         rootCommand.AddOption(apiUrlOption);
 
         // Set default handler for root command (when no subcommand is specified)
         // This makes running the binary without any command default to data collection
-        rootCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
+        rootCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Run command - explicit run data collection (optional, since it's the default)
         var runCommand = new Command("run", "Run data collection and send to API (same as default behavior)")
         {
             forceOption,
             collectOnlyOption,
+            transmitOnlyOption,
             runModuleOption,
             deviceIdOption,
             apiUrlOption
         };
-        runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
+        runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Test command - validate configuration and connectivity
         var testCommand = new Command("test", "Test configuration and API connectivity");
         testCommand.SetHandler(HandleTestCommand, verboseOption);
+
+        // Transmit command - send cached data without collection
+        var transmitCommand = new Command("transmit", "Transmit cached data without collecting new data (alias for --transmit-only)")
+        {
+            deviceIdOption,
+            apiUrlOption
+        };
+        transmitCommand.SetHandler(HandleTransmitOnlyCommand, verboseOption);
 
         // Modular test command - test the new modular data collection system
         var modularTestCommand = new Command("test-modular", "Test modular data collection system");
@@ -553,6 +564,7 @@ public class Program
 
         rootCommand.AddCommand(runCommand);
         rootCommand.AddCommand(testCommand);
+        rootCommand.AddCommand(transmitCommand);
         rootCommand.AddCommand(modularTestCommand);
         rootCommand.AddCommand(infoCommand);
         rootCommand.AddCommand(installCommand);
@@ -561,13 +573,26 @@ public class Program
         return rootCommand;
     }
 
-    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, string? runModule, string? deviceId, string? apiUrl, int verbose)
+    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, bool transmitOnly, string? runModule, string? deviceId, string? apiUrl, int verbose)
     {
         try
         {
             // Set enhanced logger verbose level
             Logger.SetVerboseLevel(verbose);
             ConsoleFormatter.SetVerboseMode(verbose >= 2); // Enable for INFO level and above
+            
+            // Validate mutually exclusive options
+            if (collectOnly && transmitOnly)
+            {
+                _logger?.LogError("Cannot use --collect-only and --transmit-only together");
+                if (verbose > 0)
+                {
+                    Logger.Error("INVALID OPTIONS: --collect-only and --transmit-only are mutually exclusive");
+                    Logger.Info("Use --collect-only to collect data without transmission");
+                    Logger.Info("Use --transmit-only to transmit cached data without collection");
+                }
+                return 1;
+            }
             
             if (verbose > 0)
             {
@@ -578,6 +603,7 @@ public class Program
                     ["Command"] = "run",
                     ["Force"] = force,
                     ["Collect Only"] = collectOnly,
+                    ["Transmit Only"] = transmitOnly,
                     ["Run Module"] = runModule ?? "ALL (full collection)",
                     ["Custom Device ID"] = deviceId ?? "NONE (will auto-detect)",
                     ["Custom API URL"] = apiUrl ?? "NONE (using config)",
@@ -585,8 +611,16 @@ public class Program
                 };
                 
                 Logger.InfoWithData("Command Parameters", commandData);
-                Logger.Info("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) {0}", 
-                    collectOnly ? "Collect Data (NO TRANSMISSION)" : "Send Data");
+                
+                if (transmitOnly)
+                {
+                    Logger.Info("Expected Flow: 1) Load Cached Data 2) Validate Cache 3) Transmit to API");
+                }
+                else
+                {
+                    Logger.Info("Expected Flow: 1) Detect Serial 2) Check Registration 3) Register if needed 4) {0}", 
+                        collectOnly ? "Collect Data (NO TRANSMISSION)" : "Send Data");
+                }
             }
             
             _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", 
@@ -604,6 +638,12 @@ public class Program
                 }
                 
                 return await HandleSingleModuleCollection(runModule, verbose);
+            }
+            
+            // Handle transmit-only mode (send cached data without collection)
+            if (transmitOnly)
+            {
+                return await HandleTransmitOnlyCommand(verbose);
             }
             
             var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
@@ -1132,6 +1172,182 @@ public class Program
                 }
             }
             _logger!.LogError(ex, "Error during single module collection for: {ModuleId}", moduleId);
+            return 1;
+        }
+    }
+    
+    /// <summary>
+    /// Handle transmit-only command - sends cached data without collecting new data
+    /// </summary>
+    private static async Task<int> HandleTransmitOnlyCommand(int verbose)
+    {
+        try
+        {
+            if (verbose > 0)
+            {
+                Logger.Section("Transmit Only Mode", "Sending cached data without collection");
+                Logger.Info("Mode: Transmission only (no data collection)");
+                Logger.Info("Source: Cached module data from previous collection");
+                Logger.Info("Action: Load cache, validate, and transmit to API");
+            }
+            
+            _logger!.LogInformation("ReportMate v{Version} - Transmit Only Mode", 
+                System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
+            
+            // Get the modular data collection service to load cached data
+            var modularDataService = _serviceProvider!.GetRequiredService<IModularDataCollectionService>();
+            var apiService = _serviceProvider!.GetRequiredService<IApiService>();
+            
+            if (verbose > 0)
+            {
+                Logger.Info("Loading cached data from previous collection...");
+            }
+            
+            // Load cached data
+            var cachedData = await modularDataService.LoadCachedDataAsync();
+            
+            if (cachedData == null || string.IsNullOrEmpty(cachedData.DeviceId))
+            {
+                _logger!.LogError("No cached data found or cached data is invalid");
+                if (verbose > 0)
+                {
+                    Logger.Error("CACHE MISS: No valid cached data found");
+                    Logger.Info("ACTION REQUIRED: Run data collection first with:");
+                    Logger.Info("  runner.exe --collect-only    # Collect data and cache locally");
+                    Logger.Info("  runner.exe                   # Full collection and transmission");
+                }
+                return 1;
+            }
+            
+            if (verbose > 0)
+            {
+                Logger.Info("Cached data loaded successfully");
+                Logger.Info("Device ID: {0}", cachedData.DeviceId);
+                Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", cachedData.CollectedAt);
+                
+                // Log summary of cached modules
+                var moduleCount = 0;
+                if (cachedData.System != null) moduleCount++;
+                if (cachedData.Hardware != null) moduleCount++;
+                if (cachedData.Network != null) moduleCount++;
+                if (cachedData.Applications != null) moduleCount++;
+                if (cachedData.Security != null) moduleCount++;
+                if (cachedData.Management != null) moduleCount++;
+                if (cachedData.Inventory != null) moduleCount++;
+                if (cachedData.Installs != null) moduleCount++;
+                if (cachedData.Profiles != null) moduleCount++;
+                
+                Logger.Info("Cached Modules: {0}/9 modules available", moduleCount);
+            }
+            
+            // Test API connectivity first
+            if (verbose > 0)
+            {
+                Logger.Info("Testing API connectivity...");
+            }
+            
+            var apiConnected = await apiService.TestConnectivityAsync();
+            if (!apiConnected)
+            {
+                _logger!.LogError("API connectivity test failed");
+                if (verbose > 0)
+                {
+                    Logger.Error("API UNREACHABLE: Cannot connect to ReportMate API");
+                    Logger.Info("ACTION REQUIRED: Check network connectivity and API configuration");
+                }
+                return 1;
+            }
+            
+            if (verbose > 0)
+            {
+                Logger.Info("API connectivity confirmed");
+                Logger.Info("Transmitting cached data to API...");
+            }
+            
+            // Convert cached data to API request format
+            var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
+            
+            // Use the existing conversion method from DataCollectionService
+            // First we need to call the ConvertModularPayloadToRequest method
+            // Since it's private, we'll create a DeviceDataRequest manually using the same structure
+            var deviceDataRequest = new DeviceDataRequest
+            {
+                Device = cachedData.DeviceId,
+                SerialNumber = cachedData.Inventory?.SerialNumber ?? "",
+                Kind = "Info",
+                Ts = DateTime.UtcNow.ToString("O"),
+                Payload = new DeviceDataPayload
+                {
+                    Device = new Dictionary<string, object>
+                    {
+                        ["DeviceId"] = cachedData.DeviceId,
+                        ["SerialNumber"] = cachedData.Inventory?.SerialNumber ?? "",
+                        ["ComputerName"] = cachedData.Inventory?.DeviceName ?? Environment.MachineName,
+                        ["Domain"] = "",
+                        ["Manufacturer"] = cachedData.Hardware?.Manufacturer ?? "",
+                        ["Model"] = cachedData.Hardware?.Model ?? "",
+                        ["LastSeen"] = DateTime.UtcNow,
+                        ["ClientVersion"] = cachedData.ClientVersion,
+                        ["Status"] = "online"
+                    },
+                    CollectionTimestamp = cachedData.CollectedAt.ToString("O"),
+                    ClientVersion = cachedData.ClientVersion,
+                    CollectionType = "transmit-only",
+                    ManagedInstallsSystem = "Cimian",
+                    Source = "runner.exe --transmit-only"
+                }
+            };
+            
+            // Add modular data to OsQuery section
+            var osQueryDict = new Dictionary<string, object>();
+            if (cachedData.System != null) osQueryDict["system"] = cachedData.System;
+            if (cachedData.Hardware != null) osQueryDict["hardware"] = cachedData.Hardware;
+            if (cachedData.Network != null) osQueryDict["network"] = cachedData.Network;
+            if (cachedData.Applications != null) osQueryDict["applications"] = cachedData.Applications;
+            if (cachedData.Security != null) osQueryDict["security"] = cachedData.Security;
+            if (cachedData.Management != null) osQueryDict["management"] = cachedData.Management;
+            if (cachedData.Inventory != null) osQueryDict["inventory"] = cachedData.Inventory;
+            if (cachedData.Installs != null) osQueryDict["installs"] = cachedData.Installs;
+            if (cachedData.Profiles != null) osQueryDict["profiles"] = cachedData.Profiles;
+            
+            deviceDataRequest.Payload.OsQuery = osQueryDict;
+            
+            // Send the cached data
+            var transmissionResult = await apiService.SendDeviceDataAsync(deviceDataRequest);
+            
+            if (transmissionResult)
+            {
+                _logger!.LogInformation("Cached data transmitted successfully");
+                if (verbose > 0)
+                {
+                    Logger.Info("✅ Transmission completed successfully");
+                    Logger.Info("DASHBOARD: Check API dashboard for updated device data");
+                    Logger.Info("CACHE: Cached data remains available for future transmissions");
+                }
+                return 0;
+            }
+            else
+            {
+                _logger!.LogError("Failed to transmit cached data");
+                if (verbose > 0)
+                {
+                    Logger.Error("TRANSMISSION FAILED: API rejected the cached data");
+                    Logger.Info("ACTION REQUIRED: Check API logs for specific error details");
+                }
+                return 1;
+            }
+        }
+        catch (Exception ex)
+        {
+            if (verbose > 0)
+            {
+                Logger.Error("Error during transmit-only operation: {0}", ex.Message);
+                if (verbose >= 3)
+                {
+                    Logger.Debug("Stack trace: {0}", ex.StackTrace ?? "No stack trace available");
+                }
+            }
+            _logger!.LogError(ex, "Error during transmit-only operation");
             return 1;
         }
     }

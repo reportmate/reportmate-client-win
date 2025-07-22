@@ -325,7 +325,8 @@ public class ApiService : IApiService
                             _logger.LogError("Status Code: {StatusCode}", response.StatusCode);
                             _logger.LogError("This indicates a problem with the request data or API configuration");
                             _logger.LogError("Payload that caused the error:");
-                            _logger.LogError("Device Serial: {DeviceSerial}", payload?.Device ?? "Unknown");
+                            _logger.LogError("Device UUID (payload.Device): {DeviceUuid}", payload?.Device ?? "Unknown");
+                            _logger.LogError("Device Serial Number: {DeviceSerial}", deviceSerial);
                             _logger.LogError("Payload Size: {PayloadSize} bytes", jsonContent.Length);
                             _logger.LogError("Kind: {Kind}", payload?.Kind ?? "Unknown");
                             return false;
@@ -367,7 +368,7 @@ public class ApiService : IApiService
                     _logger.LogError("Exception Type: {ExceptionType}", ex.GetType().FullName);
                     _logger.LogError("Exception Message: {ExceptionMessage}", ex.Message);
                     _logger.LogError("Stack Trace: {StackTrace}", ex.StackTrace);
-                    _logger.LogError("Device Serial: {DeviceSerial}", deviceSerial);
+                    _logger.LogError("Device Serial Number: {DeviceSerial}", deviceSerial);
                     _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload, _jsonOptions).Length : 0);
                     
                     if (ex.InnerException != null)
@@ -389,7 +390,8 @@ public class ApiService : IApiService
             // Final failure logging with comprehensive debugging information
             _logger.LogError("=== TRANSMISSION FAILED ===");
             _logger.LogError("Failed to send device data after {MaxRetries} attempts", maxRetries);
-            _logger.LogError("Device Serial: {DeviceSerial}", deviceSerial);
+            _logger.LogError("Device Serial Number: {DeviceSerial}", deviceSerial);
+            _logger.LogError("Hardware UUID: {HardwareUuid}", hardwareUuid);
             _logger.LogError("Computer Name: {ComputerName}", deviceInfo?.ComputerName ?? "Unknown");
             _logger.LogError("API Base URL: {BaseUrl}", _httpClient.BaseAddress);
             _logger.LogError("Expected Endpoint: {Endpoint}", "/api/device");
@@ -425,11 +427,11 @@ public class ApiService : IApiService
         {
             _logger.LogInformation("Testing API connectivity");
 
-            // Try to get the device endpoint with a HEAD request first
-            var request = new HttpRequestMessage(HttpMethod.Head, "/api/device");
+            // Use the health endpoint for connectivity testing
+            var request = new HttpRequestMessage(HttpMethod.Get, "/api/health");
             var response = await _httpClient.SendAsync(request);
             
-            if (response.IsSuccessStatusCode || response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed)
+            if (response.IsSuccessStatusCode)
             {
                 _logger.LogInformation("API connectivity test successful");
                 return true;
