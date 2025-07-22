@@ -281,7 +281,46 @@ namespace ReportMate.WindowsClient.Services
 
             try
             {
-                var cacheFiles = Directory.GetFiles(_cacheDirectory, "*.json");
+                // Find the most recent cache directory
+                var baseCacheDirectory = Path.Combine("C:", "ProgramData", "ManagedReports", "cache");
+                if (!Directory.Exists(baseCacheDirectory))
+                {
+                    _logger.LogWarning("Cache base directory not found: {Directory}", baseCacheDirectory);
+                    return payload;
+                }
+
+                var cacheDirectories = Directory.GetDirectories(baseCacheDirectory)
+                    .Where(d => Path.GetFileName(d).Length == 17) // Format: YYYY-MM-DD-HHmmss
+                    .OrderByDescending(d => Path.GetFileName(d))
+                    .ToList();
+
+                if (!cacheDirectories.Any())
+                {
+                    _logger.LogWarning("No cache directories found in: {Directory}", baseCacheDirectory);
+                    return payload;
+                }
+
+                // Find the latest cache directory that has data (not empty)
+                string? latestCacheDirectory = null;
+                foreach (var dir in cacheDirectories)
+                {
+                    var jsonFiles = Directory.GetFiles(dir, "*.json");
+                    if (jsonFiles.Length > 0)
+                    {
+                        latestCacheDirectory = dir;
+                        break;
+                    }
+                }
+
+                if (latestCacheDirectory == null)
+                {
+                    _logger.LogWarning("No cache directories with data found in: {Directory}", baseCacheDirectory);
+                    return payload;
+                }
+
+                _logger.LogInformation("Using latest cache directory: {Directory}", Path.GetFileName(latestCacheDirectory));
+
+                var cacheFiles = Directory.GetFiles(latestCacheDirectory, "*.json");
                 _logger.LogInformation("Loading {FileCount} cached module files", cacheFiles.Length);
 
                 foreach (var file in cacheFiles)
@@ -291,22 +330,35 @@ namespace ReportMate.WindowsClient.Services
                         var fileName = Path.GetFileNameWithoutExtension(file);
                         var moduleId = fileName; // Use filename directly as it's already the moduleId
                         
+                        // Skip the event.json file as it's the unified payload, not individual module data
+                        if (moduleId == "event")
+                        {
+                            continue;
+                        }
+                        
                         var json = await File.ReadAllTextAsync(file);
+                        
+                        // JSON options for deserialization
+                        var jsonOptions = new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                            TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+                        };
                         
                         // Load module data based on module ID
                         BaseModuleData? moduleData = moduleId switch
                         {
-                            "applications" => JsonSerializer.Deserialize<ApplicationsData>(json),
-                            "hardware" => JsonSerializer.Deserialize<HardwareData>(json),
-                            "inventory" => JsonSerializer.Deserialize<InventoryData>(json),
-                            "installs" => JsonSerializer.Deserialize<InstallsData>(json),
-                            "management" => JsonSerializer.Deserialize<ManagementData>(json),
-                            "network" => JsonSerializer.Deserialize<NetworkData>(json),
-                            "printers" => JsonSerializer.Deserialize<PrinterData>(json),
-                            "displays" => JsonSerializer.Deserialize<DisplayData>(json),
-                            "profiles" => JsonSerializer.Deserialize<ProfilesData>(json),
-                            "security" => JsonSerializer.Deserialize<SecurityData>(json),
-                            "system" => JsonSerializer.Deserialize<SystemData>(json),
+                            "applications" => JsonSerializer.Deserialize<ApplicationsData>(json, jsonOptions),
+                            "hardware" => JsonSerializer.Deserialize<HardwareData>(json, jsonOptions),
+                            "inventory" => JsonSerializer.Deserialize<InventoryData>(json, jsonOptions),
+                            "installs" => JsonSerializer.Deserialize<InstallsData>(json, jsonOptions),
+                            "management" => JsonSerializer.Deserialize<ManagementData>(json, jsonOptions),
+                            "network" => JsonSerializer.Deserialize<NetworkData>(json, jsonOptions),
+                            "printers" => JsonSerializer.Deserialize<PrinterData>(json, jsonOptions),
+                            "displays" => JsonSerializer.Deserialize<DisplayData>(json, jsonOptions),
+                            "profiles" => JsonSerializer.Deserialize<ProfilesData>(json, jsonOptions),
+                            "security" => JsonSerializer.Deserialize<SecurityData>(json, jsonOptions),
+                            "system" => JsonSerializer.Deserialize<SystemData>(json, jsonOptions),
                             _ => null
                         };
 
@@ -314,6 +366,15 @@ namespace ReportMate.WindowsClient.Services
                         {
                             AssignModuleDataToPayload(payload, moduleData);
                             payload.DeviceId = moduleData.DeviceId;
+                            payload.ClientVersion = moduleData.Version;
+                            
+                            // Use the collection time from the cached data if it's more recent
+                            if (moduleData.CollectedAt > payload.CollectedAt || payload.CollectedAt == DateTime.MinValue)
+                            {
+                                payload.CollectedAt = moduleData.CollectedAt;
+                            }
+
+                            _logger.LogDebug("Loaded cached module: {ModuleId} (Device: {DeviceId})", moduleId, moduleData.DeviceId);
                         }
                     }
                     catch (Exception ex)
@@ -321,6 +382,9 @@ namespace ReportMate.WindowsClient.Services
                         _logger.LogWarning(ex, "Failed to load cached file: {File}", file);
                     }
                 }
+
+                _logger.LogInformation("Loaded cached data with Device ID: {DeviceId}, Collection Time: {CollectedAt}", 
+                    payload.DeviceId, payload.CollectedAt);
             }
             catch (Exception ex)
             {
