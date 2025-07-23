@@ -249,6 +249,10 @@ public class ApiService : IApiService
                         _logger.LogInformation("SUCCESS: Device data sent to ReportMate API");
                         _logger.LogInformation("Data should now be visible in dashboard at /device/{DeviceSerial}", deviceSerial);
                         _logger.LogInformation("API Response: {Response}", responseContent);
+                        
+                        // Send event.json as a structured event
+                        await SendStructuredEventAsync(deviceSerial, deviceData);
+                        
                         return true;
                     }
                     else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -709,6 +713,92 @@ public class ApiService : IApiService
 
         _logger.LogDebug("HTTP client configured with BaseAddress: {BaseAddress}, timeout: {Timeout}s, User-Agent: {UserAgent}", 
             _httpClient.BaseAddress, timeoutSeconds, userAgent);
+    }
+    
+    /// <summary>
+    /// Send structured event from event.json to ReportMate events API
+    /// </summary>
+    private async Task SendStructuredEventAsync(string deviceSerial, DeviceDataRequest deviceData)
+    {
+        try
+        {
+            _logger.LogInformation("=== SENDING STRUCTURED EVENT ===");
+            _logger.LogInformation("Loading event.json from cache for device: {DeviceSerial}", deviceSerial);
+            
+            // Load the most recent event.json from the cache
+            var baseCacheDirectory = Path.Combine("C:", "ProgramData", "ManagedReports", "cache");
+            if (!Directory.Exists(baseCacheDirectory))
+            {
+                _logger.LogWarning("Cache directory not found: {Directory}", baseCacheDirectory);
+                return;
+            }
+            
+            var cacheDirectories = Directory.GetDirectories(baseCacheDirectory)
+                .Where(dir => DateTime.TryParseExact(Path.GetFileName(dir), "yyyy-MM-dd-HHmmss", null, System.Globalization.DateTimeStyles.None, out _))
+                .OrderByDescending(dir => Path.GetFileName(dir))
+                .ToArray();
+            
+            if (!cacheDirectories.Any())
+            {
+                _logger.LogWarning("No cache directories found in: {Directory}", baseCacheDirectory);
+                return;
+            }
+            
+            var latestCacheDirectory = cacheDirectories.First();
+            var eventJsonPath = Path.Combine(latestCacheDirectory, "event.json");
+            
+            if (!File.Exists(eventJsonPath))
+            {
+                _logger.LogWarning("event.json not found at: {Path}", eventJsonPath);
+                return;
+            }
+            
+            _logger.LogInformation("Loading event.json from: {Path}", eventJsonPath);
+            var eventJsonContent = await File.ReadAllTextAsync(eventJsonPath);
+            var eventData = JsonSerializer.Deserialize<Dictionary<string, object>>(eventJsonContent, _jsonOptions);
+            
+            if (eventData == null)
+            {
+                _logger.LogWarning("Failed to parse event.json content");
+                return;
+            }
+            
+            // Create structured event for the API
+            var eventRequest = new StructuredEventRequest
+            {
+                Device = deviceSerial,
+                Kind = "System",
+                Ts = DateTime.UtcNow.ToString("O"),
+                Payload = eventData
+            };
+            
+            var eventJsonPayload = JsonSerializer.Serialize(eventRequest, _jsonOptions);
+            var eventHttpContent = new StringContent(eventJsonPayload, System.Text.Encoding.UTF8, "application/json");
+            
+            _logger.LogInformation("Sending structured event to /api/events...");
+            _logger.LogInformation("Event payload size: {Size} KB", Math.Round(eventJsonPayload.Length / 1024.0, 2));
+            
+            var eventResponse = await _httpClient.PostAsync("/api/events", eventHttpContent);
+            
+            if (eventResponse.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("✅ SUCCESS: Structured event sent to ReportMate API");
+                var eventResponseContent = await eventResponse.Content.ReadAsStringAsync();
+                _logger.LogInformation("Event API Response: {Response}", eventResponseContent);
+            }
+            else
+            {
+                _logger.LogWarning("⚠️ Failed to send structured event: {StatusCode} {ReasonPhrase}", 
+                    eventResponse.StatusCode, eventResponse.ReasonPhrase);
+                var errorContent = await eventResponse.Content.ReadAsStringAsync();
+                _logger.LogWarning("Error response: {ErrorContent}", errorContent);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("❌ Error sending structured event: {Message}", ex.Message);
+            _logger.LogError("Exception details: {Exception}", ex);
+        }
     }
 }
 

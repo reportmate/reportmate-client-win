@@ -31,6 +31,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(System.Text.Json.JsonDocument))]
 [JsonSerializable(typeof(DeviceRegistrationRequest))]
 [JsonSerializable(typeof(DeviceEventRequest))]
+[JsonSerializable(typeof(StructuredEventRequest))]
 [JsonSerializable(typeof(DeviceDataRequest))]
 [JsonSerializable(typeof(DeviceDataPayload))]
 // Note: DeviceInfo is from Services namespace (legacy compatibility)
@@ -124,6 +125,17 @@ public class DeviceEventRequest
     public Dictionary<string, object>? Payload { get; set; }
     public string? Severity { get; set; }
     public string? Message { get; set; }
+}
+
+/// <summary>
+/// Structured event request for sending event.json data to /api/events
+/// </summary>
+public class StructuredEventRequest
+{
+    public required string Device { get; set; }
+    public required string Kind { get; set; }
+    public required string Ts { get; set; }
+    public required Dictionary<string, object> Payload { get; set; }
 }
 
 /// <summary>
