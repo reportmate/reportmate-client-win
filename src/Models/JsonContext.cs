@@ -47,6 +47,9 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(DataProcessing.ApplicationInfo), TypeInfoPropertyName = "LegacyApplicationInfo")]
 [JsonSerializable(typeof(List<DataProcessing.ApplicationInfo>), TypeInfoPropertyName = "LegacyApplicationInfoList")]
 // Modular data types (new architecture)
+// Module data classes
+[JsonSerializable(typeof(BaseModuleData))]
+[JsonSerializable(typeof(EventMetadata))]
 [JsonSerializable(typeof(UnifiedDevicePayload))]
 [JsonSerializable(typeof(ApplicationsData))]
 [JsonSerializable(typeof(HardwareData), TypeInfoPropertyName = "ModularHardwareData")]
