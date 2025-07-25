@@ -79,21 +79,26 @@ namespace ReportMate.WindowsClient.Services
                 var osqueryResults = await ExecuteModularQueriesAsync(modularQueries);
                 _logger.LogInformation("Executed osquery with {ResultCount} result sets", osqueryResults.Count);
                 
-                // Extract device UUID for individual modules
-                var deviceId = ExtractDeviceUuid(osqueryResults);
-                
-                // Create unified payload
-                var payload = new UnifiedDevicePayload
-                {
-                    DeviceId = deviceId,
-                    CollectedAt = DateTime.UtcNow,
-                    ClientVersion = GetClientVersion(),
-                    Platform = "Windows"
-                };
-
                 // Process each module's data using the modular architecture
                 var enabledProcessors = _moduleProcessorFactory.GetEnabledProcessors().ToList();
                 _logger.LogInformation("Processing {ProcessorCount} enabled modules", enabledProcessors.Count);
+
+                // Extract device UUID and serial number for individual modules
+                var deviceId = ExtractDeviceUuid(osqueryResults);
+                var serialNumber = ExtractSerialNumber(osqueryResults);
+                
+                // Create unified payload with metadata at the top
+                var payload = new UnifiedDevicePayload();
+                payload.Metadata = new EventMetadata
+                {
+                    DeviceId = deviceId,
+                    SerialNumber = serialNumber,
+                    CollectedAt = DateTime.UtcNow,
+                    ClientVersion = GetClientVersion(),
+                    Platform = "Windows",
+                    CollectionType = "Full",
+                    EnabledModules = enabledProcessors.Select(p => p.ModuleId).ToList()
+                };
 
                 for (int i = 0; i < enabledProcessors.Count; i++)
                 {
@@ -273,7 +278,8 @@ namespace ReportMate.WindowsClient.Services
         /// </summary>
         public async Task<UnifiedDevicePayload> LoadCachedDataAsync()
         {
-            var payload = new UnifiedDevicePayload
+            var payload = new UnifiedDevicePayload();
+            payload.Metadata = new EventMetadata
             {
                 CollectedAt = DateTime.UtcNow,
                 Platform = "Windows"
@@ -365,13 +371,13 @@ namespace ReportMate.WindowsClient.Services
                         if (moduleData != null)
                         {
                             AssignModuleDataToPayload(payload, moduleData);
-                            payload.DeviceId = moduleData.DeviceId;
-                            payload.ClientVersion = moduleData.Version;
+                            payload.Metadata.DeviceId = moduleData.DeviceId;
+                            payload.Metadata.ClientVersion = moduleData.Version;
                             
                             // Use the collection time from the cached data if it's more recent
-                            if (moduleData.CollectedAt > payload.CollectedAt || payload.CollectedAt == DateTime.MinValue)
+                            if (moduleData.CollectedAt > payload.Metadata.CollectedAt || payload.Metadata.CollectedAt == DateTime.MinValue)
                             {
-                                payload.CollectedAt = moduleData.CollectedAt;
+                                payload.Metadata.CollectedAt = moduleData.CollectedAt;
                             }
 
                             _logger.LogDebug("Loaded cached module: {ModuleId} (Device: {DeviceId})", moduleId, moduleData.DeviceId);
@@ -384,7 +390,7 @@ namespace ReportMate.WindowsClient.Services
                 }
 
                 _logger.LogInformation("Loaded cached data with Device ID: {DeviceId}, Collection Time: {CollectedAt}", 
-                    payload.DeviceId, payload.CollectedAt);
+                    payload.Metadata.DeviceId, payload.Metadata.CollectedAt);
             }
             catch (Exception ex)
             {
@@ -539,6 +545,61 @@ namespace ReportMate.WindowsClient.Services
             }
 
             // Fallback to machine name if no valid UUID found
+            return Environment.MachineName;
+        }
+
+        /// <summary>
+        /// Extract device serial number from osquery results
+        /// </summary>
+        private string ExtractSerialNumber(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
+            {
+                var firstResult = systemInfo[0];
+                if (firstResult.TryGetValue("hardware_serial", out var serial) && !string.IsNullOrEmpty(serial?.ToString()))
+                {
+                    var serialStr = serial.ToString();
+                    if (!string.IsNullOrEmpty(serialStr) && 
+                        serialStr != "0" && 
+                        serialStr != "System Serial Number" &&
+                        serialStr != "To be filled by O.E.M." &&
+                        serialStr != "Default string" &&
+                        serialStr != Environment.MachineName &&
+                        !serialStr.StartsWith("00000000"))
+                    {
+                        return serialStr;
+                    }
+                }
+                
+                if (firstResult.TryGetValue("computer_name", out var computerName) && !string.IsNullOrEmpty(computerName?.ToString()))
+                {
+                    var computerNameStr = computerName.ToString();
+                    if (!string.IsNullOrEmpty(computerNameStr) && computerNameStr != Environment.MachineName)
+                    {
+                        return computerNameStr;
+                    }
+                }
+            }
+
+            // Try chassis info as fallback
+            if (osqueryResults.TryGetValue("chassis_info", out var chassisInfo) && chassisInfo.Count > 0)
+            {
+                var chassis = chassisInfo[0];
+                if (chassis.TryGetValue("serial", out var chassisSerial) && !string.IsNullOrEmpty(chassisSerial?.ToString()))
+                {
+                    var chassisSerialStr = chassisSerial.ToString();
+                    if (!string.IsNullOrEmpty(chassisSerialStr) && 
+                        chassisSerialStr != "0" && 
+                        chassisSerialStr != "System Serial Number" &&
+                        chassisSerialStr != "To be filled by O.E.M." &&
+                        chassisSerialStr != Environment.MachineName)
+                    {
+                        return chassisSerialStr;
+                    }
+                }
+            }
+
+            // Fallback to machine name if no valid serial found
             return Environment.MachineName;
         }
 

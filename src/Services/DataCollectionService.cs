@@ -86,7 +86,7 @@ public class DataCollectionService : IDataCollectionService
             
             // Use modular data collection to get device identification AND collect all data in one pass
             var deviceModularPayload = await _modularDataCollectionService.CollectAllModuleDataAsync();
-            var deviceId = deviceModularPayload.DeviceId; // This should be the UUID
+            var deviceId = deviceModularPayload.Metadata.DeviceId; // This should be the UUID
             var serialNumber = deviceModularPayload.Inventory?.SerialNumber ?? "Unknown";
             var computerName = deviceModularPayload.Inventory?.DeviceName ?? "Unknown";
             var domain = ""; // Domain not collected in modular service yet
@@ -162,57 +162,53 @@ public class DataCollectionService : IDataCollectionService
             // Reuse the modular payload from device identification step (no need to collect again)
             var modularPayload = deviceModularPayload;
             
-            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.DeviceId);
-            _logger.LogInformation(" Collection Time: {CollectedAt:yyyy-MM-dd HH:mm:ss}", modularPayload.CollectedAt);
+            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.Metadata.DeviceId);
+            _logger.LogInformation(" Collection Time: {CollectedAt:yyyy-MM-dd HH:mm:ss}", modularPayload.Metadata.CollectedAt);
             _logger.LogInformation("Individual module cache files created in C:\\ProgramData\\ManagedReports\\cache\\");
 
-            // Send to API
-            _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");
-            _logger.LogInformation("Sending modular data to ReportMate API via /api/device");
-            
-            // Convert modular payload to API request format
-            var deviceData = ConvertModularPayloadToRequest(modularPayload);
-            
-            // Calculate data size safely without reflection-based serialization
-            var dataSize = 0;
-            try
-            {
-                dataSize = System.Text.Json.JsonSerializer.Serialize(deviceData, ReportMateJsonContext.Default.DeviceDataRequest).Length;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Could not calculate data size for logging");
-                dataSize = -1; // Unknown size
-            }
-            
-            _logger.LogInformation("Data size: {DataSize} bytes", dataSize > 0 ? dataSize.ToString() : "Unknown");
-            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.DeviceId);
-            _logger.LogInformation("Platform: {Platform}", modularPayload.Platform);
-            
-            var success = await _apiService.SendDeviceDataAsync(deviceData);
-
-            if (success)
+        // Send to API
+        _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");
+        _logger.LogInformation("Sending unified payload directly to ReportMate API via /api/events");
+        
+        // Calculate data size for the unified payload
+        var dataSize = 0;
+        try
+        {
+            dataSize = System.Text.Json.JsonSerializer.Serialize(modularPayload, ReportMateJsonContext.Default.UnifiedDevicePayload).Length;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not calculate data size for logging");
+            dataSize = -1; // Unknown size
+        }
+        
+        _logger.LogInformation("Data size: {DataSize} bytes", dataSize > 0 ? dataSize.ToString() : "Unknown");
+        _logger.LogInformation("Device ID: {DeviceId}", modularPayload.Metadata.DeviceId);
+        _logger.LogInformation("Platform: {Platform}", modularPayload.Metadata.Platform);
+        _logger.LogInformation("Enabled Modules: {EnabledModules}", string.Join(", ", modularPayload.Metadata.EnabledModules));
+        
+        var success = await _apiService.SendUnifiedPayloadAsync(modularPayload);            if (success)
             {
                 _logger.LogInformation("SUCCESS: Data transmission completed successfully");
-                _logger.LogInformation("DASHBOARD: Data should be visible at /device/{DeviceId}", modularPayload.DeviceId);
+                _logger.LogInformation("DASHBOARD: Data should be visible at /device/{DeviceId}", modularPayload.Metadata.DeviceId);
                 await _configurationService.UpdateLastRunTimeAsync();
                 return true;
             }
             else
             {
                 _logger.LogError("TRANSMISSION FAILED: Data collection succeeded but transmission failed");
-                _logger.LogError("Device ID: {DeviceId}", modularPayload.DeviceId);
-                _logger.LogError("Platform: {Platform}", modularPayload.Platform);
+                _logger.LogError("Device ID: {DeviceId}", modularPayload.Metadata.DeviceId);
+                _logger.LogError("Platform: {Platform}", modularPayload.Metadata.Platform);
                 
-                // Use source-generated JSON serialization
+                // Calculate data size for error logging
                 var jsonOptions = new JsonSerializerOptions
                 {
                     TypeInfoResolver = ReportMateJsonContext.Default
                 };
-                _logger.LogError("Data Size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(deviceData, jsonOptions).Length);
+                _logger.LogError("Data Size: {DataSize} bytes", System.Text.Json.JsonSerializer.Serialize(modularPayload, jsonOptions).Length);
                 _logger.LogError("NOTE: Will retry on next run");
                 _logger.LogError("Data collection or transmission failed");
-                _logger.LogError("IMPACT: Device may not be registered or API issues detected");
+                _logger.LogError("IMPACT: Device may not be registered or API issues detected"); 
                 _logger.LogError("ACTION REQUIRED: Check logs above for specific failure reasons");
                 return false;
             }
@@ -251,7 +247,7 @@ public class DataCollectionService : IDataCollectionService
             var deviceData = ConvertModularPayloadToRequest(modularPayload);
 
             _logger.LogInformation("MODULAR: Data collection completed using modular service");
-            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.DeviceId);
+            _logger.LogInformation("Device ID: {DeviceId}", modularPayload.Metadata.DeviceId);
             _logger.LogInformation("Individual module cache files created");
             
             return deviceData;
@@ -286,7 +282,7 @@ public class DataCollectionService : IDataCollectionService
         // Extract basic device information from the modular payload
         var deviceDict = new Dictionary<string, object>
         {
-            ["DeviceId"] = modularPayload.DeviceId,
+            ["DeviceId"] = modularPayload.Metadata.DeviceId,
             ["SerialNumber"] = modularPayload.Inventory?.SerialNumber ?? "",
             ["ComputerName"] = modularPayload.Inventory?.DeviceName ?? Environment.MachineName,
             ["Domain"] = "",
@@ -294,7 +290,7 @@ public class DataCollectionService : IDataCollectionService
             ["Model"] = modularPayload.Hardware?.Model ?? "",
             ["TotalMemoryGB"] = modularPayload.Hardware?.Memory?.TotalPhysical / (1024 * 1024 * 1024) ?? 0,
             ["LastSeen"] = DateTime.UtcNow,
-            ["ClientVersion"] = modularPayload.ClientVersion,
+            ["ClientVersion"] = modularPayload.Metadata.ClientVersion,
             ["AssetTag"] = modularPayload.Inventory?.AssetTag ?? "",
             ["OsName"] = modularPayload.System?.OperatingSystem?.Name ?? "",
             ["OsVersion"] = modularPayload.System?.OperatingSystem?.Version ?? "",
@@ -313,8 +309,8 @@ public class DataCollectionService : IDataCollectionService
         var payload = new DeviceDataPayload
         {
             Device = deviceDict,
-            CollectionTimestamp = modularPayload.CollectedAt.ToString("O"),
-            ClientVersion = modularPayload.ClientVersion,
+            CollectionTimestamp = modularPayload.Metadata.CollectedAt.ToString("O"),
+            ClientVersion = modularPayload.Metadata.ClientVersion,
             CollectionType = "modular",
             ManagedInstallsSystem = "Cimian",
             Source = "runner.exe"
@@ -336,7 +332,7 @@ public class DataCollectionService : IDataCollectionService
 
         return new DeviceDataRequest
         {
-            Device = modularPayload.DeviceId,
+            Device = modularPayload.Metadata.DeviceId,
             SerialNumber = modularPayload.Inventory?.SerialNumber ?? "",
             Kind = "Info",
             Ts = DateTime.UtcNow.ToString("O"),

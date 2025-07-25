@@ -50,7 +50,7 @@ namespace ReportMate.WindowsClient.Models.Modules
             Capabilities = new List<string>();
         }
 
-        // Basic Information
+        // Inventory
         public string Name { get; set; } = string.Empty;
         public string DeviceId { get; set; } = string.Empty;
         public string DeviceKey { get; set; } = string.Empty;
