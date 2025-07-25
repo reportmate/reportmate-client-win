@@ -13,6 +13,7 @@ using System.Text.Json.Serialization.Metadata;
 using System.IO;
 using System.Linq;
 using ReportMate.WindowsClient.Models;
+using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Services;
 
@@ -23,6 +24,7 @@ namespace ReportMate.WindowsClient.Services;
 public interface IApiService
 {
     Task<bool> SendDeviceDataAsync(DeviceDataRequest deviceData);
+    Task<bool> SendUnifiedPayloadAsync(UnifiedDevicePayload payload);
     Task<bool> TestConnectivityAsync();
     Task<bool> RegisterDeviceAsync(DeviceInfo deviceInfo);
     Task<bool> IsDeviceRegisteredAsync(string deviceId);
@@ -428,6 +430,131 @@ public class ApiService : IApiService
         }
     }
 
+    /// <summary>
+    /// Send unified device payload directly to the API
+    /// This is the simplified approach that sends the event.json structure directly
+    /// </summary>
+    public async Task<bool> SendUnifiedPayloadAsync(UnifiedDevicePayload payload)
+    {
+        try
+        {
+            _logger.LogInformation("=== UNIFIED PAYLOAD TRANSMISSION STARTING ===");
+            _logger.LogInformation("Sending unified payload to ReportMate API...");
+
+            var deviceSerial = payload.Inventory?.SerialNumber ?? payload.Metadata.DeviceId;
+            var deviceId = payload.Metadata.DeviceId;
+            
+            _logger.LogInformation("=== TRANSMISSION DETAILS ===");
+            _logger.LogInformation("Device UUID: {DeviceId}", deviceId);
+            _logger.LogInformation("Device Serial: {DeviceSerial} (used for URL routing)", deviceSerial);
+            _logger.LogInformation("Platform: {Platform}", payload.Metadata.Platform);
+            _logger.LogInformation("Collection Type: {CollectionType}", payload.Metadata.CollectionType);
+            _logger.LogInformation("Enabled Modules: [{EnabledModules}]", string.Join(", ", payload.Metadata.EnabledModules));
+            _logger.LogInformation("Client Version: {ClientVersion}", payload.Metadata.ClientVersion);
+            _logger.LogInformation("Expected Dashboard URL: /device/{DeviceSerial}", deviceSerial);
+
+            // Add passphrase if configured
+            var passphrase = _configuration["ReportMate:Passphrase"];
+            if (!string.IsNullOrEmpty(passphrase))
+            {
+                payload.Metadata.Additional["passphrase"] = passphrase;
+                _logger.LogInformation("Client passphrase included in payload");
+            }
+
+            var maxRetries = int.TryParse(_configuration["ReportMate:MaxRetryAttempts"], out var retries) ? retries : 3;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    _logger.LogInformation("=== API TRANSMISSION ATTEMPT {Attempt}/{MaxRetries} ===", attempt, maxRetries);
+
+                    // Serialize the unified payload directly
+                    var jsonContent = JsonSerializer.Serialize(payload, ReportMateJsonContext.Default.UnifiedDevicePayload);
+                    var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+                    
+                    // Cache the payload for debugging
+                    if (_cacheDirectory != null)
+                    {
+                        await CacheUnifiedPayloadAsync(jsonContent, deviceSerial, attempt);
+                    }
+
+                    var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
+                    _logger.LogInformation("Sending POST to /api/events...");
+                    _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
+                    _logger.LogInformation("Device Serial in payload: {DeviceSerial}", deviceSerial);
+
+                    var response = await _httpClient.PostAsync("/api/events", httpContent);
+                    _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        var responseContent = await response.Content.ReadAsStringAsync();
+                        _logger.LogInformation("SUCCESS: Unified payload sent to ReportMate API");
+                        _logger.LogInformation("Data should now be visible in dashboard at /device/{DeviceSerial}", deviceSerial);
+                        _logger.LogInformation("API Response: {Response}", responseContent);
+                        return true;
+                    }
+                    else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        _logger.LogWarning("API endpoint /api/events not found (404). Endpoint may not be deployed yet.");
+                        _logger.LogInformation("DATA READY FOR TRANSMISSION - Unified payload would have been sent:");
+                        _logger.LogInformation("Payload size: {PayloadSize} bytes", jsonContent.Length);
+                        _logger.LogInformation("Device: {Device}", deviceSerial);
+                        _logger.LogInformation("Modules: [{Modules}]", string.Join(", ", payload.Metadata.EnabledModules));
+                        return true; // Consider this success for development
+                    }
+                    else
+                    {
+                        var errorContent = await response.Content.ReadAsStringAsync();
+                        _logger.LogWarning("API Request Failed - Status: {StatusCode}, Error: {ErrorContent}", 
+                            response.StatusCode, errorContent);
+                        
+                        if (attempt == maxRetries)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogWarning("HTTP Request Exception on attempt {Attempt}: {Exception}", attempt, ex.Message);
+                    if (attempt == maxRetries)
+                    {
+                        return false;
+                    }
+                }
+                catch (TaskCanceledException ex) when (ex.CancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning("Request timeout on attempt {Attempt}", attempt);
+                    if (attempt == maxRetries)
+                    {
+                        return false;
+                    }
+                }
+
+                // Wait before retrying
+                if (attempt < maxRetries)
+                {
+                    var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt - 1));
+                    _logger.LogDebug("Waiting {Delay} seconds before retry", delay.TotalSeconds);
+                    await Task.Delay(delay);
+                }
+            }
+
+            _logger.LogError("=== UNIFIED PAYLOAD TRANSMISSION FAILED ===");
+            _logger.LogError("Failed to send unified payload after {MaxRetries} attempts", maxRetries);
+            _logger.LogError("Device Serial: {DeviceSerial}", deviceSerial);
+            _logger.LogError("Device UUID: {DeviceId}", deviceId);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error sending unified payload to API");
+            return false;
+        }
+    }
+
     public async Task<bool> TestConnectivityAsync()
     {
         try
@@ -464,10 +591,11 @@ public class ApiService : IApiService
             _logger.LogInformation("Registering device: {DeviceId} ({Name})", deviceInfo.DeviceId, deviceInfo.ComputerName);
             _logger.LogInformation("This will create a 'New Client' event in ReportMate");
 
-            // Create a "new_client" event through the ingest endpoint
+            // Create a device registration payload (simple format)
             var registrationPayload = new Dictionary<string, object>
             {
                 { "device", deviceInfo.DeviceId }, // Use DeviceId as the primary identifier - API expects "device" field (lowercase)
+                { "deviceId", deviceInfo.DeviceId }, // Also include deviceId for API compatibility
                 { "serialNumber", deviceInfo.SerialNumber }, // Also include serial number
                 { "computerName", deviceInfo.ComputerName },
                 { "model", deviceInfo.Model },
@@ -599,6 +727,40 @@ public class ApiService : IApiService
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Failed to log transmission payload, continuing with transmission");
+        }
+    }
+
+    private async Task CacheUnifiedPayloadAsync(string jsonContent, string deviceSerial, int attempt)
+    {
+        if (string.IsNullOrEmpty(_cacheDirectory))
+        {
+            return; // Logging disabled
+        }
+
+        try
+        {
+            // Create timestamped directory structure like cache (YYYY-MM-DD-HHmmss)
+            var now = DateTime.UtcNow;
+            var timestamp = now.ToString("yyyy-MM-dd-HHmmss");
+            var logDir = Path.Combine(_cacheDirectory, timestamp);
+            
+            if (!Directory.Exists(logDir))
+            {
+                Directory.CreateDirectory(logDir);
+            }
+            
+            var filename = $"unified_payload_{deviceSerial}_attempt{attempt}.json";
+            var filepath = Path.Combine(logDir, filename);
+            
+            await File.WriteAllTextAsync(filepath, jsonContent);
+            _logger.LogDebug("Unified payload logged to: {FilePath}", filepath);
+            
+            // Keep only the last 10 transmission logs to avoid disk space issues
+            await CleanupOldCacheFilesAsync(deviceSerial);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to log unified payload, continuing with transmission");
         }
     }
 

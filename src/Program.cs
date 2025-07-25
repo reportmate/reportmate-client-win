@@ -526,10 +526,6 @@ public class Program
         };
         runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
 
-        // Test command - validate configuration and connectivity
-        var testCommand = new Command("test", "Test configuration and API connectivity");
-        testCommand.SetHandler(HandleTestCommand, verboseOption);
-
         // Transmit command - send cached data without collection
         var transmitCommand = new Command("transmit", "Transmit cached data without collecting new data (alias for --transmit-only)")
         {
@@ -537,10 +533,6 @@ public class Program
             apiUrlOption
         };
         transmitCommand.SetHandler(HandleTransmitOnlyCommand, verboseOption);
-
-        // Modular test command - test the new modular data collection system
-        var modularTestCommand = new Command("test-modular", "Test modular data collection system");
-        modularTestCommand.SetHandler(HandleModularTestCommand, verboseOption);
 
         // Info command - display system and configuration information
         var infoCommand = new Command("info", "Display system and configuration information");
@@ -565,9 +557,7 @@ public class Program
         buildCommand.SetHandler(HandleBuildCommand, verboseOption);
 
         rootCommand.AddCommand(runCommand);
-        rootCommand.AddCommand(testCommand);
         rootCommand.AddCommand(transmitCommand);
-        rootCommand.AddCommand(modularTestCommand);
         rootCommand.AddCommand(infoCommand);
         rootCommand.AddCommand(installCommand);
         rootCommand.AddCommand(buildCommand);
@@ -701,142 +691,6 @@ public class Program
         }
     }
 
-    private static async Task<int> HandleTestCommand(int verbose)
-    {
-        try
-        {
-            // Set enhanced logger verbose level
-            Logger.SetVerboseLevel(verbose);
-            ConsoleFormatter.SetVerboseMode(verbose >= 2); // Enable for INFO level and above
-            
-            if (verbose > 0)
-            {
-                Logger.Section("Test Mode", "Comprehensive ReportMate test with enhanced logging");
-            }
-            
-            _logger!.LogInformation("=== REPORTMATE COMPREHENSIVE TEST STARTING ===");
-            _logger!.LogInformation("Running configuration and connectivity tests");
-            
-            var configService = _serviceProvider!.GetRequiredService<IConfigurationService>();
-            var apiService = _serviceProvider!.GetRequiredService<IApiService>();
-            var deviceInfoService = _serviceProvider!.GetRequiredService<IDeviceInfoService>();
-            
-            // Step 1: Test device information collection
-            Logger.Info("=== STEP 1: DEVICE INFORMATION COLLECTION ===");
-            DeviceInfo deviceInfo;
-            try
-            {
-                deviceInfo = await deviceInfoService.GetBasicDeviceInfoAsync();
-                Logger.Info("Device information collected successfully");
-                
-                var deviceData = new Dictionary<string, object?>
-                {
-                    ["Device ID"] = deviceInfo.DeviceId,
-                    ["Serial Number"] = deviceInfo.SerialNumber,
-                    ["Computer Name"] = deviceInfo.ComputerName,
-                    ["Operating System"] = deviceInfo.OperatingSystem,
-                    ["Manufacturer"] = deviceInfo.Manufacturer,
-                    ["Model"] = deviceInfo.Model,
-                    ["Client Version"] = deviceInfo.ClientVersion
-                };
-                
-                if (verbose >= 2)
-                {
-                    deviceData["Domain"] = deviceInfo.Domain;
-                    deviceData["Total Memory"] = $"{deviceInfo.TotalMemoryGB}GB";
-                    deviceData["Last Seen"] = deviceInfo.LastSeen;
-                }
-                
-                Logger.InfoWithData("Device Information", deviceData);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error("Failed to collect device information: {0}", ex.Message);
-                return 1;
-            }
-            
-            // Step 2: Test configuration
-            Logger.Info("=== STEP 2: CONFIGURATION VALIDATION ===");
-            var config = await configService.ValidateConfigurationAsync();
-            if (!config.IsValid)
-            {
-                Logger.Error("Configuration validation failed: {0}", 
-                    string.Join(", ", config.Errors));
-                return 1;
-            }
-            Logger.Info("Configuration validation passed");
-            
-            if (verbose > 0 && config.Warnings.Count > 0)
-            {
-                Logger.Warning("Configuration warnings: {0}", 
-                    string.Join(", ", config.Warnings));
-            }
-            
-            // Step 3: Test API connectivity
-            _logger!.LogInformation("=== STEP 3: API CONNECTIVITY TEST ===");
-            var apiConnectivity = await apiService.TestConnectivityAsync();
-            if (!apiConnectivity)
-            {
-                _logger!.LogError("API connectivity test failed");
-                return 1;
-            }
-            _logger!.LogInformation("API connectivity test passed");
-            
-            // Step 4: Test device registration check
-            _logger!.LogInformation("=== STEP 4: DEVICE REGISTRATION CHECK ===");
-            var isRegistered = await apiService.IsDeviceRegisteredAsync(deviceInfo.DeviceId);
-            if (isRegistered)
-            {
-                _logger!.LogInformation("Device {DeviceId} is already registered", deviceInfo.DeviceId);
-            }
-            else
-            {
-                _logger!.LogWarning(" Device {DeviceId} is not registered", deviceInfo.DeviceId);
-                _logger!.LogInformation("   This device will be auto-registered on first data collection run");
-            }
-            
-            // Step 5: Test comprehensive data collection (but don't send)
-            _logger!.LogInformation("=== STEP 5: DATA COLLECTION TEST ===");
-            try
-            {
-                var dataCollectionService = _serviceProvider!.GetRequiredService<IDataCollectionService>();
-                var deviceData = await dataCollectionService.CollectDataAsync();
-                
-                _logger!.LogInformation("Comprehensive data collection successful");
-                _logger!.LogInformation("   Device data request created:");
-                _logger!.LogInformation("     - Device: {Device}", deviceData.Device);
-                _logger!.LogInformation("     - SerialNumber: {SerialNumber}", deviceData.SerialNumber);
-                _logger!.LogInformation("     - Kind: {Kind}", deviceData.Kind);
-                _logger!.LogInformation("     - Timestamp: {Timestamp}", deviceData.Ts);
-                
-                if (deviceData.Payload != null)
-                {
-                    _logger!.LogInformation("   Payload sections:");
-                    if (deviceData.Payload.Device != null) _logger!.LogInformation("     - Device: Dictionary with {Count} items", deviceData.Payload.Device.Count);
-                    if (deviceData.Payload.System != null) _logger!.LogInformation("     - System: Dictionary with {Count} items", deviceData.Payload.System.Count);
-                    if (deviceData.Payload.Security != null) _logger!.LogInformation("     - Security: Dictionary with {Count} items", deviceData.Payload.Security.Count);
-                    if (deviceData.Payload.OsQuery != null) _logger!.LogInformation("     - OsQuery: Dictionary with {Count} items", deviceData.Payload.OsQuery.Count);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger!.LogError(ex, "Data collection test failed");
-                return 1;
-            }
-            
-            _logger!.LogInformation("=== ALL TESTS PASSED SUCCESSFULLY ===");
-            _logger!.LogInformation(" ReportMate client is ready for data collection and reporting");
-            _logger!.LogInformation(" Run 'runner.exe run' to perform actual data collection and transmission");
-            
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            _logger!.LogError(ex, "Error during testing");
-            return 1;
-        }
-    }
-
     private static async Task<int> HandleInfoCommand(int verbose)
     {
         try
@@ -943,68 +797,6 @@ public class Program
         {
             _logger!.LogError(ex, "Error in build command");
             return Task.FromResult(1);
-        }
-    }
-
-    private static async Task<int> HandleModularTestCommand(int verbose)
-    {
-        try
-        {
-            if (verbose > 0)
-            {
-                Logger.Section("Modular Test", "Testing modular data collection system");
-            }
-
-            _logger!.LogInformation("🧪 Testing Modular Data Collection System");
-            _logger!.LogInformation("===============================================");
-
-            var modularService = _serviceProvider!.GetRequiredService<IModularDataCollectionService>();
-            
-            _logger!.LogInformation("Starting modular data collection test...");
-            
-            var payload = await modularService.CollectAllModuleDataAsync();
-            
-            _logger!.LogInformation($"Modular data collection completed!");
-            _logger!.LogInformation($"Device ID: {payload.DeviceId}");
-            _logger!.LogInformation($" Collection Time: {payload.CollectedAt:yyyy-MM-dd HH:mm:ss}");
-            _logger!.LogInformation($"Platform: {payload.Platform}");
-            _logger!.LogInformation($" Client Version: {payload.ClientVersion}");
-            
-            // Show module data summary
-            var moduleCount = 0;
-            if (payload.Applications != null) { moduleCount++; _logger!.LogInformation($"  Applications: {payload.Applications.TotalApplications} apps"); }
-            if (payload.Hardware != null) { moduleCount++; _logger!.LogInformation($"  Hardware: {payload.Hardware.Processor.Name}"); }
-            if (payload.Inventory != null) { moduleCount++; _logger!.LogInformation($"  Inventory: {payload.Inventory.DeviceName}"); }
-            if (payload.Installs != null) { moduleCount++; _logger!.LogInformation($"  Installs: Module data collected"); }
-            if (payload.Management != null) { moduleCount++; _logger!.LogInformation($"  Management: Module data collected"); }
-            if (payload.Network != null) { moduleCount++; _logger!.LogInformation($"  Network: {payload.Network.Interfaces.Count} interfaces"); }
-            if (payload.Profiles != null) { moduleCount++; _logger!.LogInformation($"  Profiles: Module data collected"); }
-            if (payload.Security != null) { moduleCount++; _logger!.LogInformation($"  Security: Module data collected"); }
-            if (payload.System != null) { moduleCount++; _logger!.LogInformation($"  System: {payload.System.OperatingSystem.Name}"); }
-            
-            _logger!.LogInformation($"Total modules processed: {moduleCount}/9");
-            
-            // Test loading cached data
-            _logger!.LogInformation("Testing cached data loading...");
-            var cachedPayload = await modularService.LoadCachedDataAsync();
-            if (cachedPayload.DeviceId == payload.DeviceId)
-            {
-                _logger!.LogInformation("Cached data loaded successfully");
-            }
-            else
-            {
-                _logger!.LogWarning("Cached data mismatch or not found");
-            }
-            
-            _logger!.LogInformation("===============================================");
-            _logger!.LogInformation(" Modular test completed successfully!");
-            
-            return 0;
-        }
-        catch (Exception ex)
-        {
-            _logger!.LogError(ex, "Error during modular test");
-            return 1;
         }
     }
 
@@ -1254,31 +1046,29 @@ public class Program
 
             if (verbose > 0)
             {
-                Logger.Info("Device ID: {0}", unifiedPayload.DeviceId);
-                Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", unifiedPayload.CollectedAt);
+                Logger.Info("Device ID: {0}", unifiedPayload.Metadata.DeviceId);
+                Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", unifiedPayload.Metadata.CollectedAt);
             }
 
-            // MODULAR PER-JSON TRANSMISSION
-            // Load and transmit each module file individually for better modularity
-            var moduleFiles = Directory.GetFiles(latestCacheDir, "*.json")
-                .Where(f => !Path.GetFileName(f).Equals("event.json", StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            // UNIFIED JSON TRANSMISSION
+            // Load and transmit the complete event.json file
+            var eventJsonPath = Path.Combine(latestCacheDir, "event.json");
+            
+            if (!File.Exists(eventJsonPath))
+            {
+                _logger!.LogError("Event JSON file not found: {EventJsonPath}", eventJsonPath);
+                if (verbose > 0)
+                {
+                    Logger.Error("CACHE MISS: event.json not found");
+                    Logger.Info("ACTION REQUIRED: Run data collection first to generate event.json");
+                }
+                return 1;
+            }
 
             if (verbose > 0)
             {
-                Logger.Info("MODULAR TRANSMISSION: Processing {0} individual module files...", moduleFiles.Count);
-                Logger.Info("Each module will be transmitted individually to enable proper database storage");
-            }
-
-            if (!moduleFiles.Any())
-            {
-                _logger!.LogError("No module data files found in cache directory: {CacheDir}", latestCacheDir);
-                if (verbose > 0)
-                {
-                    Logger.Error("CACHE MISS: No module .json files found");
-                    Logger.Info("ACTION REQUIRED: Run data collection first to generate module cache");
-                }
-                return 1;
+                Logger.Info("UNIFIED TRANSMISSION: Processing complete event.json...");
+                Logger.Info("All module data will be transmitted as a single unified payload");
             }
 
             // Get API service
@@ -1305,169 +1095,32 @@ public class Program
             if (verbose > 0)
             {
                 Logger.Info("API connectivity confirmed");
-                Logger.Info("Starting modular transmission...");
+                Logger.Info("Starting unified payload transmission...");
             }
 
-            // INDIVIDUAL MODULE TRANSMISSION
-            int successfulTransmissions = 0;
-            int failedTransmissions = 0;
-            var transmissionResults = new List<(string moduleId, bool success, string error)>();
-
-            foreach (var moduleFile in moduleFiles)
-            {
-                try
-                {
-                    var moduleId = Path.GetFileNameWithoutExtension(moduleFile);
-                    var moduleJson = await File.ReadAllTextAsync(moduleFile);
-                    
-                    if (verbose > 0)
-                    {
-                        Logger.Info("Transmitting module: {0}...", moduleId);
-                    }
-                    
-                    // Parse as generic JSON data instead of typed objects
-                    using var jsonDoc = JsonDocument.Parse(moduleJson);
-                    var moduleDataElement = jsonDoc.RootElement;
-
-                    if (moduleDataElement.ValueKind != JsonValueKind.Null && moduleDataElement.ValueKind != JsonValueKind.Undefined)
-                    {
-                        // Convert the JSON element to a dictionary for API transmission
-                        var moduleApiData = new List<Dictionary<string, object>>
-                        {
-                            JsonSerializer.Deserialize<Dictionary<string, object>>(moduleJson, new JsonSerializerOptions
-                            {
-                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                                TypeInfoResolver = new DefaultJsonTypeInfoResolver()
-                            }) ?? new Dictionary<string, object>()
-                        };
-
-                        // Create individual module payload
-                        var modulePayload = new Dictionary<string, object>
-                        {
-                            [moduleId] = moduleApiData
-                        };
-
-                        // Create device data request for this specific module
-                        var moduleDataRequest = new DeviceDataRequest
-                        {
-                            Device = unifiedPayload.DeviceId,
-                            SerialNumber = unifiedPayload.Inventory?.SerialNumber ?? Environment.MachineName,
-                            Kind = "Info",
-                            Ts = DateTime.UtcNow.ToString("O"),
-                            Payload = new DeviceDataPayload
-                            {
-                                Device = new Dictionary<string, object>
-                                {
-                                    ["DeviceId"] = unifiedPayload.DeviceId,
-                                    ["SerialNumber"] = unifiedPayload.Inventory?.SerialNumber ?? "",
-                                    ["ComputerName"] = unifiedPayload.Inventory?.DeviceName ?? Environment.MachineName,
-                                    ["Domain"] = "",
-                                    ["Manufacturer"] = unifiedPayload.Hardware?.Manufacturer ?? "",
-                                    ["Model"] = unifiedPayload.Hardware?.Model ?? "",
-                                    ["LastSeen"] = DateTime.UtcNow,
-                                    ["ClientVersion"] = unifiedPayload.ClientVersion,
-                                    ["Status"] = "online"
-                                },
-                                OsQuery = modulePayload, // Individual module data only
-                                CollectionTimestamp = unifiedPayload.CollectedAt.ToString("O"),
-                                ClientVersion = unifiedPayload.ClientVersion,
-                                CollectionType = $"transmit-only-{moduleId}",
-                                ManagedInstallsSystem = "Cimian",
-                                Source = $"runner.exe --transmit-only (module: {moduleId})"
-                            }
-                        };
-
-                        // Send individual module data
-                        var moduleTransmissionResult = await apiService.SendDeviceDataAsync(moduleDataRequest);
-                        
-                        if (moduleTransmissionResult)
-                        {
-                            successfulTransmissions++;
-                            transmissionResults.Add((moduleId, true, ""));
-                            
-                            if (verbose > 0)
-                            {
-                                Logger.Info("✅ Module {0} transmitted successfully", moduleId);
-                            }
-                        }
-                        else
-                        {
-                            failedTransmissions++;
-                            transmissionResults.Add((moduleId, false, "API rejection"));
-                            
-                            if (verbose > 0)
-                            {
-                                Logger.Error("❌ Module {0} transmission failed", moduleId);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        failedTransmissions++;
-                        transmissionResults.Add((moduleId, false, "No valid data"));
-                        
-                        if (verbose > 0)
-                        {
-                            Logger.Warning("⚠️ Module {0} skipped - no valid data", moduleId);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    failedTransmissions++;
-                    transmissionResults.Add((Path.GetFileNameWithoutExtension(moduleFile), false, ex.Message));
-                    
-                    _logger!.LogWarning(ex, "Failed to transmit module from: {ModuleFile}", moduleFile);
-                    if (verbose > 0)
-                    {
-                        Logger.Warning("❌ Module transmission failed: {0}", ex.Message);
-                    }
-                }
-            }
-
-            // Report transmission results
+            // UNIFIED PAYLOAD TRANSMISSION - Send event.json as-is
             if (verbose > 0)
             {
-                Logger.Section("Transmission Summary", "Individual module transmission results");
-                Logger.Info("Successful transmissions: {0}", successfulTransmissions);
-                Logger.Info("Failed transmissions: {0}", failedTransmissions);
-                Logger.Info("Total modules processed: {0}", moduleFiles.Count);
-                
-                if (transmissionResults.Any())
-                {
-                    Console.WriteLine();
-                    Logger.Info("Module Results:");
-                    foreach (var (moduleId, success, error) in transmissionResults)
-                    {
-                        var status = success ? "✅ SUCCESS" : "❌ FAILED";
-                        var details = success ? "" : $" - {error}";
-                        Logger.Info("  {0}: {1}{2}", moduleId, status, details);
-                    }
-                }
+                Logger.Info("Transmitting unified payload from event.json...");
             }
 
-            if (successfulTransmissions > 0)
+            var transmissionResult = await apiService.SendUnifiedPayloadAsync(unifiedPayload);
+            
+            if (transmissionResult)
             {
-                _logger!.LogInformation("Modular transmission completed - {SuccessCount}/{TotalCount} modules transmitted successfully", 
-                    successfulTransmissions, moduleFiles.Count);
-                
                 if (verbose > 0)
                 {
-                    Logger.Info("✅ Modular transmission completed");
-                    Logger.Info("DASHBOARD: Check API dashboard for individual module data updates");
-                    Logger.Info("DATABASE: Each module should now have its own table entries");
-                    Logger.Info("CACHE: Raw module data remains available for future transmissions");
+                    Logger.Info("✅ Unified payload transmitted successfully");
+                    Logger.Info("Device should be visible in dashboard at /device/{0}", unifiedPayload.Inventory?.SerialNumber ?? unifiedPayload.Metadata.DeviceId);
                 }
-                
-                return failedTransmissions > 0 ? 1 : 0; // Return error if any modules failed
+                return 0;
             }
             else
             {
-                _logger!.LogError("All module transmissions failed");
                 if (verbose > 0)
                 {
-                    Logger.Error("TRANSMISSION FAILED: All modules were rejected by the API");
-                    Logger.Info("ACTION REQUIRED: Check API logs and module data validity");
+                    Logger.Error("❌ Unified payload transmission failed");
+                    Logger.Info("Check logs for detailed error information");
                 }
                 return 1;
             }
