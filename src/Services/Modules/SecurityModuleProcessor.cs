@@ -514,5 +514,46 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogWarning(ex, "Failed to get Windows Defender data via PowerShell - falling back to osquery data");
             }
         }
+
+        /// <summary>
+        /// Compute display status fields for all security components
+        /// </summary>
+        private void ComputeStatusDisplays(SecurityData data)
+        {
+            // Antivirus status display
+            if (data.Antivirus.IsEnabled && data.Antivirus.IsUpToDate)
+            {
+                data.Antivirus.StatusDisplay = "Current";
+            }
+            else if (data.Antivirus.IsEnabled && !data.Antivirus.IsUpToDate)
+            {
+                data.Antivirus.StatusDisplay = "Needs Update";
+            }
+            else
+            {
+                data.Antivirus.StatusDisplay = "Inactive";
+            }
+
+            // Firewall status display
+            data.Firewall.StatusDisplay = data.Firewall.IsEnabled ? "Enabled" : "Disabled";
+
+            // Encryption status display
+            data.Encryption.StatusDisplay = data.Encryption.BitLocker.IsEnabled ? "Enabled" : "Disabled";
+            data.Encryption.BitLocker.StatusDisplay = data.Encryption.BitLocker.IsEnabled ? "Enabled" : "Disabled";
+
+            // TPM status display
+            if (data.Tpm.IsPresent && data.Tpm.IsEnabled && data.Tpm.IsActivated)
+            {
+                data.Tpm.StatusDisplay = "Enabled";
+            }
+            else if (data.Tpm.IsPresent)
+            {
+                data.Tpm.StatusDisplay = "Disabled";
+            }
+            else
+            {
+                data.Tpm.StatusDisplay = "Not Present";
+            }
+        }
     }
 }

@@ -1,7 +1,6 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Models.Modules
 {
@@ -28,6 +27,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? LastUpdate { get; set; }
         public DateTime? LastScan { get; set; }
         public string ScanType { get; set; } = string.Empty;
+        
+        // Computed status fields for UI display
+        public string StatusDisplay { get; set; } = string.Empty; // "Current", "Needs Update", "Inactive"
     }
 
     public class FirewallInfo
@@ -35,6 +37,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public bool IsEnabled { get; set; }
         public string Profile { get; set; } = string.Empty; // Domain, Private, Public
         public List<FirewallRule> Rules { get; set; } = new();
+        
+        // Computed status fields for UI display
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled"
     }
 
     public class FirewallRule
@@ -52,6 +57,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public BitLockerInfo BitLocker { get; set; } = new();
         public bool DeviceEncryption { get; set; }
         public List<EncryptedVolume> EncryptedVolumes { get; set; } = new();
+        
+        // Computed status fields for UI display
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled"
     }
 
     public class BitLockerInfo
@@ -60,6 +68,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Status { get; set; } = string.Empty;
         public string RecoveryKeyId { get; set; } = string.Empty;
         public List<string> EncryptedDrives { get; set; } = new();
+        
+        // Computed status fields for UI display
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled"
     }
 
     public class EncryptedVolume
@@ -77,6 +88,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public bool IsActivated { get; set; }
         public string Version { get; set; } = string.Empty;
         public string Manufacturer { get; set; } = string.Empty;
+        
+        // Computed status fields for UI display
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled", "Not Present"
     }
 
     public class SecurityUpdate
