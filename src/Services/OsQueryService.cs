@@ -47,7 +47,14 @@ public class OsQueryService : IOsQueryService
 
             _logger.LogDebug("Executing osquery: {Query}", query);
 
+            // Enable Windows events if the query involves windows_events table
             var arguments = $"--json \"{query}\"";
+            if (query.Contains("windows_events", StringComparison.OrdinalIgnoreCase))
+            {
+                arguments = $"--disable_events=false --enable_windows_events_subscriber --enable_windows_events_publisher --ephemeral --json \"{query}\"";
+                _logger.LogDebug("Enabling Windows events for this query");
+            }
+            
             _logger.LogDebug("osquery command: {FileName} {Arguments}", _osqueryPath, arguments);
 
             var startInfo = new ProcessStartInfo
