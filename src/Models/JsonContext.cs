@@ -69,6 +69,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Modules.InstalledApplication), TypeInfoPropertyName = "ModularInstalledApplication")]
 [JsonSerializable(typeof(Modules.NetworkInterface), TypeInfoPropertyName = "ModularNetworkInterface")]
 [JsonSerializable(typeof(Modules.WifiNetwork), TypeInfoPropertyName = "ModularWifiNetwork")]
+[JsonSerializable(typeof(Modules.ActiveConnectionInfo), TypeInfoPropertyName = "ModularActiveConnectionInfo")]
 
 [JsonSerializable(typeof(Modules.BitLockerInfo), TypeInfoPropertyName = "ModularBitLockerInfo")]
 [JsonSerializable(typeof(List<Modules.InstalledApplication>), TypeInfoPropertyName = "ModularInstalledApplicationList")]

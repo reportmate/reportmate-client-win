@@ -16,15 +16,31 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DnsConfiguration Dns { get; set; } = new();
         public List<NetworkRoute> Routes { get; set; } = new();
         public string PrimaryInterface { get; set; } = string.Empty;
+        public ActiveConnectionInfo ActiveConnection { get; set; } = new();
+    }
+
+    public class ActiveConnectionInfo
+    {
+        public string ConnectionType { get; set; } = string.Empty; // "Wired", "Wireless", "VPN", "None"
+        public string InterfaceName { get; set; } = string.Empty;
+        public string FriendlyName { get; set; } = string.Empty;
+        public string IpAddress { get; set; } = string.Empty;
+        public string Gateway { get; set; } = string.Empty;
+        public string? ActiveWifiSsid { get; set; }
+        public int? WifiSignalStrength { get; set; }
+        public bool IsVpnActive { get; set; }
+        public string VpnName { get; set; } = string.Empty;
     }
 
     public class NetworkInterface
     {
         public string Name { get; set; } = string.Empty;
+        public string FriendlyName { get; set; } = string.Empty;
         public string Type { get; set; } = string.Empty; // Ethernet, WiFi, etc.
         public string MacAddress { get; set; } = string.Empty;
         public List<string> IpAddresses { get; set; } = new();
         public string Status { get; set; } = string.Empty;
+        public bool IsActive { get; set; }
         public long BytesSent { get; set; }
         public long BytesReceived { get; set; }
         public int Mtu { get; set; }

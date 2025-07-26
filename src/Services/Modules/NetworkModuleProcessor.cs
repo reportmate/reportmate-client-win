@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Management;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -40,33 +41,82 @@ namespace ReportMate.WindowsClient.Services.Modules
                 CollectedAt = DateTime.UtcNow
             };
 
-            // Process essential network interfaces and IP addresses
-            ProcessNetworkInterfacesAsync(data, osqueryResults);
+            // Get interface name mapping first
+            var interfaceNames = GetInterfaceNamesAsync(osqueryResults);
             
-            // Process essential routing information
+            // Process network interfaces with enhanced information
+            ProcessNetworkInterfacesAsync(data, osqueryResults, interfaceNames);
+            
+            // Process routing information FIRST so it's available for active connection
             ProcessRoutingInfo(data, osqueryResults);
             
-            // Get essential DNS and WiFi info
+            // Determine active connection AFTER routes are processed
+            await DetermineActiveConnectionAsync(data);
+            
+            // Get DNS and WiFi info with active connection context
             CollectEssentialNetworkInfoAsync(data);
             
             // Collect VPN information
             await CollectVpnInformationAsync(data, osqueryResults);
 
-            // Determine primary interface
-            DeterminePrimaryInterface(data);
+            // Set primary interface based on active connection
+            if (!string.IsNullOrEmpty(data.ActiveConnection.InterfaceName))
+            {
+                data.PrimaryInterface = data.ActiveConnection.InterfaceName;
+            }
 
-            _logger.LogInformation("Network module processed - {InterfaceCount} interfaces, {RouteCount} routes, {VpnCount} VPN connections", 
-                data.Interfaces.Count, data.Routes.Count, data.VpnConnections.Count);
+            _logger.LogInformation("Network module processed - {InterfaceCount} interfaces, Active: {ActiveType} ({ActiveInterface})", 
+                data.Interfaces.Count, data.ActiveConnection.ConnectionType, data.ActiveConnection.FriendlyName);
 
             return data;
         }
 
         /// <summary>
-        /// Process network interfaces with essential data only
+        /// Get friendly interface names from registry
         /// </summary>
-        private void ProcessNetworkInterfacesAsync(NetworkData data, Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        private Dictionary<string, string> GetInterfaceNamesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            var names = new Dictionary<string, string>();
+            
+            if (osqueryResults.TryGetValue("interface_names", out var nameResults))
+            {
+                foreach (var result in nameResults)
+                {
+                    var path = GetStringValue(result, "interface_path");
+                    var friendlyName = GetStringValue(result, "friendly_name");
+                    
+                    // Extract GUID from registry path
+                    var guidMatch = Regex.Match(path, @"{([0-9A-F\-]+)}");
+                    if (guidMatch.Success && !string.IsNullOrEmpty(friendlyName))
+                    {
+                        names[guidMatch.Groups[1].Value] = friendlyName;
+                    }
+                }
+            }
+            
+            return names;
+        }
+
+        /// <summary>
+        /// Process network interfaces with enhanced active connection detection
+        /// </summary>
+        private void ProcessNetworkInterfacesAsync(NetworkData data, Dictionary<string, List<Dictionary<string, object>>> osqueryResults, Dictionary<string, string> interfaceNames)
         {
             var interfaceMap = new Dictionary<string, NetworkInterface>();
+            var activeInterfaces = new HashSet<string>();
+            
+            // First, identify truly active interfaces (those with valid IP addresses)
+            if (osqueryResults.TryGetValue("active_connections", out var activeConnections))
+            {
+                foreach (var conn in activeConnections)
+                {
+                    var interfaceName = GetStringValue(conn, "interface");
+                    if (!string.IsNullOrEmpty(interfaceName))
+                    {
+                        activeInterfaces.Add(interfaceName);
+                    }
+                }
+            }
             
             // Process interface details
             if (osqueryResults.TryGetValue("interface_details", out var interfaces))
@@ -75,12 +125,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                 {
                     var interfaceName = GetStringValue(iface, "interface");
                     var rawType = GetStringValue(iface, "type");
+                    var macAddress = GetStringValue(iface, "mac");
+                    var isEnabled = GetStringValue(iface, "enabled") == "1";
+                    var isActive = activeInterfaces.Contains(interfaceName);
+                    
                     var networkInterface = new NetworkInterface
                     {
                         Name = interfaceName,
+                        FriendlyName = GetFriendlyName(interfaceName, macAddress, interfaceNames),
                         Type = MapInterfaceType(rawType),
-                        MacAddress = GetStringValue(iface, "mac"),
-                        Status = GetStringValue(iface, "enabled") == "1" ? "Up" : "Down"
+                        MacAddress = macAddress,
+                        Status = isActive ? "Up" : (isEnabled ? "Enabled" : "Down"),
+                        IsActive = isActive
                     };
 
                     interfaceMap[interfaceName] = networkInterface;
@@ -102,17 +158,187 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
             }
+        }
 
-            // Determine primary interface
-            var primaryInterface = data.Interfaces
-                .Where(i => i.Status == "Up" && i.IpAddresses.Any())
-                .OrderByDescending(i => i.IpAddresses.Count)
+        /// <summary>
+        /// Determine the active connection type and details
+        /// </summary>
+        private async Task DetermineActiveConnectionAsync(NetworkData data)
+        {
+            var activeInterface = data.Interfaces
+                .Where(i => i.IsActive && i.IpAddresses.Any(ip => !ip.StartsWith("fe80::")))
+                .OrderBy(i => i.Type == "Wireless" ? 1 : 0) // Prefer Ethernet over Wireless if both active
                 .FirstOrDefault();
-            
-            if (primaryInterface != null)
+
+            if (activeInterface == null)
             {
-                data.PrimaryInterface = primaryInterface.Name;
+                data.ActiveConnection.ConnectionType = "None";
+                return;
             }
+
+            data.ActiveConnection.InterfaceName = activeInterface.Name;
+            data.ActiveConnection.FriendlyName = activeInterface.FriendlyName;
+            
+            // Prefer IPv4 over IPv6 for display
+            var ipv4Address = activeInterface.IpAddresses
+                .FirstOrDefault(ip => !ip.StartsWith("fe80::") && !ip.StartsWith("127.") && !ip.Contains(":"));
+            var anyValidIp = activeInterface.IpAddresses
+                .FirstOrDefault(ip => !ip.StartsWith("fe80::") && !ip.StartsWith("127."));
+                
+            data.ActiveConnection.IpAddress = ipv4Address ?? anyValidIp ?? "";
+
+            // Determine connection type based on interface type
+            if (activeInterface.Type.Contains("Wireless") || activeInterface.Type == "WiFi")
+            {
+                data.ActiveConnection.ConnectionType = "Wireless";
+                await GetActiveWifiDetailsAsync(data);
+            }
+            else if (activeInterface.Type == "Ethernet")
+            {
+                data.ActiveConnection.ConnectionType = "Wired";
+            }
+            else
+            {
+                data.ActiveConnection.ConnectionType = activeInterface.Type;
+            }
+
+            // Get gateway for active interface
+            var defaultRoute = data.Routes?.FirstOrDefault(r => r.Destination == "0.0.0.0");
+            if (defaultRoute != null)
+            {
+                data.ActiveConnection.Gateway = defaultRoute.Gateway;
+            }
+        }
+
+        /// <summary>
+        /// Get active WiFi connection details
+        /// </summary>
+        private async Task GetActiveWifiDetailsAsync(NetworkData data)
+        {
+            try
+            {
+                _logger.LogDebug("Attempting to get active WiFi details for interface {Interface}", data.ActiveConnection.InterfaceName);
+                
+                // First try netsh command
+                var interfaceOutput = ExecuteCommand("netsh", "wlan show interface");
+                
+                if (!string.IsNullOrEmpty(interfaceOutput) && !interfaceOutput.Contains("Location services") && !interfaceOutput.Contains("requires elevation"))
+                {
+                    var ssidMatch = Regex.Match(interfaceOutput, @"SSID\s*:\s*(.+)");
+                    var signalMatch = Regex.Match(interfaceOutput, @"Signal\s*:\s*(\d+)%");
+                    
+                    if (ssidMatch.Success)
+                    {
+                        data.ActiveConnection.ActiveWifiSsid = ssidMatch.Groups[1].Value.Trim();
+                        _logger.LogDebug("Found active WiFi SSID: {SSID}", data.ActiveConnection.ActiveWifiSsid);
+                        
+                        if (signalMatch.Success)
+                        {
+                            data.ActiveConnection.WifiSignalStrength = int.Parse(signalMatch.Groups[1].Value);
+                            _logger.LogDebug("Found WiFi signal strength: {Signal}%", data.ActiveConnection.WifiSignalStrength);
+                        }
+                        return;
+                    }
+                }
+                
+                // If netsh fails, try PowerShell alternative for WiFi connection info
+                var powershellCommand = @"
+try {
+    $adapter = Get-NetAdapter | Where-Object { $_.InterfaceDescription -like '*wireless*' -or $_.InterfaceDescription -like '*wifi*' -or $_.InterfaceDescription -like '*802.11*' } | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1
+    if ($adapter) {
+        $profile = netsh wlan show profiles | Select-String 'All User Profile' | ForEach-Object { ($_ -split ':')[1].Trim() } | ForEach-Object {
+            $details = netsh wlan show profile name=""$_"" key=clear 2>$null
+            if ($details -match 'Connection mode\s*:\s*Connect automatically' -and $details -match 'SSID name\s*:\s*""(.+)""') {
+                [PSCustomObject]@{
+                    SSID = $matches[1]
+                    IsConnected = $true
+                }
+            }
+        } | Where-Object { $_.IsConnected } | Select-Object -First 1
+        
+        if ($profile) {
+            [PSCustomObject]@{
+                SSID = $profile.SSID
+                SignalStrength = 50
+            } | ConvertTo-Json
+        } else {
+            @{} | ConvertTo-Json
+        }
+    } else {
+        @{} | ConvertTo-Json
+    }
+} catch {
+    @{} | ConvertTo-Json
+}";
+
+                var powershellOutput = await _wmiHelperService.ExecutePowerShellCommandAsync(powershellCommand);
+                if (!string.IsNullOrEmpty(powershellOutput) && powershellOutput.Trim() != "{}")
+                {
+                    var wifiInfo = System.Text.Json.JsonSerializer.Deserialize(
+                        powershellOutput, 
+                        ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.DictionaryStringObject);
+                        
+                    if (wifiInfo != null)
+                    {
+                        var ssid = GetStringValue(wifiInfo, "SSID");
+                        if (!string.IsNullOrEmpty(ssid))
+                        {
+                            data.ActiveConnection.ActiveWifiSsid = ssid;
+                            data.ActiveConnection.WifiSignalStrength = GetIntValue(wifiInfo, "SignalStrength");
+                            _logger.LogDebug("Found active WiFi SSID via PowerShell: {SSID}", ssid);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to get active WiFi details");
+            }
+        }
+
+        /// <summary>
+        /// Get friendly name for interface, with fallbacks
+        /// </summary>
+        private string GetFriendlyName(string interfaceName, string macAddress, Dictionary<string, string> interfaceNames)
+        {
+            // Try registry lookup first
+            foreach (var kvp in interfaceNames)
+            {
+                if (interfaceName.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase))
+                {
+                    return kvp.Value;
+                }
+            }
+            
+            // Try WMI lookup as fallback
+            try
+            {
+                using var searcher = new System.Management.ManagementObjectSearcher(
+                    "SELECT Name, NetConnectionID FROM Win32_NetworkAdapter WHERE MACAddress = '" + macAddress + "'");
+                
+                var adapter = searcher.Get().Cast<System.Management.ManagementObject>().FirstOrDefault();
+                if (adapter != null)
+                {
+                    var connectionId = adapter["NetConnectionID"]?.ToString();
+                    if (!string.IsNullOrEmpty(connectionId))
+                    {
+                        return connectionId;
+                    }
+                    
+                    var name = adapter["Name"]?.ToString();
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        return name;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "WMI lookup failed for interface {Interface}", interfaceName);
+            }
+            
+            // Fallback to interface name
+            return interfaceName;
         }
 
         /// <summary>
@@ -177,42 +403,22 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogDebug("Collecting WiFi network information");
 
-                // First, try to get current WiFi connection with full details
-                var interfaceOutput = ExecuteCommand("netsh", "wlan show interface");
-                string? currentSsid = null;
+                var currentSsid = data.ActiveConnection.ActiveWifiSsid;
                 
-                if (!string.IsNullOrEmpty(interfaceOutput) && !interfaceOutput.Contains("Location services"))
+                // If we have an active WiFi connection, add it first
+                if (!string.IsNullOrEmpty(currentSsid))
                 {
-                    var currentSsidMatch = Regex.Match(interfaceOutput, @"SSID\s*:\s*(.+)");
-                    var signalMatch = Regex.Match(interfaceOutput, @"Signal\s*:\s*(\d+)%");
-                    var securityMatch = Regex.Match(interfaceOutput, @"Authentication\s*:\s*(.+)");
-                    var channelMatch = Regex.Match(interfaceOutput, @"Channel\s*:\s*(\d+)");
-                    
-                    if (currentSsidMatch.Success)
+                    data.WifiNetworks.Add(new WifiNetwork
                     {
-                        currentSsid = currentSsidMatch.Groups[1].Value.Trim();
-                        var signalStrength = signalMatch.Success ? int.Parse(signalMatch.Groups[1].Value) : 0;
-                        var security = securityMatch.Success ? securityMatch.Groups[1].Value.Trim() : "Unknown";
-                        var channel = channelMatch.Success ? channelMatch.Groups[1].Value.Trim() : "Unknown";
-                        
-                        if (!string.IsNullOrEmpty(currentSsid))
-                        {
-                            // Process Unicode characters in SSID
-                            var normalizedSsid = NormalizeUnicodeString(currentSsid) ?? currentSsid;
-                            
-                            data.WifiNetworks.Add(new WifiNetwork
-                            {
-                                Ssid = normalizedSsid,
-                                Security = security,
-                                IsConnected = true,
-                                Channel = channel,
-                                SignalStrength = signalStrength
-                            });
-                        }
-                    }
+                        Ssid = currentSsid,
+                        Security = "Active Connection",
+                        IsConnected = true,
+                        SignalStrength = data.ActiveConnection.WifiSignalStrength ?? 0,
+                        Channel = "Unknown"
+                    });
                 }
 
-                // Get WiFi profiles - these are always available
+                // Get WiFi profiles - these are saved networks
                 var profilesOutput = ExecuteCommand("netsh", "wlan show profiles");
                 if (!string.IsNullOrEmpty(profilesOutput))
                 {
@@ -226,8 +432,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                             var normalizedProfileName = NormalizeUnicodeString(profileName) ?? profileName;
                             
                             // Skip if we already added this network as currently connected
-                            if (currentSsid != null && (normalizedProfileName.Equals(currentSsid, StringComparison.OrdinalIgnoreCase) || 
-                                normalizedProfileName.Equals(NormalizeUnicodeString(currentSsid), StringComparison.OrdinalIgnoreCase)))
+                            if (!string.IsNullOrEmpty(currentSsid) && 
+                                normalizedProfileName.Equals(currentSsid, StringComparison.OrdinalIgnoreCase))
                             {
                                 continue;
                             }
@@ -630,7 +836,7 @@ try {
             return typeCode switch
             {
                 "6" => "Ethernet",
-                "71" => "IEEE 802.11 Wireless",
+                "71" => "Wireless",
                 "24" => "Loopback",
                 "23" => "PPP",
                 "131" => "Tunnel",
@@ -704,51 +910,6 @@ try {
             if (iface.Contains("express")) return "ExpressVPN";
 
             return "Unknown";
-        }
-
-        /// <summary>
-        /// Determine primary interface based on default route and activity
-        /// </summary>
-        private void DeterminePrimaryInterface(NetworkData data)
-        {
-            try
-            {
-                // Find primary interface using default route
-                var defaultRouteInterface = data.Routes
-                    .Where(r => r.Destination == "0.0.0.0")
-                    .Select(r => r.Interface)
-                    .FirstOrDefault();
-
-                if (!string.IsNullOrEmpty(defaultRouteInterface))
-                {
-                    var primaryByRoute = data.Interfaces.FirstOrDefault(i => 
-                        i.IpAddresses.Contains(defaultRouteInterface) || 
-                        i.Name == defaultRouteInterface);
-                    
-                    if (primaryByRoute != null)
-                    {
-                        data.PrimaryInterface = primaryByRoute.Name;
-                        _logger.LogDebug("Determined primary interface by default route: {Interface}", data.PrimaryInterface);
-                        return;
-                    }
-                }
-
-                // Fallback: Interface with most IP addresses
-                var primaryByIPs = data.Interfaces
-                    .Where(i => i.Status.Equals("Up", StringComparison.OrdinalIgnoreCase) && i.IpAddresses.Any())
-                    .OrderByDescending(i => i.IpAddresses.Count)
-                    .FirstOrDefault();
-
-                if (primaryByIPs != null)
-                {
-                    data.PrimaryInterface = primaryByIPs.Name;
-                    _logger.LogDebug("Determined primary interface by IP count: {Interface}", data.PrimaryInterface);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to determine primary interface");
-            }
         }
 
         /// <summary>
