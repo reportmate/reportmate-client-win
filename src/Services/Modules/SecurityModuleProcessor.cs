@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -59,7 +60,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             ProcessSecurityUpdates(osqueryResults, data);
 
             // Process security events
-            ProcessSecurityEvents(osqueryResults, data);
+            await ProcessSecurityEvents(osqueryResults, data);
 
             _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}", 
                 data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent);
@@ -336,12 +337,12 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
         }
 
-        private void ProcessSecurityEvents(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
+        private async Task ProcessSecurityEvents(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
         {
-            // Process recent security events
-            if (osqueryResults.TryGetValue("security_events", out var securityEvents))
+            // Process recent security events from osquery first
+            if (osqueryResults.TryGetValue("security_events", out var securityEvents) && securityEvents.Count > 0)
             {
-                _logger.LogDebug("Processing {Count} security events", securityEvents.Count);
+                _logger.LogDebug("Processing {Count} security events from osquery", securityEvents.Count);
                 
                 foreach (var eventEntry in securityEvents)
                 {
@@ -366,6 +367,158 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     data.SecurityEvents.Add(securityEvent);
                 }
+            }
+            
+            // Always try PowerShell fallback if we don't have security events yet
+            if (data.SecurityEvents.Count == 0)
+            {
+                _logger.LogDebug("No osquery security events found ({Count}), attempting PowerShell collection", 
+                    securityEvents?.Count ?? 0);
+                await ProcessSecurityEventsPowerShell(data);
+            }
+        }
+
+        /// <summary>
+        /// Collect security events using PowerShell Get-WinEvent as fallback when osquery events are disabled
+        /// </summary>
+        private async Task ProcessSecurityEventsPowerShell(SecurityData data)
+        {
+            try
+            {
+                _logger.LogInformation("Attempting to collect security events via PowerShell Get-WinEvent");
+
+                // PowerShell command to get recent security events - simplified to just the most common ones
+                var script = @"
+                    try {
+                        # Try Security log first (may require elevated privileges)
+                        $securityEvents = @()
+                        try {
+                            $securityEvents = Get-WinEvent -FilterHashtable @{
+                                LogName='Security'
+                                ID=4624,4625,4634,4648
+                                StartTime=(Get-Date).AddHours(-24)
+                            } -MaxEvents 10 -ErrorAction SilentlyContinue
+                        } catch {
+                            # Security log not accessible
+                        }
+
+                        # Get system events (service starts/stops, errors)
+                        $systemEvents = @()
+                        try {
+                            $systemEvents = Get-WinEvent -FilterHashtable @{
+                                LogName='System'
+                                ID=7034,7035,7036,7040
+                                StartTime=(Get-Date).AddHours(-24)
+                            } -MaxEvents 15 -ErrorAction SilentlyContinue
+                        } catch {
+                            # System log issues
+                        }
+
+                        # Get application security-related events
+                        $appEvents = @()
+                        try {
+                            $appEvents = Get-WinEvent -FilterHashtable @{
+                                LogName='Application'
+                                ID=1000,1001,1002
+                                StartTime=(Get-Date).AddHours(-24)
+                            } -MaxEvents 5 -ErrorAction SilentlyContinue
+                        } catch {
+                            # Application log issues
+                        }
+
+                        # Combine all events
+                        $allEvents = @()
+                        $allEvents += $securityEvents
+                        $allEvents += $systemEvents
+                        $allEvents += $appEvents
+                        
+                        if ($allEvents -and $allEvents.Count -gt 0) {
+                            $allEvents | Sort-Object TimeCreated -Descending | Select-Object -First 20 | ForEach-Object {
+                                [PSCustomObject]@{
+                                    EventId = $_.Id
+                                    Source = $_.ProviderName
+                                    Level = $_.LevelDisplayName
+                                    TimeCreated = $_.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+                                    Message = if ($_.Message.Length -gt 300) { $_.Message.Substring(0, 300) + '...' } else { $_.Message }
+                                    LogName = $_.LogName
+                                }
+                            } | ConvertTo-Json -Depth 3
+                        } else {
+                            '[]'
+                        }
+                    } catch {
+                        Write-Output 'Error: ' + $_.Exception.Message
+                        '[]'
+                    }";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                _logger.LogInformation("PowerShell security events result length: {Length}, First 100 chars: {Preview}", 
+                    result?.Length ?? 0, result?.Substring(0, Math.Min(100, result?.Length ?? 0)));
+                
+                if (!string.IsNullOrEmpty(result) && result.Trim() != "[]" && !result.Contains("Attempted to perform an unauthorized operation"))
+                {
+                    try 
+                    {
+                        // Use JsonDocument which is AOT-compatible
+                        using var document = JsonDocument.Parse(result);
+                        var root = document.RootElement;
+                        
+                        if (root.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var eventJson in root.EnumerateArray())
+                            {
+                                try
+                                {
+                                    var securityEvent = new SecurityEvent
+                                    {
+                                        EventId = eventJson.TryGetProperty("EventId", out var eventIdProp) ? eventIdProp.GetInt32() : 0,
+                                        Source = eventJson.TryGetProperty("Source", out var sourceProp) ? sourceProp.GetString() ?? "Windows" : "Windows",
+                                        Level = eventJson.TryGetProperty("Level", out var levelProp) ? levelProp.GetString() ?? "Information" : "Information",
+                                        Message = eventJson.TryGetProperty("Message", out var messageProp) ? messageProp.GetString() ?? "" : ""
+                                    };
+
+                                    if (eventJson.TryGetProperty("TimeCreated", out var timeProp))
+                                    {
+                                        var timeStr = timeProp.GetString();
+                                        if (!string.IsNullOrEmpty(timeStr) && DateTime.TryParse(timeStr, out var timestamp))
+                                        {
+                                            securityEvent.Timestamp = timestamp;
+                                        }
+                                        else
+                                        {
+                                            securityEvent.Timestamp = DateTime.UtcNow;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        securityEvent.Timestamp = DateTime.UtcNow;
+                                    }
+
+                                    data.SecurityEvents.Add(securityEvent);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "Failed to parse individual security event");
+                                }
+                            }
+                        }
+                        
+                        _logger.LogInformation("Successfully collected {Count} security events via PowerShell", data.SecurityEvents.Count);
+                    }
+                    catch (Exception parseEx)
+                    {
+                        _logger.LogError(parseEx, "Failed to parse PowerShell security events result");
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("No security events found via PowerShell or insufficient permissions. Result: {Result}", 
+                        result?.Substring(0, Math.Min(200, result?.Length ?? 0)));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to collect security events via PowerShell");
             }
         }
 
