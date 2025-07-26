@@ -5,6 +5,7 @@ out/
 TestResults/
 
 # Build results
+nupkg/payload/runner.exe
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
