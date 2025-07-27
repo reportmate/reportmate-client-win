@@ -77,6 +77,86 @@
       "query": "SELECT eventid, source, level, datetime, data FROM windows_events WHERE eventid IN (4624, 4625, 4648, 4719, 4720, 4722, 4723, 4724, 4725, 4726, 4727, 4728, 4729, 4730, 4731, 4732, 4733, 4734, 4735, 4737, 4738, 4739, 4740, 4741, 4742, 4743, 4756, 4757, 4758, 4764, 4765, 4766, 4767, 4768, 4769, 4770, 4771, 4772, 4776, 4777, 4778, 4779, 4781, 4793) AND datetime > datetime('now', '-24 hours');",
       "interval": 1800,
       "description": "Recent security events from Windows Event Log"
+    },
+    "windows_hello_type_detection": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\%') OR (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\PassportForWork\\%') OR (path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%') OR (path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%') OR (path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%') OR (path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%');",
+      "interval": 3600,
+      "description": "Detect Windows Hello Consumer vs Business configuration"
+    },
+    "windows_hello_business_detection": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\%') OR (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\PassportForWork\\%') OR (path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%') OR (path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%') OR (path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\NGCAccess\\%') OR (path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\NGCAccess\\%');",
+      "interval": 3600,
+      "description": "Specific detection for Windows Hello for Business configuration and NGC access"
+    },
+    "windows_hello_consumer_detection": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE (path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%') OR (path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%');",
+      "interval": 3600,
+      "description": "Specific detection for Windows Hello Consumer configuration"
+    },
+    "windows_hello_consumer_pin": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%' OR path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%';",
+      "interval": 3600,
+      "description": "Windows Hello Consumer PIN configuration"
+    },
+    "windows_hello_business_pin": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%' OR path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%' OR path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\NGCAccess\\%';",
+      "interval": 3600,
+      "description": "Windows Hello for Business PIN and NGC configuration"
+    },
+    "windows_hello_group_policies": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\System\\%' AND (name LIKE '%AllowDomainPINLogon%' OR name LIKE '%BlockDomainPINLogon%' OR name LIKE '%EnableBioLogon%' OR name LIKE '%DisableBioLogon%')) OR (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\%' AND (name LIKE '%PIN%' OR name LIKE '%Hello%' OR name LIKE '%Biometric%')) OR (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceLock\\%' AND (name LIKE '%PIN%' OR name LIKE '%Biometric%')) OR (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\System\\%' AND (name LIKE '%PIN%' OR name LIKE '%Biometric%'));",
+      "interval": 3600,
+      "description": "Windows Hello Group Policy settings including System and DeviceLock policies"
+    },
+    "windows_hello_devicelock_policies": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\DeviceLock\\%' AND (name LIKE '%PIN%' OR name LIKE '%Biometric%' OR name LIKE '%MinPINLength%' OR name LIKE '%MaxPINLength%' OR name LIKE '%PINComplexity%' OR name LIKE '%RequireComplexPIN%' OR name LIKE '%AllowDomainPINLogon%' OR name LIKE '%EnableBioLogon%');",
+      "interval": 3600,
+      "description": "Windows Hello DeviceLock policy settings for comprehensive policy coverage"
+    },
+    "windows_hello_passport_policies": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\PassportForWork\\%';",
+      "interval": 3600,
+      "description": "Windows Hello for Business policy settings"
+    },
+    "windows_hello_pin_state": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE (path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%' AND name LIKE '%PIN%') OR (path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%' AND name LIKE '%PIN%') OR (path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Hello\\Config\\%' AND name LIKE '%PIN%') OR (path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%' AND name LIKE '%PIN%');",
+      "interval": 3600,
+      "description": "Windows Hello PIN state detection from user registry"
+    },
+    "biometric_service_status": {
+      "query": "SELECT name, status, start_type FROM services WHERE name = 'WbioSrvc';",
+      "interval": 3600,
+      "description": "Windows Biometric Service status"
+    },
+    "ngc_key_storage": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Cryptography\\Protect\\Providers\\df9d8cd0-1501-11d1-8c7a-00c04fc297eb\\%' OR path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\SCEP\\%';",
+      "interval": 3600,
+      "description": "Next Generation Credentials (NGC) key storage configuration"
+    },
+    "credential_guard_config": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\LSA\\%' AND (name LIKE '%LsaCfgFlags%' OR name LIKE '%RunAsPPL%' OR name LIKE '%RequireDriver%');",
+      "interval": 3600,
+      "description": "Windows Credential Guard configuration"
+    },
+    "windows_hello_events": {
+      "query": "SELECT eventid, source, level, datetime, data FROM windows_events WHERE (source = 'Microsoft-Windows-HelloForBusiness' OR source = 'Microsoft-Windows-Biometrics' OR source = 'Microsoft-Windows-WebAuthN' OR (source = 'Microsoft-Windows-Security-Auditing' AND eventid IN (4648, 4776, 4778, 4779))) AND datetime > datetime('now', '-24 hours') ORDER BY datetime DESC LIMIT 20;",
+      "interval": 1800,
+      "description": "Recent Windows Hello authentication and usage events"
+    },
+    "hello_authentication_events": {
+      "query": "SELECT eventid, datetime(time, 'unixepoch') as timestamp, source, level, data FROM windows_events WHERE source = 'Microsoft-Windows-HelloForBusiness' AND eventid IN (5205, 5702, 5706, 5707, 5708, 1, 2, 3, 4, 5, 50, 51, 52, 53, 54) ORDER BY time DESC LIMIT 10;",
+      "interval": 1800,
+      "description": "Windows Hello for Business authentication events including PIN usage and enrollment"
+    },
+    "windows_hello_for_business_config": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\PassportForWork\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%' OR path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\HelloForBusiness\\%' OR path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\PassportForWork\\%';",
+      "interval": 3600,
+      "description": "Windows Hello for Business configuration and policies"
+    },
+    "webauthn_config": {
+      "query": "SELECT path, name, COALESCE(data, '') as value FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\WebAuthN\\%' OR path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\WebAuthN\\%';",
+      "interval": 3600,
+      "description": "WebAuthN configuration settings"
     }
   }
 }
