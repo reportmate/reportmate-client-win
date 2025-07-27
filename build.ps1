@@ -1132,15 +1132,20 @@ if ($Install) {
             $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
             
             if (-not $isAdmin) {
-                Write-Warning "Installation requires administrator privileges. Attempting to elevate..."
+                Write-Warning "Installation requires administrator privileges. Using native Windows sudo..."
                 
-                # Construct the command to run with elevation
+                # Use native Windows sudo (available in Windows 11 and modern Windows 10)
                 $installCmd = "choco install `"$nupkgPath`" --source=. --force --yes"
                 
-                # Start elevated process
-                Start-Process powershell -ArgumentList "-Command", $installCmd -Verb RunAs -Wait
+                # Execute with native sudo
+                sudo powershell -Command $installCmd
                 
-                Write-Success "Installation command executed with elevation"
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "Installation command executed with native sudo"
+                } else {
+                    Write-Error "Installation failed with exit code: $LASTEXITCODE"
+                    throw "Chocolatey installation failed"
+                }
             } else {
                 # Already running as admin, install directly
                 Write-Verbose "Installing with chocolatey: $nupkgPath"
