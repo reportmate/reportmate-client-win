@@ -56,6 +56,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process TPM information
             ProcessTpmInfo(osqueryResults, data);
 
+            // Process Windows Hello information
+            await ProcessWindowsHelloInfo(osqueryResults, data);
+
             // Process security updates
             ProcessSecurityUpdates(osqueryResults, data);
 
@@ -296,6 +299,557 @@ namespace ReportMate.WindowsClient.Services.Modules
                     };
                 }
             }
+        }
+
+        private async Task ProcessWindowsHelloInfo(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
+        {
+            _logger.LogDebug("Processing Windows Hello information");
+            
+            var helloInfo = data.WindowsHello;
+            
+            // Process Windows Hello events first to get accurate PIN/biometric status
+            await ProcessWindowsHelloEvents(osqueryResults, helloInfo);
+            
+            // Determine type AFTER processing events - prioritize actual events over registry detection
+            var helloType = DetermineWindowsHelloTypeFromEvents(helloInfo, osqueryResults);
+            _logger.LogInformation("Detected Windows Hello type: {HelloType}", helloType);
+            
+            // Process credential providers based on events and registry data
+            ProcessCredentialProviders(osqueryResults, helloInfo, helloType);
+            
+            // Process biometric service
+            ProcessBiometricService(osqueryResults, helloInfo);
+            
+            // Process policies (different queries based on type)
+            ProcessWindowsHelloPolicies(osqueryResults, helloInfo, helloType);
+            
+            // Set overall status based on what we found
+            SetWindowsHelloOverallStatus(helloInfo, helloType);
+            
+            _logger.LogInformation("Windows Hello processed - Type: {Type}, Status: {Status}, PIN: {Pin}, Face: {Face}, Fingerprint: {Fingerprint}", 
+                helloType,
+                helloInfo.StatusDisplay,
+                helloInfo.CredentialProviders.PinEnabled,
+                helloInfo.CredentialProviders.FaceRecognitionEnabled,
+                helloInfo.CredentialProviders.FingerprintEnabled);
+        }
+
+        private string DetermineWindowsHelloTypeFromEvents(WindowsHelloInfo helloInfo, Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            // First check the already processed events (most reliable)
+            if (helloInfo.HelloEvents?.Any() == true)
+            {
+                foreach (var helloEvent in helloInfo.HelloEvents)
+                {
+                    if (helloEvent.Source.Contains("HelloForBusiness", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogDebug("Found Hello for Business in processed events, assuming Business type");
+                        return "Business";
+                    }
+                }
+            }
+            
+            // Fall back to the original registry-based detection
+            return DetermineWindowsHelloType(osqueryResults);
+        }
+
+        private string DetermineWindowsHelloType(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            // First check events to determine type (this is very reliable)
+            if (osqueryResults.TryGetValue("windows_hello_events", out var events))
+            {
+                foreach (var eventEntry in events)
+                {
+                    var source = GetStringValue(eventEntry, "source");
+                    if (source.Contains("HelloForBusiness", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogDebug("Found Hello for Business events, assuming Business type");
+                        return "Business";
+                    }
+                }
+            }
+            
+            // Additional fallback: check hello_authentication_events for business events
+            if (osqueryResults.TryGetValue("hello_authentication_events", out var helloEvents))
+            {
+                foreach (var eventEntry in helloEvents)
+                {
+                    var source = GetStringValue(eventEntry, "source");
+                    if (source.Contains("HelloForBusiness", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogDebug("Found Hello for Business authentication events, assuming Business type");
+                        return "Business";
+                    }
+                }
+            }
+            
+            // Check if we have explicit Windows Hello for Business registry entries
+            if (osqueryResults.TryGetValue("windows_hello_business_detection", out var businessDetection) && businessDetection.Any())
+            {
+                _logger.LogDebug("Found Windows Hello for Business detection data with {Count} entries", businessDetection.Count);
+                return "Business";
+            }
+            
+            // Check for Windows Hello for Business first (enterprise) in the type detection
+            if (osqueryResults.TryGetValue("windows_hello_type_detection", out var typeDetection))
+            {
+                foreach (var entry in typeDetection)
+                {
+                    var path = GetStringValue(entry, "path");
+                    var name = GetStringValue(entry, "name");
+                    var value = GetStringValue(entry, "value");
+                    
+                    // Check for Hello for Business policies
+                    if (path.Contains("PassportForWork", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogDebug("Found Windows Hello for Business policy in path: {Path}", path);
+                        return "Business";
+                    }
+                    
+                    // Check for Hello for Business user configuration or NGC access
+                    if (path.Contains("HelloForBusiness", StringComparison.OrdinalIgnoreCase) || 
+                        path.Contains("NGCAccess", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogDebug("Found Windows Hello for Business user configuration in path: {Path}", path);
+                        return "Business";
+                    }
+                }
+                
+                // If we found consumer Hello configuration but no business
+                if (typeDetection.Any(entry => GetStringValue(entry, "path").Contains("Hello\\Config", StringComparison.OrdinalIgnoreCase)))
+                {
+                    _logger.LogDebug("Found Windows Hello consumer configuration");
+                    return "Consumer";
+                }
+            }
+            
+            _logger.LogDebug("Could not determine Windows Hello type, defaulting to Consumer");
+            return "Consumer";
+        }
+
+        private async Task ProcessWindowsHelloEvents(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, WindowsHelloInfo helloInfo)
+        {
+            // Process Hello for Business authentication events
+            if (osqueryResults.TryGetValue("hello_authentication_events", out var helloEvents))
+            {
+                _logger.LogDebug("Processing {Count} Windows Hello authentication events", helloEvents.Count);
+                
+                foreach (var eventEntry in helloEvents)
+                {
+                    var helloEvent = new WindowsHelloEvent
+                    {
+                        EventId = GetIntValue(eventEntry, "eventid"),
+                        Source = GetStringValue(eventEntry, "source"),
+                        Level = GetStringValue(eventEntry, "level"),
+                        Description = GetStringValue(eventEntry, "message")
+                    };
+
+                    // Parse timestamp
+                    var timestampStr = GetStringValue(eventEntry, "timestamp");
+                    if (!string.IsNullOrEmpty(timestampStr) && DateTime.TryParse(timestampStr, out var eventTime))
+                    {
+                        helloEvent.Timestamp = eventTime;
+                    }
+                    else
+                    {
+                        helloEvent.Timestamp = DateTime.UtcNow;
+                    }
+
+                    // Determine event type based on source and event ID
+                    helloEvent.EventType = GetWindowsHelloEventType(helloEvent.Source, helloEvent.EventId);
+                    
+                    helloInfo.HelloEvents.Add(helloEvent);
+                }
+                
+                // Keep only the last 10 events, sorted by timestamp descending
+                helloInfo.HelloEvents = helloInfo.HelloEvents
+                    .OrderByDescending(e => e.Timestamp)
+                    .Take(10)
+                    .ToList();
+                
+                _logger.LogDebug("Added {Count} Windows Hello events to collection", helloInfo.HelloEvents.Count);
+            }
+            
+            // If no events found via osquery, try PowerShell approach
+            if (helloInfo.HelloEvents.Count == 0)
+            {
+                await CollectWindowsHelloEventsViaPowerShell(helloInfo);
+            }
+        }
+
+        private void ProcessCredentialProviders(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, WindowsHelloInfo helloInfo, string helloType)
+        {
+            // Initialize states
+            bool pinEnabled = false;
+            bool faceEnabled = false;
+            bool fingerprintEnabled = false;
+
+            _logger.LogDebug("Processing credential providers for Windows Hello type: {HelloType}", helloType);
+
+            // First, check Windows Hello events for actual PIN usage status
+            // Event 5702 contains Windows Hello protector configuration
+            // "PIN protector = 0x0" means PIN protector is configured and active
+            // "Bio protector = true" means biometric protectors are configured
+            if (helloInfo.HelloEvents?.Any() == true)
+            {
+                foreach (var helloEvent in helloInfo.HelloEvents)
+                {
+                    if (helloEvent.EventId == 5702 && helloEvent.Description.Contains("protector"))
+                    {
+                        // Parse the PIN protector value from the event description
+                        // 0x0 or any hex value means PIN is configured
+                        if (helloEvent.Description.Contains("PIN protector = 0x") || 
+                            helloEvent.Description.Contains("PIN protector = true"))
+                        {
+                            pinEnabled = true;
+                            _logger.LogDebug("PIN is enabled based on event data (PIN protector configured)");
+                        }
+                        else if (helloEvent.Description.Contains("PIN protector = false"))
+                        {
+                            pinEnabled = false;
+                            _logger.LogDebug("PIN is disabled based on event data (PIN protector = false)");
+                        }
+                        
+                        // Also check for biometric protectors
+                        if (helloEvent.Description.Contains("Bio protector = true"))
+                        {
+                            faceEnabled = true;
+                            fingerprintEnabled = true;
+                            _logger.LogDebug("Biometric authentication is enabled based on event data");
+                        }
+                        
+                        break; // Use the most recent event
+                    }
+                }
+            }
+
+            // Use type-specific queries to check for registry containers (as fallback if no events)
+            if (!pinEnabled && helloInfo.HelloEvents?.Count == 0)
+            {
+                string pinQueryName = helloType == "Business" ? "windows_hello_business_pin" : "windows_hello_consumer_pin";
+                
+                if (osqueryResults.TryGetValue(pinQueryName, out var pinContainers) && pinContainers.Any())
+                {
+                    pinEnabled = true;
+                    _logger.LogDebug("Found Windows Hello {Type} PIN containers in registry", helloType);
+                }
+            }
+
+            // Add providers based on what was detected
+            if (pinEnabled)
+            {
+                helloInfo.CredentialProviders.Providers.Add(new CredentialProvider
+                {
+                    Id = "{CB82EA12-9F71-446D-89E1-8D0924E1256E}",
+                    Name = "Windows Hello PIN",
+                    Type = "PIN",
+                    IsEnabled = true,
+                    Version = "Event-based detection"
+                });
+            }
+
+            if (faceEnabled)
+            {
+                helloInfo.CredentialProviders.Providers.Add(new CredentialProvider
+                {
+                    Id = "{D6886603-9D2F-4EB2-B667-1971041FA96B}",
+                    Name = "Windows Hello Face",
+                    Type = "Face",
+                    IsEnabled = true,
+                    Version = "Event-based detection"
+                });
+            }
+
+            if (fingerprintEnabled)
+            {
+                helloInfo.CredentialProviders.Providers.Add(new CredentialProvider
+                {
+                    Id = "{BEC09223-B018-416D-A0AC-523971B639F5}",
+                    Name = "Windows Hello Fingerprint",
+                    Type = "Fingerprint",
+                    IsEnabled = true,
+                    Version = "Event-based detection"
+                });
+            }
+
+            // Set the boolean flags
+            helloInfo.CredentialProviders.PinEnabled = pinEnabled;
+            helloInfo.CredentialProviders.FaceRecognitionEnabled = faceEnabled;
+            helloInfo.CredentialProviders.FingerprintEnabled = fingerprintEnabled;
+
+            _logger.LogDebug("Windows Hello providers detected - PIN: {Pin}, Face: {Face}, Fingerprint: {Fingerprint}", 
+                pinEnabled, faceEnabled, fingerprintEnabled);
+        }
+
+        private void ProcessBiometricService(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, WindowsHelloInfo helloInfo)
+        {
+            if (osqueryResults.TryGetValue("biometric_service_status", out var serviceStatus))
+            {
+                var biometricService = serviceStatus.FirstOrDefault();
+                if (biometricService != null)
+                {
+                    var status = GetStringValue(biometricService, "status");
+                    var startType = GetStringValue(biometricService, "start_type");
+                    
+                    helloInfo.BiometricService.IsServiceRunning = status.Equals("RUNNING", StringComparison.OrdinalIgnoreCase);
+                    helloInfo.BiometricService.ServiceStatus = $"{status} ({startType})";
+                    
+                    _logger.LogDebug("Biometric service status: {Status}, Running: {Running}", 
+                        helloInfo.BiometricService.ServiceStatus, helloInfo.BiometricService.IsServiceRunning);
+                }
+            }
+        }
+
+        private void ProcessWindowsHelloPolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, WindowsHelloInfo helloInfo, string helloType)
+        {
+            // Process Group Policy settings
+            if (osqueryResults.TryGetValue("windows_hello_group_policies", out var policies))
+            {
+                _logger.LogDebug("Processing Windows Hello Group Policy settings - found {Count} policies", policies.Count);
+                
+                foreach (var policy in policies)
+                {
+                    var path = GetStringValue(policy, "path");
+                    var name = GetStringValue(policy, "name");
+                    var value = GetStringValue(policy, "value");
+                    
+                    // Check for specific policy settings
+                    if (name.Contains("AllowDomainPINLogon", StringComparison.OrdinalIgnoreCase))
+                    {
+                        helloInfo.Policies.AllowDomainPinLogon = value == "1";
+                    }
+                    else if (name.Contains("EnableBioLogon", StringComparison.OrdinalIgnoreCase))
+                    {
+                        helloInfo.Policies.BiometricLogonEnabled = value == "1";
+                    }
+
+                    helloInfo.Policies.GroupPolicies.Add(new WindowsHelloPolicySetting
+                    {
+                        Path = path,
+                        Name = name,
+                        Value = value,
+                        Type = "GroupPolicy"
+                    });
+                }
+            }
+
+            // Process DeviceLock policies
+            if (osqueryResults.TryGetValue("windows_hello_devicelock_policies", out var deviceLockPolicies))
+            {
+                _logger.LogDebug("Processing Windows Hello DeviceLock policy settings - found {Count} policies", deviceLockPolicies.Count);
+                
+                foreach (var policy in deviceLockPolicies)
+                {
+                    var path = GetStringValue(policy, "path");
+                    var name = GetStringValue(policy, "name");
+                    var value = GetStringValue(policy, "value");
+                    
+                    helloInfo.Policies.GroupPolicies.Add(new WindowsHelloPolicySetting
+                    {
+                        Path = path,
+                        Name = name,
+                        Value = value,
+                        Type = "DeviceLockPolicy"
+                    });
+                    
+                    // Check for specific PIN/biometric policies
+                    if (name.Contains("AllowDomainPINLogon", StringComparison.OrdinalIgnoreCase))
+                    {
+                        helloInfo.Policies.AllowDomainPinLogon = value == "1";
+                    }
+                    else if (name.Contains("EnableBioLogon", StringComparison.OrdinalIgnoreCase) ||
+                             name.Contains("Biometric", StringComparison.OrdinalIgnoreCase))
+                    {
+                        helloInfo.Policies.BiometricLogonEnabled = value == "1";
+                    }
+                }
+            }
+
+            // Process Windows Hello for Business/Passport policies
+            if (osqueryResults.TryGetValue("windows_hello_passport_policies", out var passportPolicies))
+            {
+                _logger.LogDebug("Processing Windows Hello for Business policy settings - found {Count} policies", passportPolicies.Count);
+                
+                foreach (var policy in passportPolicies)
+                {
+                    var path = GetStringValue(policy, "path");
+                    var name = GetStringValue(policy, "name");
+                    var value = GetStringValue(policy, "value");
+                    
+                    helloInfo.Policies.PassportPolicies.Add(new WindowsHelloPolicySetting
+                    {
+                        Path = path,
+                        Name = name,
+                        Value = value,
+                        Type = "PassportPolicy"
+                    });
+                    
+                    // Set specific policy flags based on registry values
+                    if (name.Equals("Enabled", StringComparison.OrdinalIgnoreCase) && value == "1")
+                    {
+                        helloInfo.Policies.BiometricLogonEnabled = true;
+                    }
+                    else if (name.Equals("UseBiometrics", StringComparison.OrdinalIgnoreCase) && value == "1")
+                    {
+                        helloInfo.Policies.BiometricLogonEnabled = true;
+                    }
+                    else if (name.Equals("UsePassportForWork", StringComparison.OrdinalIgnoreCase) && value == "1")
+                    {
+                        helloInfo.Policies.AllowDomainPinLogon = true;
+                    }
+                }
+            }
+
+            // If no explicit policies found, infer from enabled features
+            if (helloInfo.Policies.GroupPolicies.Count == 0 && helloInfo.Policies.PassportPolicies.Count == 0)
+            {
+                if (helloInfo.CredentialProviders.PinEnabled)
+                {
+                    helloInfo.Policies.AllowDomainPinLogon = true;
+                }
+                
+                if (helloInfo.CredentialProviders.FaceRecognitionEnabled || helloInfo.CredentialProviders.FingerprintEnabled)
+                {
+                    helloInfo.Policies.BiometricLogonEnabled = true;
+                }
+            }
+        }
+
+        private async Task CollectWindowsHelloEventsViaPowerShell(WindowsHelloInfo helloInfo)
+        {
+            try
+            {
+                _logger.LogDebug("Attempting to collect Windows Hello for Business events via PowerShell");
+
+                var helloEventsCommand = @"
+try {
+    # Get Windows Hello for Business events from the last 7 days
+    $events = Get-WinEvent -FilterHashtable @{
+        LogName='Microsoft-Windows-HelloForBusiness/Operational'
+        StartTime=(Get-Date).AddDays(-7)
+    } -MaxEvents 10 -ErrorAction SilentlyContinue | Sort-Object TimeCreated -Descending
+
+    $eventResults = @()
+    foreach ($event in $events) {
+        $eventResults += @{
+            EventId = $event.Id
+            TimeCreated = $event.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+            LevelDisplayName = $event.LevelDisplayName
+            Message = $event.Message
+            Source = $event.ProviderName
+        }
+    }
+    
+    $eventResults | ConvertTo-Json -Depth 3
+} catch {
+    @() | ConvertTo-Json
+}";
+
+                var helloEventsOutput = await _wmiHelperService.ExecutePowerShellCommandAsync(helloEventsCommand);
+                if (!string.IsNullOrEmpty(helloEventsOutput) && helloEventsOutput.Trim() != "[]")
+                {
+                    var helloEventsData = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, object>>>(
+                        helloEventsOutput,
+                        ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.ListDictionaryStringObject);
+
+                    if (helloEventsData != null && helloEventsData.Count > 0)
+                    {
+                        _logger.LogDebug("Found {Count} Windows Hello for Business events via PowerShell", helloEventsData.Count);
+
+                        foreach (var eventData in helloEventsData)
+                        {
+                            var helloEvent = new WindowsHelloEvent
+                            {
+                                EventId = GetIntValue(eventData, "EventId"),
+                                Source = GetStringValue(eventData, "Source"),
+                                Level = GetStringValue(eventData, "LevelDisplayName"),
+                                Description = GetStringValue(eventData, "Message"),
+                                EventType = "HelloForBusiness"
+                            };
+
+                            // Parse timestamp
+                            var timeCreatedStr = GetStringValue(eventData, "TimeCreated");
+                            if (!string.IsNullOrEmpty(timeCreatedStr) && DateTime.TryParse(timeCreatedStr, out var eventTime))
+                            {
+                                helloEvent.Timestamp = eventTime;
+                            }
+                            else
+                            {
+                                helloEvent.Timestamp = DateTime.UtcNow;
+                            }
+
+                            helloInfo.HelloEvents.Add(helloEvent);
+                        }
+
+                        // Keep only the last 10 events
+                        helloInfo.HelloEvents = helloInfo.HelloEvents
+                            .OrderByDescending(e => e.Timestamp)
+                            .Take(10)
+                            .ToList();
+
+                        _logger.LogDebug("Successfully added {Count} Windows Hello for Business events", helloInfo.HelloEvents.Count);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("No Windows Hello for Business events found via PowerShell");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect Windows Hello for Business events via PowerShell");
+            }
+        }
+
+        private void SetWindowsHelloOverallStatus(WindowsHelloInfo helloInfo, string helloType)
+        {
+            var enabledFeatures = new List<string>();
+            
+            if (helloInfo.CredentialProviders.FaceRecognitionEnabled)
+                enabledFeatures.Add("Face");
+            if (helloInfo.CredentialProviders.PinEnabled)
+                enabledFeatures.Add("PIN");
+            if (helloInfo.CredentialProviders.FingerprintEnabled)
+                enabledFeatures.Add("Fingerprint");
+            if (helloInfo.CredentialProviders.SmartCardEnabled)
+                enabledFeatures.Add("SmartCard");
+            
+            if (enabledFeatures.Count == 0)
+            {
+                helloInfo.StatusDisplay = "Disabled";
+            }
+            else
+            {
+                var featuresText = string.Join(", ", enabledFeatures);
+                var typeText = helloType == "Business" ? "[Business]" : "[Consumer]";
+                helloInfo.StatusDisplay = $"Enabled ({featuresText}) {typeText} - Configured";
+            }
+        }
+
+        private string GetWindowsHelloEventType(string source, int eventId)
+        {
+            if (source.Contains("HelloForBusiness", StringComparison.OrdinalIgnoreCase))
+            {
+                return eventId switch
+                {
+                    5205 => "HelloForBusiness",
+                    5702 => "HelloForBusiness", 
+                    5706 => "Authentication",
+                    5707 => "Authentication",
+                    5708 => "Authentication",
+                    _ => "HelloForBusiness"
+                };
+            }
+            else if (source.Contains("Biometrics", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Biometric";
+            }
+            else if (source.Contains("WebAuthN", StringComparison.OrdinalIgnoreCase))
+            {
+                return "WebAuthN";
+            }
+            
+            return "Authentication";
         }
 
         private void ProcessSecurityUpdates(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
