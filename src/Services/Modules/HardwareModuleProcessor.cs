@@ -484,8 +484,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         logicalDriveData[driveId] = freeSpace;
                         
-                        // Add to storage if it's a primary drive (like C:, D:, etc.)
-                        if (driveId.Length >= 2 && driveId.Contains(":") && !driveId.Contains("\\Device\\"))
+                        // Add to storage if it's a primary drive (like C:, D:, etc.) with valid size and free space
+                        if (driveId.Length >= 2 && driveId.Contains(":") && !driveId.Contains("\\Device\\") && 
+                            size > 1000000000 && freeSpace > 0) // Minimum 1GB and has free space
                         {
                             var storage = new StorageDevice
                             {
@@ -505,6 +506,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 _logger.LogDebug("Added storage from logical drives - Drive: {Drive}, Size: {Size}, Free: {Free}, Type: {Type}", 
                                     driveId, FormatStorageSize(size), FormatStorageSize(freeSpace), storage.Type);
                             }
+                        }
+                        else if (size <= 1000000000 || freeSpace == 0)
+                        {
+                            _logger.LogDebug("Filtered out logical drive - Drive: {Drive}, Size: {Size}, Free: {Free} (insufficient size or no free space)", 
+                                driveId, FormatStorageSize(size), FormatStorageSize(freeSpace));
                         }
                     }
                 }
@@ -558,12 +564,28 @@ namespace ReportMate.WindowsClient.Services.Modules
                             }
                         }
 
-                        if (storage.Capacity > 0)
+                        // Only add storage devices with valid capacity (> 1GB to avoid system artifacts)
+                        // Also filter out devices with 0 free space (indicates collection issues)
+                        if (storage.Capacity > 1000000000) // Minimum 1GB to be considered a real storage device
                         {
-                            data.Storage.Add(storage);
-                            processedDisks.Add(diskKey);
-                            _logger.LogDebug("Added storage device from disk_info - Name: {Name}, Size: {Size} ({FormattedSize}), Free: {Free}", 
-                                storage.Name, storage.Capacity, FormatStorageSize(storage.Capacity), FormatStorageSize(storage.FreeSpace));
+                            // Filter out devices with 0 free space (indicates bad data collection)
+                            if (storage.FreeSpace > 0)
+                            {
+                                data.Storage.Add(storage);
+                                processedDisks.Add(diskKey);
+                                _logger.LogDebug("Added storage device from disk_info - Name: {Name}, Size: {Size} ({FormattedSize}), Free: {Free}", 
+                                    storage.Name, storage.Capacity, FormatStorageSize(storage.Capacity), FormatStorageSize(storage.FreeSpace));
+                            }
+                            else
+                            {
+                                _logger.LogDebug("Filtered out drive with no free space data - Name: {Name}, Capacity: {Capacity}, FreeSpace: {FreeSpace}", 
+                                    storage.Name, storage.Capacity, storage.FreeSpace);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogDebug("Filtered out storage device with insufficient capacity - Name: {Name}, Capacity: {Capacity}", 
+                                storage.Name, storage.Capacity);
                         }
                     }
                 }
@@ -618,11 +640,17 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Health = "Unknown"
                     };
 
-                    if (storage.Capacity > 0)
+                    // Only add storage devices with valid capacity (> 1GB)
+                    if (storage.Capacity > 1000000000)
                     {
                         data.Storage.Add(storage);
                         _logger.LogDebug("Added storage device from WMI - Name: {Name}, Size: {Size} ({FormattedSize})", 
                             storage.Name, storage.Capacity, FormatStorageSize(storage.Capacity));
+                    }
+                    else
+                    {
+                        _logger.LogDebug("Filtered out WMI storage device with insufficient capacity - Name: {Name}, Capacity: {Capacity}", 
+                            storage.Name, storage.Capacity);
                     }
                 }
             }
@@ -913,8 +941,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.Memory.AvailableVirtual = data.Memory.TotalVirtual / 2;
             }
 
-            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}", 
-                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name);
+            // Process NPU information
+            await ProcessNpuInformation(osqueryResults, data);
+
+            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}", 
+                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None");
 
             return data;
         }
@@ -996,6 +1027,96 @@ namespace ReportMate.WindowsClient.Services.Modules
                 .Replace("®", "")
                 .Replace("™", "")
                 .Trim();
+        }
+
+        /// <summary>
+        /// Check if a device name represents a valid NPU device (not a false positive like USB devices)
+        /// </summary>
+        private bool IsValidNpuDevice(string deviceName)
+        {
+            if (string.IsNullOrEmpty(deviceName))
+                return false;
+
+            var upperDeviceName = deviceName.ToUpperInvariant();
+
+            // Exclude false positives - be more strict
+            if (upperDeviceName.Contains("USB") ||
+                upperDeviceName.Contains("INPUT") ||
+                upperDeviceName.Contains("HID") ||
+                upperDeviceName.Contains("KEYBOARD") ||
+                upperDeviceName.Contains("MOUSE") ||
+                upperDeviceName.Contains("AUDIO") ||
+                upperDeviceName.Contains("BLUETOOTH") ||
+                upperDeviceName.Contains("WEBCAM") ||
+                upperDeviceName.Contains("CAMERA") ||
+                upperDeviceName.Contains("CONFIGURATION DEVICE") ||
+                upperDeviceName.Contains("COMPOSITE") ||
+                upperDeviceName.Contains("SENSOR") ||
+                upperDeviceName.Contains("PLATFORM DEVICE") ||
+                upperDeviceName.Contains("PROTECTION DOMAIN") ||
+                upperDeviceName.Contains("REGISTRY DEVICE") ||
+                upperDeviceName.Contains("SERVICE REGISTRY"))
+            {
+                return false;
+            }
+
+            // Must contain NPU-related terms to be considered valid
+            return upperDeviceName.Contains("NPU") ||
+                   upperDeviceName.Contains("NEURAL") ||
+                   (upperDeviceName.Contains("HEXAGON") && !upperDeviceName.Contains("INPUT")) ||
+                   upperDeviceName.Contains("TENSOR") ||
+                   (upperDeviceName.Contains("AI") && !upperDeviceName.Contains("INPUT")) ||
+                   upperDeviceName.Contains("MACHINE LEARNING") ||
+                   upperDeviceName.Contains("TOPS");
+        }
+
+        /// <summary>
+        /// Clean NPU names by removing INF file prefixes and extracting readable names
+        /// </summary>
+        private string CleanNpuName(string? npuName)
+        {
+            if (string.IsNullOrEmpty(npuName))
+                return string.Empty;
+
+            // Remove INF file prefixes like "@oem204.inf,%nspmcdm.devicedesc.gen4_88%;"
+            var cleaned = npuName;
+            var infPrefixMatch = System.Text.RegularExpressions.Regex.Match(cleaned, @"^@[^;]+;\s*(.+)$");
+            if (infPrefixMatch.Success)
+            {
+                cleaned = infPrefixMatch.Groups[1].Value;
+            }
+
+            // Clean trademark symbols
+            cleaned = cleaned
+                .Replace("(R)", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("(TM)", "", StringComparison.OrdinalIgnoreCase)
+                .Replace("®", "")
+                .Replace("™", "")
+                .Trim();
+
+            // Extract simple NPU names based on manufacturer
+            if (cleaned.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase) && 
+                cleaned.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Qualcomm Hexagon NPU";
+            }
+            else if (cleaned.Contains("Intel", StringComparison.OrdinalIgnoreCase) && 
+                     cleaned.Contains("NPU", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Intel NPU";
+            }
+            else if (cleaned.Contains("AMD", StringComparison.OrdinalIgnoreCase) && 
+                     cleaned.Contains("NPU", StringComparison.OrdinalIgnoreCase))
+            {
+                return "AMD NPU";
+            }
+            else if (cleaned.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))
+            {
+                return "NVIDIA Tensor Processing Unit";
+            }
+
+            // If we can't simplify it, return the cleaned version
+            return cleaned;
         }
 
         /// <summary>
@@ -1267,6 +1388,801 @@ namespace ReportMate.WindowsClient.Services.Modules
             var closestSize = commonSizes.OrderBy(size => Math.Abs(size - gb)).First();
 
             return closestSize;
+        }
+
+        /// <summary>
+        /// Process NPU (Neural Processing Unit) information from osquery results
+        /// </summary>
+        private async Task ProcessNpuInformation(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            _logger.LogDebug("Processing NPU information");
+
+            // Initialize NPU data
+            data.Npu = new NpuInfo
+            {
+                Name = string.Empty,
+                Manufacturer = string.Empty,
+                Architecture = string.Empty,
+                ComputeUnits = 0,
+                DriverDate = null,
+                IsAvailable = false
+            };
+
+            // Process NPU registry information
+            if (osqueryResults.TryGetValue("npu_registry", out var npuRegistry) && npuRegistry.Count > 0)
+            {
+                foreach (var npu in npuRegistry)
+                {
+                    var npuName = GetStringValue(npu, "data");
+                    if (!string.IsNullOrEmpty(npuName))
+                    {
+                        data.Npu.Name = CleanNpuName(npuName);
+                        data.Npu.IsAvailable = true;
+                        
+                        // Extract manufacturer from name
+                        if (npuName.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Manufacturer = "Qualcomm";
+                            if (npuName.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Architecture = "Hexagon";
+                                // Extract TOPS from name if available
+                                ExtractTopsFromName(npuName, data.Npu);
+                            }
+                        }
+                        else if (npuName.Contains("Intel", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Manufacturer = "Intel";
+                        }
+                        else if (npuName.Contains("AMD", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Manufacturer = "AMD";
+                        }
+                        
+                        _logger.LogDebug("Found NPU from registry: {NPU}", npuName);
+                        break; // Use first found NPU
+                    }
+                }
+            }
+
+            // Process NPU device enumeration
+            if (osqueryResults.TryGetValue("npu_device_registry", out var npuDeviceRegistry) && npuDeviceRegistry.Count > 0)
+            {
+                foreach (var device in npuDeviceRegistry)
+                {
+                    var deviceName = GetStringValue(device, "data");
+                    _logger.LogDebug("Found NPU registry device candidate: {Device}", deviceName);
+                    
+                    if (!string.IsNullOrEmpty(deviceName) && string.IsNullOrEmpty(data.Npu.Name))
+                    {
+                        // Filter out false positives like USB devices, generic input devices, etc.
+                        if (IsValidNpuDevice(deviceName))
+                        {
+                            data.Npu.Name = CleanNpuName(deviceName);
+                            data.Npu.IsAvailable = true;
+                            
+                            // Extract manufacturer and specs
+                            if (deviceName.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Manufacturer = "Qualcomm";
+                                if (deviceName.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    data.Npu.Architecture = "Hexagon";
+                                    ExtractTopsFromName(deviceName, data.Npu);
+                                }
+                            }
+                            else if (deviceName.Contains("Intel", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Manufacturer = "Intel";
+                            }
+                            else if (deviceName.Contains("AMD", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Manufacturer = "AMD";
+                            }
+                            
+                            _logger.LogDebug("Found NPU from device enumeration: {NPU}", deviceName);
+                            break;
+                        }
+                        else
+                        {
+                            _logger.LogDebug("Filtered out false positive NPU device: {Device}", deviceName);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Process PCI devices for NPU
+            if (osqueryResults.TryGetValue("npu_pci_devices", out var npuPciDevices) && npuPciDevices.Count > 0)
+            {
+                foreach (var pciDevice in npuPciDevices)
+                {
+                    var model = GetStringValue(pciDevice, "model");
+                    var vendor = GetStringValue(pciDevice, "vendor");
+                    var driver = GetStringValue(pciDevice, "driver");
+                    
+                    if (!string.IsNullOrEmpty(model) && string.IsNullOrEmpty(data.Npu.Name))
+                    {
+                        data.Npu.Name = CleanNpuName(model);
+                        data.Npu.Manufacturer = CleanManufacturerName(vendor);
+                        data.Npu.IsAvailable = true;
+                        
+                        if (model.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Architecture = "Hexagon";
+                            ExtractTopsFromName(model, data.Npu);
+                        }
+                        
+                        _logger.LogDebug("Found NPU from PCI devices: {NPU} (Vendor: {Vendor})", model, vendor);
+                        break;
+                    }
+                }
+            }
+
+            // If still no NPU found, check processor features for integrated NPU
+            if (!data.Npu.IsAvailable && osqueryResults.TryGetValue("npu_processor_features", out var processorFeatures))
+            {
+                foreach (var feature in processorFeatures)
+                {
+                    var featureData = GetStringValue(feature, "data");
+                    if (!string.IsNullOrEmpty(featureData) && 
+                        (featureData.Contains("Neural", StringComparison.OrdinalIgnoreCase) ||
+                         featureData.Contains("AI", StringComparison.OrdinalIgnoreCase) ||
+                         featureData.Contains("ML", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        data.Npu.IsAvailable = true;
+                        _logger.LogDebug("NPU capability detected from processor features");
+                    }
+                }
+            }
+
+            // Process NPU hardware IDs and device properties for detailed specs
+            ProcessNpuHardwareIds(osqueryResults, data);
+            ProcessNpuDeviceProperties(osqueryResults, data);
+            ProcessNpuSpecifications(osqueryResults, data);
+            ProcessNpuProcessorTops(osqueryResults, data);
+            
+            // Process new NPU detection queries
+            ProcessNpuPciDevices(osqueryResults, data);
+            ProcessNpuWmiDevices(osqueryResults, data);
+            ProcessNpuTopsRegistry(osqueryResults, data);
+            
+            // PowerShell-based NPU detection as additional fallback
+            if (data.Npu.ComputeUnits == 0 || !data.Npu.IsAvailable)
+            {
+                await ProcessNpuViaPowerShell(data);
+            }
+
+            // Final attempt: check system information and processor name for known NPU specs
+            if (data.Npu.ComputeUnits == 0 && data.Npu.IsAvailable)
+            {
+                ExtractNpuSpecsFromProcessor(data);
+            }
+
+            if (data.Npu.IsAvailable)
+            {
+                _logger.LogInformation("NPU detected - Name: {Name}, Manufacturer: {Manufacturer}, Architecture: {Architecture}, Compute Units: {ComputeUnits} TOPS", 
+                    data.Npu.Name, data.Npu.Manufacturer, data.Npu.Architecture, data.Npu.ComputeUnits);
+            }
+            else
+            {
+                _logger.LogDebug("No NPU detected on this system");
+                data.Npu = null; // Set to null if no NPU found
+            }
+        }
+
+        /// <summary>
+        /// Process NPU hardware IDs from device enumeration
+        /// </summary>
+        private void ProcessNpuHardwareIds(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            if (osqueryResults.TryGetValue("npu_hardware_ids", out var npuHardwareIds) && npuHardwareIds.Count > 0)
+            {
+                foreach (var hardwareId in npuHardwareIds)
+                {
+                    var hardwareIdData = GetStringValue(hardwareId, "data");
+                    if (!string.IsNullOrEmpty(hardwareIdData))
+                    {
+                        _logger.LogDebug("Found NPU hardware ID: {HardwareId}", hardwareIdData);
+                        
+                        // Extract manufacturer information from hardware ID
+                        if (data.Npu != null)
+                        {
+                            // Detect manufacturer from hardware ID patterns
+                            if (hardwareIdData.Contains("QCOM", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Manufacturer = "Qualcomm";
+                                data.Npu.IsAvailable = true;
+                            }
+                            else if (hardwareIdData.Contains("INTC", StringComparison.OrdinalIgnoreCase) || 
+                                    hardwareIdData.Contains("8086", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Manufacturer = "Intel";
+                                data.Npu.IsAvailable = true;
+                            }
+                            else if (hardwareIdData.Contains("AMD", StringComparison.OrdinalIgnoreCase) || 
+                                    hardwareIdData.Contains("1002", StringComparison.OrdinalIgnoreCase) ||
+                                    hardwareIdData.Contains("1022", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Manufacturer = "AMD";
+                                data.Npu.IsAvailable = true;
+                            }
+                            else if (hardwareIdData.Contains("NVDA", StringComparison.OrdinalIgnoreCase) || 
+                                    hardwareIdData.Contains("10DE", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.Npu.Manufacturer = "NVIDIA";
+                                data.Npu.IsAvailable = true;
+                            }
+                            else
+                            {
+                                // Generic NPU detected, try to extract manufacturer from other fields
+                                data.Npu.IsAvailable = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Process NPU device properties for performance specifications
+        /// </summary>
+        private void ProcessNpuDeviceProperties(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            if (osqueryResults.TryGetValue("npu_device_properties", out var npuDeviceProperties) && npuDeviceProperties.Count > 0 && data.Npu != null)
+            {
+                foreach (var deviceProperty in npuDeviceProperties)
+                {
+                    var propertyData = GetStringValue(deviceProperty, "data");
+                    _logger.LogDebug("Found NPU device property candidate: {Property}", propertyData);
+                    
+                    if (!string.IsNullOrEmpty(propertyData))
+                    {
+                        _logger.LogDebug("Found NPU device property: {Property}", propertyData);
+                        
+                        // Filter out false positives before processing
+                        if (!IsValidNpuDevice(propertyData))
+                        {
+                            _logger.LogDebug("Filtered out false positive NPU property: {Property}", propertyData);
+                            continue;
+                        }
+                        
+                        // Detect manufacturer from the device name/description
+                        if (propertyData.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Manufacturer = "Qualcomm";
+                            data.Npu.IsAvailable = true;
+                        }
+                        else if (propertyData.Contains("Intel", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Manufacturer = "Intel";
+                            data.Npu.IsAvailable = true;
+                        }
+                        else if (propertyData.Contains("AMD", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Manufacturer = "AMD";
+                            data.Npu.IsAvailable = true;
+                        }
+                        else if (propertyData.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Manufacturer = "NVIDIA";
+                            data.Npu.IsAvailable = true;
+                        }
+                        
+                        // Extract architecture information from various manufacturers
+                        if (propertyData.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Architecture = "Hexagon";
+                            data.Npu.IsAvailable = true;
+                        }
+                        else if (propertyData.Contains("XNNPACK", StringComparison.OrdinalIgnoreCase) || 
+                                propertyData.Contains("Intel NPU", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Architecture = "Intel NPU";
+                            data.Npu.IsAvailable = true;
+                        }
+                        else if (propertyData.Contains("RDNA", StringComparison.OrdinalIgnoreCase) || 
+                                propertyData.Contains("AMD NPU", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Architecture = "AMD NPU";
+                            data.Npu.IsAvailable = true;
+                        }
+                        else if (propertyData.Contains("Tensor", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Npu.Architecture = "NVIDIA Tensor";
+                            data.Npu.IsAvailable = true;
+                        }
+                        
+                        // Extract TOPS value from the property data
+                        ExtractTopsFromName(propertyData, data.Npu);
+                        
+                        // Update name if we don't have one yet or if this provides a better name
+                        if (string.IsNullOrEmpty(data.Npu.Name) || propertyData.Length > data.Npu.Name.Length)
+                        {
+                            data.Npu.Name = CleanNpuName(propertyData);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extract TOPS (Tera Operations Per Second) value from NPU name or description
+        /// </summary>
+        private void ExtractTopsFromName(string name, NpuInfo npu)
+        {
+            if (string.IsNullOrEmpty(name) || npu.ComputeUnits > 0)
+                return; // Skip if name is empty or we already have a TOPS value
+
+            // Look for patterns like "45 TOPS", "45 TOPs", "45TOPS", "45.5 TOPS"
+            var topsMatch = System.Text.RegularExpressions.Regex.Match(name, @"(\d+(?:\.\d+)?)\s*TOPS?", 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            if (topsMatch.Success && double.TryParse(topsMatch.Groups[1].Value, out var tops))
+            {
+                npu.ComputeUnits = tops;
+                _logger.LogDebug("Extracted {TOPS} TOPS from NPU description: {Name}", tops, name);
+                return;
+            }
+
+            // Alternative patterns like "45 Tera Ops", "45 TOps", etc.
+            var altTopsMatch = System.Text.RegularExpressions.Regex.Match(name, @"(\d+(?:\.\d+)?)\s*(?:Tera\s*Ops?|TOPs?)", 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            if (altTopsMatch.Success && double.TryParse(altTopsMatch.Groups[1].Value, out var altTops))
+            {
+                npu.ComputeUnits = altTops;
+                _logger.LogDebug("Extracted {TOPS} TOPS from alternative pattern in NPU description: {Name}", altTops, name);
+                return;
+            }
+
+            // Look for patterns like "45 Trillion Operations Per Second" or "45 T ops/s"
+            var longFormMatch = System.Text.RegularExpressions.Regex.Match(name, @"(\d+(?:\.\d+)?)\s*(?:Trillion\s*Operations?|T\s*ops?/s|TOPS)", 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            if (longFormMatch.Success && double.TryParse(longFormMatch.Groups[1].Value, out var longFormTops))
+            {
+                npu.ComputeUnits = longFormTops;
+                _logger.LogDebug("Extracted {TOPS} TOPS from long form pattern in NPU description: {Name}", longFormTops, name);
+                return;
+            }
+
+            // Look for numeric values followed by AI/NPU keywords (might indicate TOPS)
+            var aiMatch = System.Text.RegularExpressions.Regex.Match(name, @"(\d+(?:\.\d+)?)\s*(?:AI|NPU|Neural|ML)", 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            
+            if (aiMatch.Success && double.TryParse(aiMatch.Groups[1].Value, out var aiTops))
+            {
+                // Only consider this if the number seems reasonable for TOPS (typically 1-100 range)
+                if (aiTops >= 1 && aiTops <= 100)
+                {
+                    npu.ComputeUnits = aiTops;
+                    _logger.LogDebug("Extracted potential {TOPS} TOPS from AI/NPU pattern in description: {Name}", aiTops, name);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Process NPU specifications from device properties
+        /// </summary>
+        private void ProcessNpuSpecifications(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            if (osqueryResults.TryGetValue("npu_specifications", out var npuSpecs) && npuSpecs.Count > 0 && data.Npu != null)
+            {
+                foreach (var spec in npuSpecs)
+                {
+                    var specData = spec.GetValueOrDefault("data")?.ToString() ?? string.Empty;
+                    
+                    if (!string.IsNullOrEmpty(specData))
+                    {
+                        // Try to extract TOPS from specification data
+                        ExtractTopsFromName(specData, data.Npu);
+                        
+                        _logger.LogDebug("Processing NPU specification: {Data}", specData);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Process processor-level NPU TOPS information
+        /// </summary>
+        private void ProcessNpuProcessorTops(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            if (osqueryResults.TryGetValue("npu_processor_tops", out var processorTops) && processorTops.Count > 0 && data.Npu != null)
+            {
+                foreach (var tops in processorTops)
+                {
+                    var topsData = tops.GetValueOrDefault("data")?.ToString() ?? string.Empty;
+                    
+                    if (!string.IsNullOrEmpty(topsData))
+                    {
+                        // Try to extract TOPS value directly or from description
+                        if (double.TryParse(topsData, out var directTops))
+                        {
+                            data.Npu.ComputeUnits = directTops;
+                            _logger.LogDebug("Found direct TOPS value: {TOPS}", directTops);
+                        }
+                        else
+                        {
+                            ExtractTopsFromName(topsData, data.Npu);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extract NPU specifications based on processor model as a last resort
+        /// This method looks for well-known processor/NPU combinations to get TOPS values
+        /// </summary>
+        private void ExtractNpuSpecsFromProcessor(HardwareData data)
+        {
+            if (data.Processor == null || string.IsNullOrEmpty(data.Processor.Name) || data.Npu == null)
+                return;
+
+            var processorName = data.Processor.Name.ToUpperInvariant();
+
+            // Snapdragon X Elite processors (45 TOPS NPU)
+            if (processorName.Contains("X1E80100") || processorName.Contains("X1E78100") || 
+                processorName.Contains("X1E84100") || processorName.Contains("X1E68100"))
+            {
+                data.Npu.ComputeUnits = 45;
+                data.Npu.IsAvailable = true;
+                if (string.IsNullOrEmpty(data.Npu.Manufacturer))
+                    data.Npu.Manufacturer = "Qualcomm";
+                if (string.IsNullOrEmpty(data.Npu.Architecture))
+                    data.Npu.Architecture = "Hexagon";
+                _logger.LogDebug("Set 45 TOPS based on known Snapdragon X Elite processor model: {ProcessorName}", data.Processor.Name);
+            }
+            // Intel Core Ultra processors with NPU
+            else if (processorName.Contains("INTEL") && 
+                    (processorName.Contains("CORE ULTRA") || processorName.Contains("METEOR LAKE") || processorName.Contains("ARROW LAKE")))
+            {
+                // Intel Meteor Lake processors typically have 10-11 TOPS NPU
+                data.Npu.ComputeUnits = 10;
+                data.Npu.IsAvailable = true;
+                if (string.IsNullOrEmpty(data.Npu.Manufacturer))
+                    data.Npu.Manufacturer = "Intel";
+                _logger.LogDebug("Set 10 TOPS based on Intel Core Ultra processor with NPU: {ProcessorName}", data.Processor.Name);
+            }
+            // AMD Ryzen AI processors
+            else if (processorName.Contains("AMD") && processorName.Contains("RYZEN") && processorName.Contains("AI"))
+            {
+                // AMD Ryzen AI processors typically have 10-16 TOPS NPU
+                data.Npu.ComputeUnits = 16;
+                data.Npu.IsAvailable = true;
+                if (string.IsNullOrEmpty(data.Npu.Manufacturer))
+                    data.Npu.Manufacturer = "AMD";
+                _logger.LogDebug("Set 16 TOPS based on AMD Ryzen AI processor: {ProcessorName}", data.Processor.Name);
+            }
+            // Generic Intel NPU detection
+            else if (processorName.Contains("INTEL") && processorName.Contains("NPU"))
+            {
+                // For Intel processors with NPU in the name, try to extract from name
+                ExtractTopsFromName(processorName, data.Npu);
+                if (data.Npu.ComputeUnits == 0)
+                {
+                    data.Npu.ComputeUnits = 10; // Default Intel NPU TOPS
+                    _logger.LogDebug("Set default 10 TOPS for Intel processor with NPU mention");
+                }
+            }
+            // Generic AMD NPU detection
+            else if (processorName.Contains("AMD") && processorName.Contains("NPU"))
+            {
+                // For AMD processors with NPU in the name, try to extract from name
+                ExtractTopsFromName(processorName, data.Npu);
+                if (data.Npu.ComputeUnits == 0)
+                {
+                    data.Npu.ComputeUnits = 16; // Default AMD NPU TOPS
+                    _logger.LogDebug("Set default 16 TOPS for AMD processor with NPU mention");
+                }
+            }
+            // Qualcomm Snapdragon processors
+            else if (processorName.Contains("SNAPDRAGON") || processorName.Contains("QUALCOMM"))
+            {
+                ExtractTopsFromName(processorName, data.Npu);
+                if (data.Npu.ComputeUnits == 0)
+                {
+                    data.Npu.ComputeUnits = 45; // Default Qualcomm Snapdragon TOPS
+                    _logger.LogDebug("Set default 45 TOPS for Qualcomm Snapdragon processor");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Process NPU devices from PCI enumeration
+        /// </summary>
+        private void ProcessNpuPciDevices(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            if (osqueryResults.TryGetValue("npu_pci_devices", out var npuPciDevices) && npuPciDevices.Count > 0 && data.Npu != null)
+            {
+                foreach (var pciDevice in npuPciDevices)
+                {
+                    var model = GetStringValue(pciDevice, "model");
+                    var vendor = GetStringValue(pciDevice, "vendor");
+                    var vendorId = GetStringValue(pciDevice, "vendor_id");
+                    var deviceId = GetStringValue(pciDevice, "device_id");
+                    
+                    if (!string.IsNullOrEmpty(model) && IsValidNpuDevice(model))
+                    {
+                        if (string.IsNullOrEmpty(data.Npu.Name))
+                        {
+                            data.Npu.Name = CleanNpuName(model);
+                        }
+                        
+                        if (string.IsNullOrEmpty(data.Npu.Manufacturer))
+                        {
+                            data.Npu.Manufacturer = CleanManufacturerName(vendor);
+                        }
+                        
+                        data.Npu.IsAvailable = true;
+                        
+                        // Extract TOPS from model name
+                        ExtractTopsFromName(model, data.Npu);
+                        
+                        _logger.LogDebug("Found NPU from PCI enumeration - Model: {Model}, Vendor: {Vendor}, VendorID: {VendorId}, DeviceID: {DeviceId}", 
+                            model, vendor, vendorId, deviceId);
+                        
+                        break; // Use first valid NPU found
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Process NPU devices from WMI enumeration
+        /// </summary>
+        private void ProcessNpuWmiDevices(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            if (osqueryResults.TryGetValue("npu_wmi_devices", out var npuWmiDevices) && npuWmiDevices.Count > 0 && data.Npu != null)
+            {
+                foreach (var wmiDevice in npuWmiDevices)
+                {
+                    var name = GetStringValue(wmiDevice, "name");
+                    var manufacturer = GetStringValue(wmiDevice, "manufacturer");
+                    var deviceId = GetStringValue(wmiDevice, "device_id");
+                    var hardwareId = GetStringValue(wmiDevice, "hardware_id");
+                    var status = GetStringValue(wmiDevice, "status");
+                    
+                    if (!string.IsNullOrEmpty(name) && IsValidNpuDevice(name))
+                    {
+                        if (string.IsNullOrEmpty(data.Npu.Name))
+                        {
+                            data.Npu.Name = CleanNpuName(name);
+                        }
+                        
+                        if (string.IsNullOrEmpty(data.Npu.Manufacturer) && !string.IsNullOrEmpty(manufacturer))
+                        {
+                            data.Npu.Manufacturer = CleanManufacturerName(manufacturer);
+                        }
+                        
+                        data.Npu.IsAvailable = true;
+                        
+                        // Extract TOPS from device name
+                        ExtractTopsFromName(name, data.Npu);
+                        
+                        // Also check hardware ID for additional specs
+                        if (!string.IsNullOrEmpty(hardwareId))
+                        {
+                            ExtractTopsFromName(hardwareId, data.Npu);
+                        }
+                        
+                        _logger.LogDebug("Found NPU from WMI enumeration - Name: {Name}, Manufacturer: {Manufacturer}, Status: {Status}", 
+                            name, manufacturer, status);
+                        
+                        break; // Use first valid NPU found
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Process registry entries specifically containing TOPS specifications
+        /// </summary>
+        private void ProcessNpuTopsRegistry(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            if (osqueryResults.TryGetValue("npu_tops_registry", out var npuTopsRegistry) && npuTopsRegistry.Count > 0 && data.Npu != null)
+            {
+                foreach (var registryEntry in npuTopsRegistry)
+                {
+                    var path = GetStringValue(registryEntry, "path");
+                    var name = GetStringValue(registryEntry, "name");
+                    var registryData = GetStringValue(registryEntry, "data");
+                    
+                    if (!string.IsNullOrEmpty(registryData))
+                    {
+                        _logger.LogDebug("Processing TOPS registry entry - Path: {Path}, Name: {Name}, Data: {Data}", 
+                            path, name, registryData);
+                        
+                        // Try to extract TOPS value from registry data
+                        ExtractTopsFromName(registryData, data.Npu);
+                        
+                        // If no TOPS found yet but this looks like an NPU entry, mark as available
+                        if (!data.Npu.IsAvailable && 
+                            (registryData.Contains("NPU", StringComparison.OrdinalIgnoreCase) ||
+                             registryData.Contains("Neural", StringComparison.OrdinalIgnoreCase) ||
+                             registryData.Contains("AI", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            data.Npu.IsAvailable = true;
+                            
+                            if (string.IsNullOrEmpty(data.Npu.Name))
+                            {
+                                data.Npu.Name = CleanNpuName(registryData);
+                            }
+                        }
+                        
+                        // If we found a TOPS value, we can break early
+                        if (data.Npu.ComputeUnits > 0)
+                        {
+                            _logger.LogDebug("Found TOPS value {TOPS} from registry entry", data.Npu.ComputeUnits);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Use PowerShell to detect NPU information as a fallback method
+        /// </summary>
+        private async Task ProcessNpuViaPowerShell(HardwareData data)
+        {
+            try
+            {
+                // PowerShell script to detect NPU devices and TOPS
+                var script = @"
+                    try {
+                        $npuDevices = @()
+                        
+                        # Check Device Manager for NPU devices
+                        $deviceManager = Get-WmiObject -Class Win32_PnPEntity | Where-Object { 
+                            $_.Name -match 'NPU|Neural|Hexagon|AI.*Processing|Tensor|TOPS' -and 
+                            $_.Name -notmatch 'Audio|USB|HID|Input|Keyboard|Mouse|Camera'
+                        }
+                        
+                        foreach ($device in $deviceManager) {
+                            $npuDevices += [PSCustomObject]@{
+                                Name = $device.Name
+                                Manufacturer = $device.Manufacturer
+                                DeviceID = $device.DeviceID
+                                Status = $device.Status
+                                Source = 'DeviceManager'
+                            }
+                        }
+                        
+                        # Check processor information for integrated NPU
+                        $processor = Get-WmiObject -Class Win32_Processor | Select-Object -First 1
+                        if ($processor.Name -match 'Snapdragon|X1E|Intel.*NPU|AMD.*AI|Ryzen.*AI') {
+                            $npuDevices += [PSCustomObject]@{
+                                Name = $processor.Name + ' (Integrated NPU)'
+                                Manufacturer = $processor.Manufacturer
+                                DeviceID = 'CPU_INTEGRATED'
+                                Status = 'OK'
+                                Source = 'ProcessorIntegrated'
+                            }
+                        }
+                        
+                        # Check registry for NPU information
+                        try {
+                            $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Enum\*\*\*'
+                            $regDevices = Get-ItemProperty -Path $regPath -Name 'FriendlyName' -ErrorAction SilentlyContinue | 
+                                Where-Object { $_.FriendlyName -match 'NPU|Neural|Hexagon|TOPS|AI.*Processing' }
+                            
+                            foreach ($regDevice in $regDevices) {
+                                $npuDevices += [PSCustomObject]@{
+                                    Name = $regDevice.FriendlyName
+                                    Manufacturer = 'Unknown'
+                                    DeviceID = $regDevice.PSPath
+                                    Status = 'Registry'
+                                    Source = 'Registry'
+                                }
+                            }
+                        } catch {
+                            # Registry access might fail
+                        }
+                        
+                        if ($npuDevices.Count -gt 0) {
+                            $npuDevices | ConvertTo-Json -Depth 2
+                        } else {
+                            '[]'
+                        }
+                    } catch {
+                        Write-Output ""Error: $($_.Exception.Message)""
+                        '[]'
+                    }";
+
+                var result = await ExecutePowerShellScriptAsync(script);
+                
+                if (!string.IsNullOrEmpty(result) && result.Trim() != "[]" && !result.Contains("Error:"))
+                {
+                    try
+                    {
+                        var npuDevices = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement[]>(result);
+                        
+                        if (npuDevices != null && npuDevices.Length > 0)
+                        {
+                            var firstDevice = npuDevices[0];
+                            
+                            if (firstDevice.TryGetProperty("Name", out var nameElement))
+                            {
+                                var deviceName = nameElement.GetString() ?? "";
+                                
+                                if (data.Npu == null)
+                                {
+                                    data.Npu = new NpuInfo();
+                                }
+                                
+                                if (string.IsNullOrEmpty(data.Npu.Name))
+                                {
+                                    data.Npu.Name = CleanNpuName(deviceName);
+                                }
+                                
+                                data.Npu.IsAvailable = true;
+                                
+                                // Extract manufacturer
+                                if (firstDevice.TryGetProperty("Manufacturer", out var manufacturerElement))
+                                {
+                                    var manufacturer = manufacturerElement.GetString();
+                                    if (!string.IsNullOrEmpty(manufacturer) && manufacturer != "Unknown" && string.IsNullOrEmpty(data.Npu.Manufacturer))
+                                    {
+                                        data.Npu.Manufacturer = CleanManufacturerName(manufacturer);
+                                    }
+                                }
+                                
+                                // Try to extract TOPS from device name
+                                ExtractTopsFromName(deviceName, data.Npu);
+                                
+                                _logger.LogDebug("PowerShell NPU detection found: {DeviceName}", deviceName);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug("Failed to parse PowerShell NPU detection results: {Error}", ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("PowerShell NPU detection failed: {Error}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Execute a PowerShell script and return the result
+        /// </summary>
+        private async Task<string> ExecutePowerShellScriptAsync(string script)
+        {
+            try
+            {
+                using var process = new System.Diagnostics.Process();
+                process.StartInfo.FileName = "powershell.exe";
+                process.StartInfo.Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script.Replace("\"", "\\\"")}\"";
+                process.StartInfo.UseShellExecute = false;
+                process.StartInfo.RedirectStandardOutput = true;
+                process.StartInfo.RedirectStandardError = true;
+                process.StartInfo.CreateNoWindow = true;
+                
+                process.Start();
+                
+                var output = await process.StandardOutput.ReadToEndAsync();
+                var error = await process.StandardError.ReadToEndAsync();
+                
+                await process.WaitForExitAsync();
+                
+                if (!string.IsNullOrEmpty(error))
+                {
+                    _logger.LogDebug("PowerShell script error: {Error}", error);
+                }
+                
+                return output.Trim();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Failed to execute PowerShell script: {Error}", ex.Message);
+                return string.Empty;
+            }
         }
     }
 }

@@ -19,6 +19,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<UsbDevice> UsbDevices { get; set; } = new();
         public BatteryInfo? Battery { get; set; }
         public ThermalInfo? Thermal { get; set; }
+        public NpuInfo? Npu { get; set; }
     }
 
     public class ProcessorInfo
@@ -100,5 +101,15 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Name { get; set; } = string.Empty;
         public int Speed { get; set; } // RPM
         public int MaxSpeed { get; set; } // RPM
+    }
+
+    public class NpuInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Manufacturer { get; set; } = string.Empty;
+        public string Architecture { get; set; } = string.Empty;
+        public double ComputeUnits { get; set; } // TOPS (Tera Operations Per Second)
+        public DateTime? DriverDate { get; set; }
+        public bool IsAvailable { get; set; }
     }
 }
