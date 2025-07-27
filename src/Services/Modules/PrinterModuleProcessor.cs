@@ -93,7 +93,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var dataValue = GetStringValue(regEntry, "data");
                     var type = GetStringValue(regEntry, "type");
 
-                    _logger.LogInformation("Registry entry: Path='{Path}', Name='{Name}', Type='{Type}', Data='{Data}'", 
+                    _logger.LogDebug("Registry entry: Path='{Path}', Name='{Name}', Type='{Type}', Data='{Data}'", 
                         path, name, type, dataValue?.Substring(0, Math.Min(50, dataValue?.Length ?? 0)));
 
                     // Extract printer name from registry path
@@ -206,7 +206,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         {
                             var printerName = pathParts[6];
 
-                            _logger.LogInformation("Processing printer detail: '{PrinterName}' -> '{PropertyName}' = '{Value}'", 
+                            _logger.LogDebug("Processing printer detail: '{PrinterName}' -> '{PropertyName}' = '{Value}'", 
                                 printerName, name, dataValue);
 
                             // Find the matching printer and update its properties
