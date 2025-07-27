@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading.Tasks;
@@ -235,7 +236,8 @@ namespace ReportMate.WindowsClient.Services
                 {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+                    TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
 
                 await File.WriteAllTextAsync(filePath, json);
@@ -261,7 +263,8 @@ namespace ReportMate.WindowsClient.Services
                 {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+                    TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
 
                 await File.WriteAllTextAsync(filePath, json);
@@ -348,7 +351,8 @@ namespace ReportMate.WindowsClient.Services
                         var jsonOptions = new JsonSerializerOptions
                         {
                             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                            TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+                            TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+                            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                         };
                         
                         // Load module data based on module ID
@@ -678,7 +682,8 @@ namespace ReportMate.WindowsClient.Services
                 {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    TypeInfoResolver = new DefaultJsonTypeInfoResolver()
+                    TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
 
                 await File.WriteAllTextAsync(filePath, json);

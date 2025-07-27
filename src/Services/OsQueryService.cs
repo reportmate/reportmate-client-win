@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Text.Json.Serialization.Metadata;
@@ -132,7 +133,8 @@ public class OsQueryService : IOsQueryService
                     PropertyNameCaseInsensitive = true,
                     ReadCommentHandling = JsonCommentHandling.Skip,
                     AllowTrailingCommas = true,
-                    TypeInfoResolver = ReportMateJsonContext.Default
+                    TypeInfoResolver = ReportMateJsonContext.Default,
+                    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 };
 
                 var result = JsonSerializer.Deserialize(output, ReportMateJsonContext.Default.ListDictionaryStringObject);

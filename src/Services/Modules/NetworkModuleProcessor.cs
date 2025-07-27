@@ -1131,8 +1131,11 @@ try {
                     // If Unescape fails, continue with the current result
                 }
                 
-                // Normalize the Unicode string to composed form (NFC)
+                // Normalize the Unicode string to composed form (NFC) for consistent representation
                 result = result.Normalize(System.Text.NormalizationForm.FormC);
+                
+                // Clean up any remaining problematic characters or sequences
+                result = result.Trim();
                 
                 _logger.LogDebug("Normalized Unicode string: '{Original}' -> '{Normalized}'", input, result);
                 
