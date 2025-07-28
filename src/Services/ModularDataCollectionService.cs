@@ -23,6 +23,7 @@ namespace ReportMate.WindowsClient.Services
         Task<UnifiedDevicePayload> CollectAllModuleDataAsync();
         Task<T?> CollectModuleDataAsync<T>(string moduleId) where T : BaseModuleData;
         Task<BaseModuleData?> CollectSingleModuleDataAsync(string moduleId);
+        Task<UnifiedDevicePayload> CreateSingleModuleUnifiedPayloadAsync(BaseModuleData moduleData);
         Task SaveModuleDataLocallyAsync<T>(string moduleId, T data) where T : BaseModuleData;
         Task<UnifiedDevicePayload> LoadCachedDataAsync();
         Task<bool> ValidateModuleDataAsync(string moduleId, object data);
@@ -218,6 +219,55 @@ namespace ReportMate.WindowsClient.Services
             {
                 _logger.LogError(ex, "Error during single module collection for {ModuleId}", moduleId);
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Create a unified payload structure for a single module (for --run-module support)
+        /// This enables --transmit-only to work with single module collections
+        /// </summary>
+        public async Task<UnifiedDevicePayload> CreateSingleModuleUnifiedPayloadAsync(BaseModuleData moduleData)
+        {
+            _logger.LogInformation("Creating unified payload for single module: {ModuleId}", moduleData.ModuleId);
+
+            try
+            {
+                // For single module collection, we need to get serial number from a system query
+                // Since we don't have the full osquery results, run a minimal query to get device info
+                var systemQueries = new Dictionary<string, object>
+                {
+                    ["system_info"] = "SELECT uuid, hardware_serial, computer_name FROM system_info;"
+                };
+
+                var systemResults = await ExecuteModularQueriesAsync(systemQueries);
+                var serialNumber = ExtractSerialNumber(systemResults);
+
+                // Create unified payload with metadata
+                var payload = new UnifiedDevicePayload();
+                payload.Metadata = new EventMetadata
+                {
+                    DeviceId = moduleData.DeviceId,
+                    SerialNumber = serialNumber,
+                    CollectedAt = moduleData.CollectedAt,
+                    ClientVersion = GetClientVersion(),
+                    Platform = "Windows",
+                    CollectionType = "Single",
+                    EnabledModules = new List<string> { moduleData.ModuleId }
+                };
+
+                // Assign the single module data to the payload
+                AssignModuleDataToPayload(payload, moduleData);
+
+                // Save the unified payload as event.json
+                await SaveUnifiedPayloadAsync(payload);
+
+                _logger.LogInformation("✓ Unified payload created for single module: {ModuleId}", moduleData.ModuleId);
+                return payload;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating unified payload for single module: {ModuleId}", moduleData.ModuleId);
+                throw;
             }
         }
 
