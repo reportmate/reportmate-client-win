@@ -921,15 +921,29 @@ public class Program
                 _logger!.LogError("Module '{ModuleId}' not found or failed to collect data", moduleId);
                 return 1;
             }
+
+            // Create a module-specific unified payload for transmission support
+            if (verbose > 0)
+            {
+                Logger.Info("Creating module-specific event.json for transmission support...");
+            }
             
+            var unifiedPayload = await modularService.CreateSingleModuleUnifiedPayloadAsync(moduleData);
+            
+            if (verbose > 0)
+            {
+                Logger.Info("✅ Module-specific event.json created successfully");
+                Logger.Info("Cache Location: {0}", @"C:\ProgramData\ManagedReports\cache");
+            }
+
             // Serialize the module data to JSON for display
             var jsonOptions = new JsonSerializerOptions(ReportMateJsonContext.Default.Options)
             {
                 WriteIndented = true
             };
-            
+
             var jsonData = JsonSerializer.Serialize(moduleData, moduleData.GetType(), jsonOptions);
-            
+
             if (verbose > 0)
             {
                 Logger.Section("Module Data", $"Collected data for module: {moduleId}");
@@ -940,20 +954,19 @@ public class Program
                 Console.WriteLine();
                 Logger.Section("JSON Output", "Raw module data in JSON format");
             }
-            
+
             // Output the JSON data
             Console.WriteLine(jsonData);
-            
+
             if (verbose > 0)
             {
                 Console.WriteLine();
                 Logger.Info("✅ Single module collection completed successfully");
+                Logger.Info("TIP: Now you can use --transmit-only to send this module's data");
                 Logger.Info("TIP: Use --collect-only with full collection to save all modules without transmission");
             }
-            
-            _logger!.LogInformation("Single module collection completed successfully for: {ModuleId}", moduleId);
-            
-            return 0;
+
+            _logger!.LogInformation("Single module collection completed successfully for: {ModuleId}", moduleId);            return 0;
         }
         catch (Exception ex)
         {
