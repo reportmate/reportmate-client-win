@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -7,18 +9,32 @@ class Program
 {
     static void Main()
     {
-        Console.WriteLine("Testing Unicode Normalization for WiFi SSIDs");
-        Console.WriteLine("==============================================");
+        Console.WriteLine("Testing Unicode Normalization for WiFi SSIDs - Enhanced Version");
+        Console.WriteLine("================================================================");
         
-        // Test the Unicode normalization similar to what's in NetworkModuleProcessor
-        var testInput = "Rod\\u0393\\u00C7\\u00D6s iPhone";
-        Console.WriteLine($"Original: {testInput}");
+        // Test the specific issue: RodΓÇÖs iPhone should become Rod's iPhone
+        var testCases = new[]
+        {
+            "RodΓÇÖs iPhone",    // The problematic case from the network.json
+            "Rod's iPhone",      // What it should be
+            "Rod\\u0393\\u00C7\\u00D6s iPhone", // JSON escaped version
+            "TestΓÇÖNetwork",    // Another test case
+            "Company'ΓÇÖs WiFi", // Mixed case
+        };
         
-        var normalized = NormalizeUnicodeString(testInput);
-        Console.WriteLine($"Normalized: {normalized}");
+        Console.WriteLine("Testing various Unicode normalization cases:");
+        Console.WriteLine("==========================================");
+        
+        foreach (var testInput in testCases)
+        {
+            Console.WriteLine($"\nOriginal: {testInput}");
+            var normalized = NormalizeUnicodeString(testInput);
+            Console.WriteLine($"Normalized: {normalized}");
+            Console.WriteLine($"Changed: {testInput != normalized}");
+        }
         
         // Test JSON serialization with the new encoder settings
-        var wifiNetwork = new { Ssid = normalized, SignalStrength = 85 };
+        var wifiNetwork = new { Ssid = NormalizeUnicodeString("RodΓÇÖs iPhone"), SignalStrength = 85 };
         
         // Test with default encoder (should escape Unicode)
         var defaultOptions = new JsonSerializerOptions
@@ -27,7 +43,7 @@ class Program
         };
         
         var defaultJson = JsonSerializer.Serialize(wifiNetwork, defaultOptions);
-        Console.WriteLine($"\nJSON with Default Encoder (should show escapes):\n{defaultJson}");
+        Console.WriteLine($"\nJSON with Default Encoder:\n{defaultJson}");
         
         // Test with relaxed encoder (should NOT escape Unicode)
         var relaxedOptions = new JsonSerializerOptions
@@ -37,12 +53,12 @@ class Program
         };
         
         var relaxedJson = JsonSerializer.Serialize(wifiNetwork, relaxedOptions);
-        Console.WriteLine($"\nJSON with Relaxed Encoder (should show Unicode directly):\n{relaxedJson}");
+        Console.WriteLine($"\nJSON with Relaxed Encoder:\n{relaxedJson}");
         
         // Demonstrate the fix
-        Console.WriteLine("\n=== DEMONSTRATION ===");
-        Console.WriteLine("Before fix: WiFi networks would show 'Rod\\u0393\\u00C7\\u00D6s iPhone'");
-        Console.WriteLine($"After fix: WiFi networks now show '{normalized}'");
+        Console.WriteLine("\n=== SOLUTION DEMONSTRATION ===");
+        Console.WriteLine("Problem: WiFi networks would show 'RodΓÇÖs iPhone'");
+        Console.WriteLine($"Solution: WiFi networks now show '{NormalizeUnicodeString("RodΓÇÖs iPhone")}'");
         
         Console.WriteLine("\nPress any key to exit...");
         Console.ReadKey();
@@ -55,6 +71,48 @@ class Program
         try
         {
             var result = input;
+            
+            // Fix common UTF-8 to Windows-1252 encoding issues first
+            // These happen when UTF-8 bytes are incorrectly decoded as Windows-1252
+            var encodingFixes = new Dictionary<string, string>
+            {
+                { "ΓÇÖ", "'" },  // Right single quotation mark (U+2019)
+                { "ΓÇÿ", "'" },  // Left single quotation mark (U+2018)  
+                { "Γǣ", "\"" }, // Left double quotation mark (U+201C)
+                { "ΓÇ¥", "\"" }, // Right double quotation mark (U+201D)
+                { "ΓÇô", "–" },  // En dash (U+2013)
+                { "ΓÇö", "—" },  // Em dash (U+2014)
+                { "ΓÇª", "…" },  // Horizontal ellipsis (U+2026)
+                { "Γé¼", "€" },  // Euro sign (U+20AC)
+                { "Γé░", "°" },  // Degree sign (U+00B0)
+            };
+
+            foreach (var fix in encodingFixes)
+            {
+                result = result.Replace(fix.Key, fix.Value);
+            }
+            
+            // Alternative approach: Try to detect and fix double-encoded UTF-8
+            // This happens when UTF-8 text is decoded as Latin-1, then encoded as UTF-8 again
+            try
+            {
+                var bytes = System.Text.Encoding.GetEncoding("ISO-8859-1").GetBytes(result);
+                var utf8Attempt = System.Text.Encoding.UTF8.GetString(bytes);
+                
+                // Only use the UTF-8 interpretation if it looks more reasonable
+                // (contains common punctuation that was likely mangled)
+                if (utf8Attempt.Contains("'") || utf8Attempt.Contains("'") || 
+                    utf8Attempt.Contains(""") || utf8Attempt.Contains(""") ||
+                    utf8Attempt.Contains("–") || utf8Attempt.Contains("—"))
+                {
+                    result = utf8Attempt;
+                    Console.WriteLine($"Applied UTF-8 double-encoding fix: '{input}' -> '{result}'");
+                }
+            }
+            catch
+            {
+                // If the double-encoding fix fails, continue with the current result
+            }
             
             // Handle JSON-style Unicode escape sequences like \u0393\u00C7\u00D6
             if (result.Contains("\\u"))
@@ -93,7 +151,7 @@ class Program
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to normalize Unicode string: {input}, Error: {ex.Message}");
+            Console.WriteLine($"Failed to normalize Unicode string: {input} - {ex.Message}");
             return input;
         }
     }

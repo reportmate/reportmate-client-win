@@ -983,7 +983,7 @@ try {
         }
 
         /// <summary>
-        /// Execute command and return output
+        /// Execute command and return output with proper encoding handling for Windows commands
         /// </summary>
         private string ExecuteCommand(string fileName, string arguments)
         {
@@ -995,6 +995,10 @@ try {
                 process.StartInfo.UseShellExecute = false;
                 process.StartInfo.RedirectStandardOutput = true;
                 process.StartInfo.CreateNoWindow = true;
+                
+                // For Windows commands like netsh, use the system's default encoding
+                // This is typically Windows-1252 or the system's ANSI code page
+                // We'll let .NET use the default encoding and then normalize the Unicode afterward
                 
                 process.Start();
                 var output = process.StandardOutput.ReadToEnd();
@@ -1094,7 +1098,7 @@ try {
         }
 
         /// <summary>
-        /// Normalize Unicode strings for proper display - Handles escaped Unicode sequences
+        /// Normalize Unicode strings for proper display - Handles escaped Unicode sequences and encoding issues
         /// </summary>
         private string? NormalizeUnicodeString(string? input)
         {
@@ -1103,6 +1107,48 @@ try {
             try
             {
                 var result = input;
+                
+                // Fix common UTF-8 to Windows-1252 encoding issues first
+                // These happen when UTF-8 bytes are incorrectly decoded as Windows-1252
+                var encodingFixes = new Dictionary<string, string>
+                {
+                    { "ΓÇÖ", "'" },  // Right single quotation mark (U+2019)
+                    { "ΓÇÿ", "'" },  // Left single quotation mark (U+2018)  
+                    { "Γǣ", "\"" }, // Left double quotation mark (U+201C)
+                    { "ΓÇ¥", "\"" }, // Right double quotation mark (U+201D)
+                    { "ΓÇô", "–" },  // En dash (U+2013)
+                    { "ΓÇö", "—" },  // Em dash (U+2014)
+                    { "ΓÇª", "…" },  // Horizontal ellipsis (U+2026)
+                    { "Γé¼", "€" },  // Euro sign (U+20AC)
+                    { "Γé░", "°" },  // Degree sign (U+00B0)
+                };
+
+                foreach (var fix in encodingFixes)
+                {
+                    result = result.Replace(fix.Key, fix.Value);
+                }
+                
+                // Alternative approach: Try to detect and fix double-encoded UTF-8
+                // This happens when UTF-8 text is decoded as Latin-1, then encoded as UTF-8 again
+                try
+                {
+                    var bytes = System.Text.Encoding.GetEncoding("ISO-8859-1").GetBytes(result);
+                    var utf8Attempt = System.Text.Encoding.UTF8.GetString(bytes);
+                    
+                    // Only use the UTF-8 interpretation if it looks more reasonable
+                    // (contains common punctuation that was likely mangled)
+                    if (utf8Attempt.Contains("'") || utf8Attempt.Contains("'") || 
+                        utf8Attempt.Contains(""") || utf8Attempt.Contains(""") ||
+                        utf8Attempt.Contains("–") || utf8Attempt.Contains("—"))
+                    {
+                        result = utf8Attempt;
+                        _logger.LogDebug("Applied UTF-8 double-encoding fix: '{Original}' -> '{Fixed}'", input, result);
+                    }
+                }
+                catch
+                {
+                    // If the double-encoding fix fails, continue with the current result
+                }
                 
                 // Handle JSON-style Unicode escape sequences like \u0393\u00C7\u00D6
                 if (result.Contains("\\u"))
@@ -1137,7 +1183,10 @@ try {
                 // Clean up any remaining problematic characters or sequences
                 result = result.Trim();
                 
-                _logger.LogDebug("Normalized Unicode string: '{Original}' -> '{Normalized}'", input, result);
+                if (result != input)
+                {
+                    _logger.LogDebug("Normalized Unicode string: '{Original}' -> '{Normalized}'", input, result);
+                }
                 
                 return result;
             }
