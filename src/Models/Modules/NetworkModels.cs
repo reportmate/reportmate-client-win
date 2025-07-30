@@ -29,6 +29,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string MacAddress { get; set; } = string.Empty;
         public string? ActiveWifiSsid { get; set; }
         public int? WifiSignalStrength { get; set; }
+        public string? ActiveWifiChannel { get; set; }
         public bool IsVpnActive { get; set; }
         public string VpnName { get; set; } = string.Empty;
     }
