@@ -416,12 +416,52 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         private string FormatUptime(TimeSpan uptime)
         {
-            if (uptime.TotalDays >= 1)
-                return $"{(int)uptime.TotalDays} days, {uptime.Hours} hours, {uptime.Minutes} minutes";
+            var parts = new List<string>();
+            
+            // Calculate total days for larger time periods
+            var totalDays = (int)uptime.TotalDays;
+            
+            // Handle months (approximating 30 days per month)
+            if (totalDays >= 30)
+            {
+                var months = totalDays / 30;
+                var remainingDays = totalDays % 30;
+                
+                parts.Add($"{months}mo");
+                if (remainingDays > 0)
+                    parts.Add($"{remainingDays}d");
+            }
+            // Handle weeks (7 days per week)
+            else if (totalDays >= 7)
+            {
+                var weeks = totalDays / 7;
+                var remainingDays = totalDays % 7;
+                
+                parts.Add($"{weeks}w");
+                if (remainingDays > 0)
+                    parts.Add($"{remainingDays}d");
+            }
+            // Handle days
+            else if (totalDays >= 1)
+            {
+                parts.Add($"{totalDays}d");
+                if (uptime.Hours > 0)
+                    parts.Add($"{uptime.Hours}h");
+            }
+            // Handle hours
             else if (uptime.TotalHours >= 1)
-                return $"{uptime.Hours} hours, {uptime.Minutes} minutes";
+            {
+                parts.Add($"{uptime.Hours}h");
+                if (uptime.Minutes > 0)
+                    parts.Add($"{uptime.Minutes}m");
+            }
+            // Handle minutes only
             else
-                return $"{uptime.Minutes} minutes";
+            {
+                parts.Add($"{uptime.Minutes}m");
+            }
+            
+            return string.Join(", ", parts);
         }
 
         public override async Task<bool> ValidateModuleDataAsync(SystemData data)
