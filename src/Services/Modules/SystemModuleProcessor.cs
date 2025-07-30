@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -39,8 +40,55 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (osqueryResults.TryGetValue("os_version", out var osVersion) && osVersion.Count > 0)
             {
                 var os = osVersion[0];
-                data.OperatingSystem.Name = GetStringValue(os, "name");
-                data.OperatingSystem.Version = GetStringValue(os, "version");
+                var osName = GetStringValue(os, "name");
+                
+                // Clean up OS name - extract just Windows version (Windows 10, Windows 11, etc.)
+                if (!string.IsNullOrEmpty(osName))
+                {
+                    // Extract Windows version from full name like "Microsoft Windows 11 Enterprise" -> "Windows 11"
+                    if (osName.Contains("Windows"))
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(osName, @"Windows\s+(\d+)");
+                        if (match.Success)
+                        {
+                            data.OperatingSystem.Name = $"Windows {match.Groups[1].Value}";
+                        }
+                        else
+                        {
+                            // Fallback - try to clean up common patterns
+                            var parts = osName.Replace("Microsoft ", "").Split(' ');
+                            if (parts.Length >= 2)
+                            {
+                                data.OperatingSystem.Name = $"{parts[0]} {parts[1]}";
+                            }
+                            else
+                            {
+                                data.OperatingSystem.Name = parts[0];
+                            }
+                        }
+                    }
+                    else
+                    {
+                        data.OperatingSystem.Name = osName;
+                    }
+                }
+                
+                // Clean up version string - remove redundant build information
+                var version = GetStringValue(os, "version");
+                if (!string.IsNullOrEmpty(version))
+                {
+                    // Remove "(Build XXXXX)" pattern if present
+                    var buildPattern = System.Text.RegularExpressions.Regex.Match(version, @"\s*\(Build\s+\d+\)");
+                    if (buildPattern.Success)
+                    {
+                        data.OperatingSystem.Version = version.Replace(buildPattern.Value, "").Trim();
+                    }
+                    else
+                    {
+                        data.OperatingSystem.Version = version;
+                    }
+                }
+                
                 data.OperatingSystem.Build = GetStringValue(os, "build");
                 data.OperatingSystem.Architecture = GetStringValue(os, "arch");
                 data.OperatingSystem.Major = GetIntValue(os, "major");
@@ -272,8 +320,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Process feature update information - get UBR and build to construct proper experience pack version
-            string buildNumber = "";
+            // Process feature update information - extract only the clean UBR number
             string ubrNumber = "";
             
             if (osqueryResults.TryGetValue("detailed_build", out var buildInfo))
@@ -283,21 +330,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var name = GetStringValue(entry, "name");
                     var regData = GetStringValue(entry, "data");
                     
-                    if (name == "CurrentBuild" && !string.IsNullOrEmpty(regData))
-                    {
-                        buildNumber = regData;
-                    }
-                    else if (name == "UBR" && !string.IsNullOrEmpty(regData))
+                    if (name == "UBR" && !string.IsNullOrEmpty(regData))
                     {
                         ubrNumber = regData;
+                        break;
                     }
                 }
             }
             
-            // Build the experience pack version in the format: Windows Feature Experience Pack 1000.{build}.{ubr}.0
-            if (!string.IsNullOrEmpty(buildNumber) && !string.IsNullOrEmpty(ubrNumber))
+            // Set clean feature update - just the UBR number with .0 suffix
+            if (!string.IsNullOrEmpty(ubrNumber))
             {
-                data.OperatingSystem.FeatureUpdate = $"Windows Feature Experience Pack 1000.{buildNumber}.{ubrNumber}.0";
+                data.OperatingSystem.FeatureUpdate = $"{ubrNumber}.0";
             }
             else if (osqueryResults.TryGetValue("experience_pack", out var experiencePack))
             {
@@ -308,22 +352,31 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     if (path?.Contains("WindowsFeatureExperience") == true && !string.IsNullOrEmpty(regData))
                     {
-                        data.OperatingSystem.FeatureUpdate = $"Windows Feature Experience Pack {regData}";
+                        // Extract just the UBR portion from full experience pack version
+                        // Format: "1000.26100.4652.0" -> extract "4652.0"
+                        var parts = regData.Split('.');
+                        if (parts.Length >= 3)
+                        {
+                            data.OperatingSystem.FeatureUpdate = $"{parts[2]}.{parts.LastOrDefault() ?? "0"}";
+                        }
+                        else
+                        {
+                            data.OperatingSystem.FeatureUpdate = regData;
+                        }
                         break;
                     }
                 }
                 
-                // If no Feature Experience Pack found, Windows 11+ doesn't use traditional service packs
+                // If no Feature Experience Pack found, use DisplayVersion as fallback
                 if (string.IsNullOrEmpty(data.OperatingSystem.FeatureUpdate))
                 {
-                    // For Windows 11, the DisplayVersion (like "24H2") serves as the feature update identifier
                     if (!string.IsNullOrEmpty(data.OperatingSystem.DisplayVersion))
                     {
-                        data.OperatingSystem.FeatureUpdate = $"Feature Update {data.OperatingSystem.DisplayVersion}";
+                        data.OperatingSystem.FeatureUpdate = data.OperatingSystem.DisplayVersion;
                     }
                     else
                     {
-                        data.OperatingSystem.FeatureUpdate = "No feature update information available";
+                        data.OperatingSystem.FeatureUpdate = "";
                     }
                 }
             }
