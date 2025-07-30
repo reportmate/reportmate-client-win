@@ -32,6 +32,21 @@
       "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\History\\' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters';",
       "interval": 3600,
       "description": "Domain join and group policy information"
+    },
+    "intune_device_ids": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\%' AND (name IN ('DeviceID', 'ZUSERREPOID', 'ObjectId', 'DeviceObjectId', 'IntuneDeviceID') OR name LIKE '%DeviceID%' OR name LIKE '%ObjectId%');",
+      "interval": 3600,
+      "description": "Intune and Entra device identification registry keys"
+    },
+    "entra_device_info": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AAD\\Storage\\%' AND (name LIKE '%ObjectId%' OR name LIKE '%DeviceId%' OR name LIKE '%TenantId%');",
+      "interval": 3600,
+      "description": "Entra (Azure AD) device object information from AAD storage"
+    },
+    "mdm_device_info": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Provisioning\\OMADM\\Accounts\\%' AND (name IN ('DeviceClientId', 'HWDevID', 'DeviceID') OR name LIKE '%DeviceID%');",
+      "interval": 3600,
+      "description": "MDM device identification from provisioning accounts"
     }
   }
 }

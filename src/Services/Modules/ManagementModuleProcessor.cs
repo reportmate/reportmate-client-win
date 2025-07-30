@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -451,6 +452,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                     certificateList.Add(certificate);
                 }
                 data.Metadata["Certificates"] = certificateList;
+                
+                // Extract Intune Device ID from certificates if not found in registry
+                ExtractIntuneDeviceIdFromCertificates(certificateList, data);
             }
 
             // Process compliance information
@@ -469,9 +473,125 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            // Process device identification from registry keys
+            ProcessDeviceIdentificationAsync(osqueryResults, data);
+
             _logger.LogDebug("Processed MDM data from osquery - Enrollment Status: {IsEnrolled}, Provider: {Provider}, Metadata entries: {MetadataCount}", 
                 data.MdmEnrollment.IsEnrolled, data.MdmEnrollment.Provider, data.Metadata.Count);
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Process device identification information from registry queries
+        /// </summary>
+        private void ProcessDeviceIdentificationAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            _logger.LogDebug("Processing device identification from registry queries");
+
+            // Process Intune device IDs
+            if (osqueryResults.TryGetValue("intune_device_ids", out var intuneDeviceIds))
+            {
+                _logger.LogDebug($"Found {intuneDeviceIds.Count} intune_device_ids entries");
+                foreach (var entry in intuneDeviceIds)
+                {
+                    var name = GetStringValue(entry, "name");
+                    var regData = GetStringValue(entry, "data");
+                    var path = GetStringValue(entry, "path");
+                    
+                    _logger.LogDebug($"Processing Intune device ID: {name} = {regData} (path: {path})");
+                    
+                    switch (name.ToLower())
+                    {
+                        case "deviceid":
+                        case "intunedeviceid":
+                            if (!string.IsNullOrEmpty(regData) && string.IsNullOrEmpty(data.DeviceDetails.IntuneDeviceId))
+                            {
+                                data.DeviceDetails.IntuneDeviceId = regData;
+                                _logger.LogInformation("Found Intune Device ID: {IntuneDeviceId}", regData);
+                            }
+                            break;
+                        case "objectid":
+                        case "deviceobjectid":
+                            if (!string.IsNullOrEmpty(regData) && string.IsNullOrEmpty(data.DeviceDetails.EntraObjectId))
+                            {
+                                data.DeviceDetails.EntraObjectId = regData;
+                                _logger.LogInformation("Found Entra Device Object ID: {EntraObjectId}", regData);
+                            }
+                            break;
+                        case "zuserrepoid":
+                            // Sometimes contains device identification info
+                            if (!string.IsNullOrEmpty(regData))
+                            {
+                                data.Metadata["ZUserRepoId"] = regData;
+                                _logger.LogDebug("Found ZUserRepoId: {ZUserRepoId}", regData);
+                            }
+                            break;
+                    }
+                }
+            }
+
+            // Process Entra device info from AAD storage
+            if (osqueryResults.TryGetValue("entra_device_info", out var entraDeviceInfo))
+            {
+                _logger.LogDebug($"Found {entraDeviceInfo.Count} entra_device_info entries");
+                foreach (var entry in entraDeviceInfo)
+                {
+                    var name = GetStringValue(entry, "name");
+                    var regData = GetStringValue(entry, "data");
+                    var path = GetStringValue(entry, "path");
+                    
+                    _logger.LogDebug($"Processing Entra device info: {name} = {regData} (path: {path})");
+                    
+                    if (name.ToLower().Contains("objectid") && !string.IsNullOrEmpty(regData))
+                    {
+                        if (string.IsNullOrEmpty(data.DeviceDetails.EntraObjectId))
+                        {
+                            data.DeviceDetails.EntraObjectId = regData;
+                            _logger.LogInformation("Found Entra Device Object ID from AAD storage: {EntraObjectId}", regData);
+                        }
+                    }
+                }
+            }
+
+            // Process MDM device info from provisioning accounts
+            if (osqueryResults.TryGetValue("mdm_device_info", out var mdmDeviceInfo))
+            {
+                _logger.LogDebug($"Found {mdmDeviceInfo.Count} mdm_device_info entries");
+                foreach (var entry in mdmDeviceInfo)
+                {
+                    var name = GetStringValue(entry, "name");
+                    var regData = GetStringValue(entry, "data");
+                    var path = GetStringValue(entry, "path");
+                    
+                    _logger.LogDebug($"Processing MDM device info: {name} = {regData} (path: {path})");
+                    
+                    switch (name.ToLower())
+                    {
+                        case "deviceclientid":
+                        case "deviceid":
+                            if (!string.IsNullOrEmpty(regData) && string.IsNullOrEmpty(data.DeviceDetails.IntuneDeviceId))
+                            {
+                                data.DeviceDetails.IntuneDeviceId = regData;
+                                _logger.LogInformation("Found Intune Device ID from MDM provisioning: {IntuneDeviceId}", regData);
+                            }
+                            break;
+                        case "hwdevid":
+                            // Hardware device ID is redundant with system UUID - skipping
+                            _logger.LogDebug("Skipping Hardware Device ID (redundant with system UUID): {HwDevId}", regData);
+                            break;
+                    }
+                }
+            }
+
+            // Ensure DeviceId (from dsregcmd) is copied to EntraObjectId if we don't have it yet
+            if (!string.IsNullOrEmpty(data.DeviceDetails.DeviceId) && string.IsNullOrEmpty(data.DeviceDetails.EntraObjectId))
+            {
+                data.DeviceDetails.EntraObjectId = data.DeviceDetails.DeviceId;
+                _logger.LogInformation("Using dsregcmd DeviceId as Entra Object ID: {EntraObjectId}", data.DeviceDetails.DeviceId);
+            }
+
+            _logger.LogInformation("Device identification summary - Intune ID: {IntuneDeviceId}, Entra Object ID: {EntraObjectId}", 
+                data.DeviceDetails.IntuneDeviceId, data.DeviceDetails.EntraObjectId);
         }
 
         private string ExtractSection(string dsregOutput, string sectionName)
@@ -582,6 +702,50 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return isValid;
+        }
+
+        private void ExtractIntuneDeviceIdFromCertificates(List<Dictionary<string, object>> certificateList, ManagementData data)
+        {
+            try
+            {
+                _logger.LogDebug("Attempting to extract Intune Device ID from certificates");
+                
+                using (var store = new X509Store(StoreName.My, StoreLocation.LocalMachine))
+                {
+                    store.Open(OpenFlags.ReadOnly);
+                    
+                    foreach (var cert in store.Certificates)
+                    {
+                        // Check if this is an Intune MDM certificate
+                        if (cert.Issuer?.Contains("Microsoft Intune MDM Device CA") == true)
+                        {
+                            _logger.LogDebug("Found Intune MDM certificate with Subject: {Subject}", cert.Subject);
+                            
+                            // Extract GUID from Subject
+                            var match = System.Text.RegularExpressions.Regex.Match(cert.Subject, 
+                                @"[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}");
+                            
+                            if (match.Success)
+                            {
+                                var deviceId = match.Value;
+                                _logger.LogDebug("Extracted Intune Device ID from certificate: {DeviceId}", deviceId);
+                                
+                                // Set the Intune Device ID if not already set
+                                if (string.IsNullOrEmpty(data.DeviceDetails.IntuneDeviceId))
+                                {
+                                    data.DeviceDetails.IntuneDeviceId = deviceId;
+                                    _logger.LogInformation("Set Intune Device ID from certificate: {DeviceId}", deviceId);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error extracting Intune Device ID from certificates");
+            }
         }
     }
 }
