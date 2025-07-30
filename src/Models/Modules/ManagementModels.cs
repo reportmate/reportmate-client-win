@@ -67,13 +67,17 @@ namespace ReportMate.WindowsClient.Models.Modules
 
     public class DeviceDetails
     {
-        public string DeviceId { get; set; } = string.Empty;
+        public string DeviceId { get; set; } = string.Empty; // Entra Device Object ID from dsregcmd
         public string Thumbprint { get; set; } = string.Empty;
         public string DeviceCertificateValidity { get; set; } = string.Empty;
         public string KeyContainerId { get; set; } = string.Empty;
         public string KeyProvider { get; set; } = string.Empty;
         public bool TmpProtected { get; set; }
         public string DeviceAuthStatus { get; set; } = string.Empty;
+        
+        // Enhanced device identification
+        public string IntuneDeviceId { get; set; } = string.Empty; // Microsoft Intune Device ID
+        public string EntraObjectId { get; set; } = string.Empty; // Microsoft Entra Device Object ID (confirmed)
     }
 
     public class TenantDetails
