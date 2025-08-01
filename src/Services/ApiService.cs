@@ -931,7 +931,7 @@ public class ApiService : IApiService
             var eventRequest = new StructuredEventRequest
             {
                 Device = deviceSerial,
-                Kind = "System",
+                Kind = "Info",
                 Ts = DateTime.UtcNow.ToString("O"),
                 Payload = eventData
             };
