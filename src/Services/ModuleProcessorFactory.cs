@@ -192,6 +192,7 @@ namespace ReportMate.WindowsClient.Services
         private readonly Type _processorType;
         private readonly MethodInfo _processMethod;
         private readonly MethodInfo _validateMethod;
+        private readonly MethodInfo _generateEventsMethod;
 
         public string ModuleId { get; }
 
@@ -211,6 +212,10 @@ namespace ReportMate.WindowsClient.Services
             // Get the ValidateModuleDataAsync method
             _validateMethod = _processorType.GetMethod("ValidateModuleDataAsync")
                 ?? throw new InvalidOperationException($"ValidateModuleDataAsync method not found on {_processorType.Name}");
+
+            // Get the GenerateEventsAsync method
+            _generateEventsMethod = _processorType.GetMethod("GenerateEventsAsync")
+                ?? throw new InvalidOperationException($"GenerateEventsAsync method not found on {_processorType.Name}");
         }
 
         public async Task<BaseModuleData> ProcessModuleAsync(
@@ -252,6 +257,25 @@ namespace ReportMate.WindowsClient.Services
             catch (Exception ex)
             {
                 throw new InvalidOperationException($"Error invoking ValidateModuleDataAsync on {_processorType.Name}", ex);
+            }
+        }
+
+        public async Task<List<ReportMateEvent>> GenerateEventsAsync(BaseModuleData data)
+        {
+            try
+            {
+                var result = _generateEventsMethod.Invoke(_processor, new object[] { data });
+                
+                if (result is Task<List<ReportMateEvent>> task)
+                {
+                    return await task;
+                }
+                
+                return (List<ReportMateEvent>)result!;
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Error invoking GenerateEventsAsync on {_processorType.Name}", ex);
             }
         }
 
