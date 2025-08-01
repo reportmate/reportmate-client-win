@@ -123,6 +123,21 @@ namespace ReportMate.WindowsClient.Services
 
                         // Assign to payload based on module type
                         AssignModuleDataToPayload(payload, moduleData);
+
+                        // Generate events from module data
+                        try
+                        {
+                            var moduleEvents = await processor.GenerateEventsAsync(moduleData);
+                            if (moduleEvents.Any())
+                            {
+                                payload.Events.AddRange(moduleEvents);
+                                _logger.LogDebug("Generated {EventCount} events from module {ModuleId}", moduleEvents.Count, processor.ModuleId);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to generate events from module {ModuleId}", processor.ModuleId);
+                        }
                         
                         // Log completion with checkmark
                         _logger.LogInformation("✓ Module {ModuleId} completed", processor.ModuleId);
@@ -209,6 +224,25 @@ namespace ReportMate.WindowsClient.Services
                     _logger.LogWarning("Module {ModuleId} data validation failed", processor.ModuleId);
                 }
 
+                // Generate events from module data (for single module collections)
+                try
+                {
+                    var moduleEvents = await processor.GenerateEventsAsync(moduleData);
+                    if (moduleEvents.Any())
+                    {
+                        _logger.LogInformation("Generated {EventCount} events from single module {ModuleId}", moduleEvents.Count, processor.ModuleId);
+                        // Note: For single module collection, events will be added to unified payload in CreateSingleModuleUnifiedPayloadAsync
+                    }
+                    else
+                    {
+                        _logger.LogDebug("No events generated from single module {ModuleId}", processor.ModuleId);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to generate events from single module {ModuleId}", processor.ModuleId);
+                }
+
                 // Save module data locally
                 await SaveModuleDataWithRuntimeType(processor.ModuleId, moduleData);
 
@@ -257,6 +291,29 @@ namespace ReportMate.WindowsClient.Services
 
                 // Assign the single module data to the payload
                 AssignModuleDataToPayload(payload, moduleData);
+
+                // Generate events for the single module and add to unified payload
+                try
+                {
+                    var processor = _moduleProcessorFactory.GetProcessor(moduleData.ModuleId);
+                    if (processor != null)
+                    {
+                        var moduleEvents = await processor.GenerateEventsAsync(moduleData);
+                        if (moduleEvents.Any())
+                        {
+                            payload.Events.AddRange(moduleEvents);
+                            _logger.LogInformation("Added {EventCount} events from single module {ModuleId} to unified payload", moduleEvents.Count, moduleData.ModuleId);
+                        }
+                        else
+                        {
+                            _logger.LogDebug("No events to add from single module {ModuleId} to unified payload", moduleData.ModuleId);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to generate events for single module {ModuleId} in unified payload", moduleData.ModuleId);
+                }
 
                 // Save the unified payload as event.json
                 await SaveUnifiedPayloadAsync(payload);
