@@ -1,22 +1,32 @@
 {
   "module": "installs",
-  "version": "4.0.0",
-  "description": "Cimian managed software installation tracking using structured reports data from C:\\ProgramData\\ManagedInstalls\\reports",
+  "version": "5.0.0",
+  "description": "Enhanced Cimian managed software installation tracking with comprehensive deployment intelligence from structured reports in C:\\ProgramData\\ManagedInstalls\\reports",
   "queries": {
+    "cimian_log_sessions": {
+      "query": "SELECT filename as session_id, path as session_path, size, mtime FROM file WHERE directory = 'C:\\ProgramData\\ManagedInstalls\\logs' AND type = 'directory' ORDER BY mtime DESC LIMIT 10;",
+      "interval": 300,
+      "description": "Recent Cimian session directories with structured logs"
+    },
+    "cimian_latest_session": {
+      "query": "SELECT filename as file_type, path, size, mtime FROM file WHERE directory IN (SELECT path FROM file WHERE directory = 'C:\\ProgramData\\ManagedInstalls\\logs' AND type = 'directory' ORDER BY mtime DESC LIMIT 1) AND filename IN ('session.json', 'events.jsonl') AND type = 'regular';",
+      "interval": 180,
+      "description": "Latest Cimian session data files (session.json and events.jsonl)"
+    },
     "cimian_reports_sessions": {
       "query": "SELECT 'sessions_report' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\reports\\sessions.json' AND type = 'regular';",
       "interval": 300,
-      "description": "Cimian session reports with run types, status, duration, and action counts"
+      "description": "Enhanced Cimian session reports with configuration context and operational metrics"
     },
     "cimian_reports_items": {
       "query": "SELECT 'items_report' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\reports\\items.json' AND type = 'regular';",
       "interval": 300,
-      "description": "Cimian managed items reports with install history, loop detection, and recent attempts"
+      "description": "Enhanced Cimian package intelligence with install methods, loop detection, and lifecycle tracking"
     },
     "cimian_reports_events": {
       "query": "SELECT 'events_report' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\reports\\events.json' AND type = 'regular';",
-      "interval": 180,
-      "description": "Cimian detailed event logs with timestamps, levels, types, actions, and status messages"
+      "interval": 300,
+      "description": "Enhanced Cimian structured event intelligence with version capture and debugging context"
     },
     "cimian_configuration": {
       "query": "SELECT 'config_file' as source, path, size, mtime FROM file WHERE path = 'C:\\ProgramData\\ManagedInstalls\\config.yaml' AND type = 'regular';",
@@ -52,6 +62,31 @@
       "query": "SELECT name, status, start_type, path, description, pid FROM services WHERE name LIKE '%Cimian%' OR path LIKE '%Cimian%' OR description LIKE '%Cimian%';",
       "interval": 300,
       "description": "Cimian-related Windows services and their status"
+    },
+    "cimian_executable_version": {
+      "query": "SELECT filename, path, version, size, mtime FROM file WHERE path = 'C:\\Program Files\\Cimian\\managedsoftwareupdate.exe' AND type = 'regular';",
+      "interval": 1800,
+      "description": "Cimian managedsoftwareupdate.exe executable version and file information"
+    },
+    "cimian_managed_software": {
+      "query": "SELECT name, version, publisher, install_location, install_date FROM programs WHERE (name LIKE '%Cimian%' OR publisher LIKE '%Cimian%') OR name = 'Managed Software Center';",
+      "interval": 1800,
+      "description": "Cimian installed software entries from Windows programs registry"
+    },
+    "cimian_active_processes": {
+      "query": "SELECT name, path, pid, parent, cmdline FROM processes WHERE (name LIKE '%cimian%' OR name LIKE '%managedsoftwareupdate%' OR path LIKE '%Cimian%') AND state = 'R';",
+      "interval": 300,
+      "description": "Active Cimian processes currently running on the system"
+    },
+    "cimian_package_registry": {
+      "query": "SELECT name, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Cimian\\Packages';",
+      "interval": 600,
+      "description": "Cimian package registry configuration and installed package tracking"
+    },
+    "cimian_managed_items": {
+      "query": "SELECT 'reports_metadata' as source, filename, path, size, mtime FROM file WHERE directory = 'C:\\ProgramData\\ManagedInstalls\\reports' AND filename IN ('sessions.json', 'items.json', 'events.json') AND type = 'regular';",
+      "interval": 300,
+      "description": "Enhanced Cimian report file metadata for tracking report generation and freshness"
     }
   }
 }
