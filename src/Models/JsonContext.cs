@@ -169,4 +169,5 @@ public class DeviceDataPayload
     public string CollectionType { get; set; } = "comprehensive";
     public string ManagedInstallsSystem { get; set; } = "Cimian";
     public string Source { get; set; } = "runner.exe";
+    public object[]? Metadata { get; set; } = null; // Events array for API compatibility
 }
