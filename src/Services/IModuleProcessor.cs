@@ -26,6 +26,13 @@ namespace ReportMate.WindowsClient.Services
         Task<T> ProcessModuleAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, string deviceId);
 
         /// <summary>
+        /// Generate events from the processed module data
+        /// </summary>
+        /// <param name="data">Processed module data</param>
+        /// <returns>List of events to be included in the payload</returns>
+        Task<List<ReportMateEvent>> GenerateEventsAsync(T data);
+
+        /// <summary>
         /// Validate module data before saving
         /// </summary>
         /// <param name="data">Module data to validate</param>
@@ -49,6 +56,15 @@ namespace ReportMate.WindowsClient.Services
         public abstract string ModuleId { get; }
 
         public abstract Task<T> ProcessModuleAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, string deviceId);
+
+        /// <summary>
+        /// Generate events from processed module data. Override in derived classes to provide module-specific event generation.
+        /// </summary>
+        public virtual Task<List<ReportMateEvent>> GenerateEventsAsync(T data)
+        {
+            // Default implementation returns empty list - modules can override to generate events
+            return Task.FromResult(new List<ReportMateEvent>());
+        }
 
         public virtual Task<bool> ValidateModuleDataAsync(T data)
         {
@@ -164,6 +180,35 @@ namespace ReportMate.WindowsClient.Services
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// Helper method to create ReportMate events from module data
+        /// </summary>
+        protected static ReportMateEvent CreateEvent(string eventType, string message, Dictionary<string, object>? details = null, DateTime? timestamp = null)
+        {
+            return new ReportMateEvent
+            {
+                EventType = eventType,
+                Message = message,
+                Timestamp = timestamp ?? DateTime.UtcNow,
+                Details = details ?? new Dictionary<string, object>()
+            };
+        }
+
+        /// <summary>
+        /// Maps Cimian level to ReportMate event type
+        /// </summary>
+        protected static string MapCimianLevelToEventType(string level)
+        {
+            return level?.ToUpperInvariant() switch
+            {
+                "INFO" => "info",
+                "WARN" => "warning", 
+                "ERROR" => "error",
+                "SUCCESS" => "success",
+                _ => "info"
+            };
         }
     }
 }
