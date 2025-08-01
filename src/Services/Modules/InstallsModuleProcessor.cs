@@ -28,11 +28,12 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             /// <summary>
             /// Maps Cimian's detailed status values to ReportMate's simplified dashboard statuses
+            /// Uses only: Installed, Pending, Warning, Error, Removed
             /// </summary>
             private static string MapCimianStatusToReportMate(string cimianStatus, bool hasInstallLoop = false)
             {
                 if (string.IsNullOrEmpty(cimianStatus))
-                    return "Unknown";
+                    return "Pending";  // Default unknown to Pending
 
                 // If install loop is detected, override status to "Installed" regardless of current_status
                 if (hasInstallLoop)
@@ -40,17 +41,31 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                 return cimianStatus.ToLowerInvariant() switch
                 {
-                    // Mapping based on user specification
+                    // Installed - Successfully installed and working
                     "installed" => "Installed",
+                    "success" => "Installed",
+                    "install loop" => "Installed", // Install Loop → Installed
+                    
+                    // Pending - Needs action or in progress  
                     "available" => "Pending",
                     "pending" => "Pending", 
-                    "install loop" => "Installed", // Install Loop → Installed
-                    "failed" => "Error",  // Failed → Error
                     "update available" => "Pending", // Update Available → Pending
-                    "not applicable" => "Not Applicable",
                     "downloading" => "Pending", // Downloading → Pending
                     "installing" => "Pending", // Installing → Pending
-                    _ => cimianStatus // Keep original if no mapping found
+                    
+                    // Warning - Installed but with issues
+                    "warning" => "Warning",
+                    
+                    // Error - Failed installation or critical issues
+                    "failed" => "Error",  // Failed → Error
+                    "error" => "Error",
+                    "fail" => "Error",
+                    
+                    // Removed - Uninstalled or removed
+                    "removed" => "Removed",
+                    "uninstalled" => "Removed",
+                    
+                    _ => "Pending" // Default unknown to Pending
                 };
             }        public override Task<InstallsData> ProcessModuleAsync(
             Dictionary<string, List<Dictionary<string, object>>> osqueryResults, 
