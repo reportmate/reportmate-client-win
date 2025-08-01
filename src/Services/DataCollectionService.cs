@@ -330,6 +330,31 @@ public class DataCollectionService : IDataCollectionService
         
         payload.OsQuery = osQueryDict;
 
+        // Convert Events to metadata array format for API compatibility
+        if (modularPayload.Events != null && modularPayload.Events.Count > 0)
+        {
+            var metadataArray = new List<Dictionary<string, object>>();
+            foreach (var evt in modularPayload.Events)
+            {
+                var eventDict = new Dictionary<string, object>
+                {
+                    ["eventType"] = evt.EventType,
+                    ["message"] = evt.Message,
+                    ["timestamp"] = evt.Timestamp.ToString("O")
+                };
+
+                if (evt.Details != null && evt.Details.Count > 0)
+                {
+                    eventDict["details"] = evt.Details;
+                }
+
+                metadataArray.Add(eventDict);
+            }
+            
+            // Add metadata array to payload - this is what the API expects
+            payload.Metadata = metadataArray.ToArray();
+        }
+
         return new DeviceDataRequest
         {
             Device = modularPayload.Metadata.DeviceId,
