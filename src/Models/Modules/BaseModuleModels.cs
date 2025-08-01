@@ -40,6 +40,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         // Metadata at the top
         public EventMetadata Metadata { get; set; } = new();
         
+        // Events array for ReportMate events generated from module data
+        public List<ReportMateEvent> Events { get; set; } = new();
+        
         // Module data sections in specified order
         public InventoryData? Inventory { get; set; }
         public SystemData? System { get; set; }
@@ -52,5 +55,16 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DisplayData? Displays { get; set; }
         public PrinterData? Printers { get; set; }
         public ApplicationsData? Applications { get; set; }
+    }
+
+    /// <summary>
+    /// ReportMate event structure for the events array
+    /// </summary>
+    public class ReportMateEvent
+    {
+        public string EventType { get; set; } = string.Empty;
+        public string Message { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+        public Dictionary<string, object> Details { get; set; } = new();
     }
 }
