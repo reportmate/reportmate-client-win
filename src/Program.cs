@@ -1124,7 +1124,7 @@ public class Program
                 if (verbose > 0)
                 {
                     Logger.Info("✅ Unified payload transmitted successfully");
-                    Logger.Info("Device should be visible in dashboard at /device/{0}", unifiedPayload.Inventory?.SerialNumber ?? unifiedPayload.Metadata.DeviceId);
+                    Logger.Info("Device should be visible in dashboard at /device/{0}", unifiedPayload.Inventory?.SerialNumber ?? unifiedPayload.Metadata.SerialNumber ?? unifiedPayload.Metadata.DeviceId);
                 }
                 return 0;
             }
