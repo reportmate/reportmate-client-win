@@ -103,6 +103,29 @@ namespace ReportMate.WindowsClient.Models.Modules
         
         // Enhanced session data from sessions.json
         public Dictionary<string, object> Summary { get; set; } = new(); // totalPackagesManaged, packagesInstalled, etc
+        
+        // Enhanced logging improvements data
+        public Dictionary<string, object> SystemInfo { get; set; } = new(); // System context from enhanced logging
+        public Dictionary<string, bool> Flags { get; set; } = new(); // Command flags and options
+        public List<BatchOperation> BatchOperations { get; set; } = new(); // Batch install/uninstall operations
+        public Dictionary<string, object> PerformanceMetrics { get; set; } = new(); // Timing and performance data
+        public List<string> FailedItems { get; set; } = new(); // Failed package names for troubleshooting
+        public Dictionary<string, List<string>> BlockingApplications { get; set; } = new(); // Package -> blocking apps mapping
+    }
+
+    public class BatchOperation
+    {
+        public string OperationType { get; set; } = string.Empty; // install, uninstall, update
+        public string BatchId { get; set; } = string.Empty;
+        public DateTime StartTime { get; set; }
+        public DateTime? EndTime { get; set; }
+        public TimeSpan? Duration { get; set; }
+        public int TotalItems { get; set; }
+        public int SuccessfulItems { get; set; }
+        public int FailedItems { get; set; }
+        public List<string> SuccessfulPackages { get; set; } = new();
+        public List<string> FailedPackages { get; set; } = new();
+        public Dictionary<string, object> Context { get; set; } = new(); // Additional context data
     }
 
     public class CimianEvent
@@ -125,6 +148,16 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string SourceFunction { get; set; } = string.Empty;
         public int SourceLine { get; set; }
         public string LogFile { get; set; } = string.Empty;
+        
+        // Enhanced logging improvements data
+        public string BatchId { get; set; } = string.Empty; // Link to batch operations
+        public string InstallerType { get; set; } = string.Empty; // MSI, NUPKG, EXE, etc.
+        public string InstallerPath { get; set; } = string.Empty;
+        public string InstallerOutput { get; set; } = string.Empty; // Capture installer stdout/stderr
+        public Dictionary<string, object> SystemContext { get; set; } = new(); // System state during event
+        public List<string> RelatedPackages { get; set; } = new(); // Dependencies or related packages
+        public Dictionary<string, string> PerformanceCounters { get; set; } = new(); // CPU, memory, disk usage
+        public bool CheckOnlyMode { get; set; } // Whether this was a check-only operation
     }
 
     public class MunkiInfo
