@@ -112,13 +112,16 @@ public class ApiService : IApiService
 
             // Use Serial Number as the primary identifier for API routing
             // The URL should be /device/{serial} while DeviceId field shows the hardware UUID
-            var deviceSerial = deviceInfo?.SerialNumber ?? Environment.MachineName;
+            var deviceSerial = deviceData.SerialNumber ?? deviceInfo?.SerialNumber ?? Environment.MachineName;
             var hardwareUuid = deviceInfo?.DeviceId; // This is the actual hardware UUID
             
             _logger.LogInformation("=== TRANSMISSION DETAILS ===");
-            _logger.LogInformation("Device Serial Number: {DeviceSerial} (used for URL routing)", deviceSerial);
-            _logger.LogInformation("Hardware UUID: {HardwareUuid} (used for DeviceId field)", hardwareUuid);
-            _logger.LogInformation("Computer Name: {ComputerName}", deviceInfo?.ComputerName ?? "Unknown");
+            _logger.LogInformation("Device UUID: {HardwareUuid}", hardwareUuid);
+            _logger.LogInformation("Device Serial: {DeviceSerial} (used for URL routing)", deviceSerial);
+            _logger.LogInformation("Platform: {Platform}", "Windows");
+            _logger.LogInformation("Collection Type: {CollectionType}", "Single");
+            _logger.LogInformation("Enabled Modules: {EnabledModules}", "Unknown");
+            _logger.LogInformation("Client Version: {ClientVersion}", "2025.8.1.0");
             _logger.LogInformation("Expected Dashboard URL: /device/{DeviceSerial}", deviceSerial);
 
             // Analyze payload composition
@@ -443,7 +446,7 @@ public class ApiService : IApiService
             _logger.LogInformation("=== UNIFIED PAYLOAD TRANSMISSION STARTING ===");
             _logger.LogInformation("Sending unified payload to ReportMate API...");
 
-            var deviceSerial = payload.Inventory?.SerialNumber ?? payload.Metadata.DeviceId;
+            var deviceSerial = payload.Metadata.SerialNumber ?? payload.Inventory?.SerialNumber ?? payload.Metadata.DeviceId;
             var deviceId = payload.Metadata.DeviceId;
             
             _logger.LogInformation("=== TRANSMISSION DETAILS ===");
@@ -638,7 +641,7 @@ public class ApiService : IApiService
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
                 _logger.LogInformation("Device {DeviceId} registered successfully", deviceInfo.DeviceId);
-                _logger.LogInformation("New Client event should be visible in dashboard at /device/{DeviceId}", deviceInfo.DeviceId);
+                _logger.LogInformation("New Client event should be visible in dashboard at /device/{SerialNumber}", deviceInfo.SerialNumber);
                 _logger.LogInformation("Response: {Response}", responseContent);
                 return true;
             }

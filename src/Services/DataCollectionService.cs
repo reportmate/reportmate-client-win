@@ -146,7 +146,7 @@ public class DataCollectionService : IDataCollectionService
                 else
                 {
                     _logger.LogInformation("Device {DeviceId} registered successfully", deviceId);
-                    _logger.LogInformation("New Client event should be visible in dashboard at /device/{DeviceId}", deviceId);
+                    _logger.LogInformation("New Client event should be visible in dashboard at /device/{SerialNumber}", serialNumber);
                 }
             }
             else
@@ -190,7 +190,7 @@ public class DataCollectionService : IDataCollectionService
         var success = await _apiService.SendUnifiedPayloadAsync(modularPayload);            if (success)
             {
                 _logger.LogInformation("SUCCESS: Data transmission completed successfully");
-                _logger.LogInformation("DASHBOARD: Data should be visible at /device/{DeviceId}", modularPayload.Metadata.DeviceId);
+                _logger.LogInformation("DASHBOARD: Data should be visible at /device/{DeviceSerial}", modularPayload.Metadata.SerialNumber ?? modularPayload.Inventory?.SerialNumber ?? modularPayload.Metadata.DeviceId);
                 await _configurationService.UpdateLastRunTimeAsync();
                 return true;
             }
@@ -357,8 +357,8 @@ public class DataCollectionService : IDataCollectionService
 
         return new DeviceDataRequest
         {
-            Device = modularPayload.Metadata.DeviceId,
-            SerialNumber = modularPayload.Inventory?.SerialNumber ?? "",
+            Device = modularPayload.Metadata.SerialNumber ?? modularPayload.Inventory?.SerialNumber ?? "",
+            SerialNumber = modularPayload.Metadata.SerialNumber ?? modularPayload.Inventory?.SerialNumber ?? "",
             Kind = "Info",
             Ts = DateTime.UtcNow.ToString("O"),
             Payload = payload
