@@ -80,6 +80,17 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Services.OsQueryModule))]
 // Profile module policy collection result
 [JsonSerializable(typeof(Modules.PolicyCollectionResult[]), TypeInfoPropertyName = "PolicyCollectionResultArray")]
+// Analytics types for performance data
+[JsonSerializable(typeof(Modules.PerformanceAnalytics))]
+[JsonSerializable(typeof(Modules.BatchOperationsAnalytics))]
+[JsonSerializable(typeof(Modules.BlockingApplicationInfo))]
+[JsonSerializable(typeof(Modules.PerformanceTrends))]
+[JsonSerializable(typeof(Modules.EventAnalytics))]
+[JsonSerializable(typeof(Modules.PackageAnalytics))]
+[JsonSerializable(typeof(Modules.CacheStatusAnalytics))]
+[JsonSerializable(typeof(Dictionary<string, Modules.BlockingApplicationInfo>))]
+[JsonSerializable(typeof(Dictionary<string, Modules.PackageAnalytics>))]
+[JsonSerializable(typeof(Dictionary<string, int>))]
 // Anonymous types used in data transmission
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(object))]

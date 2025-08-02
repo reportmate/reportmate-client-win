@@ -96,6 +96,14 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process cache status
             ProcessCacheStatus(osqueryResults, data);
 
+            // Generate enhanced analytics from the processed data
+            var analytics = GenerateEnhancedAnalytics(data);
+            var recommendations = GeneratePerformanceRecommendations(analytics);
+            
+            // Store analytics in the data for API consumption
+            data.CacheStatus["enhanced_analytics"] = analytics;
+            data.CacheStatus["performance_recommendations"] = recommendations;
+
             data.LastCheckIn = DateTime.UtcNow;
 
             _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Sessions: {SessionCount}, Events: {EventCount}", 
@@ -664,6 +672,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
+                // Store as individual properties instead of anonymous object
                 data.CacheStatus["total_size_bytes"] = totalSize;
                 data.CacheStatus["file_count"] = fileCount;
                 data.CacheStatus["latest_file"] = latestFile;
@@ -732,6 +741,69 @@ namespace ReportMate.WindowsClient.Services.Modules
                     foreach (var envItem in envProp.EnumerateObject())
                     {
                         session.Environment[envItem.Name] = envItem.Value.ToString();
+                    }
+                }
+
+                // Enhanced logging metadata extraction
+                if (root.TryGetProperty("system_info", out var systemInfoProp))
+                {
+                    foreach (var sysItem in systemInfoProp.EnumerateObject())
+                    {
+                        session.SystemInfo[sysItem.Name] = sysItem.Value.ToString();
+                    }
+                }
+
+                if (root.TryGetProperty("flags", out var flagsProp))
+                {
+                    foreach (var flagItem in flagsProp.EnumerateObject())
+                    {
+                        if (flagItem.Value.ValueKind == JsonValueKind.True || flagItem.Value.ValueKind == JsonValueKind.False)
+                        {
+                            session.Flags[flagItem.Name] = flagItem.Value.GetBoolean();
+                        }
+                    }
+                }
+
+                if (root.TryGetProperty("performance_metrics", out var perfProp))
+                {
+                    foreach (var perfItem in perfProp.EnumerateObject())
+                    {
+                        session.PerformanceMetrics[perfItem.Name] = perfItem.Value.ToString();
+                    }
+                }
+
+                if (root.TryGetProperty("failed_items", out var failedItemsProp))
+                {
+                    foreach (var failedItem in failedItemsProp.EnumerateArray())
+                    {
+                        var failedPackage = failedItem.GetString();
+                        if (!string.IsNullOrEmpty(failedPackage))
+                        {
+                            session.FailedItems.Add(failedPackage);
+                        }
+                    }
+                }
+
+                if (root.TryGetProperty("blocking_applications", out var blockingAppsProp))
+                {
+                    foreach (var blockingItem in blockingAppsProp.EnumerateObject())
+                    {
+                        var packageName = blockingItem.Name;
+                        var blockingApps = new List<string>();
+                        
+                        foreach (var appItem in blockingItem.Value.EnumerateArray())
+                        {
+                            var appName = appItem.GetString();
+                            if (!string.IsNullOrEmpty(appName))
+                            {
+                                blockingApps.Add(appName);
+                            }
+                        }
+                        
+                        if (blockingApps.Any())
+                        {
+                            session.BlockingApplications[packageName] = blockingApps;
+                        }
                     }
                 }
 
@@ -834,6 +906,48 @@ namespace ReportMate.WindowsClient.Services.Modules
                             foreach (var contextItem in contextProp.EnumerateObject())
                             {
                                 cimianEvent.Context[contextItem.Name] = contextItem.Value.ToString();
+                            }
+                        }
+
+                        // Enhanced logging data extraction
+                        if (root.TryGetProperty("batch_id", out var batchIdProp))
+                        {
+                            cimianEvent.BatchId = batchIdProp.GetString() ?? "";
+                        }
+
+                        if (root.TryGetProperty("installer_type", out var installerTypeProp))
+                        {
+                            cimianEvent.InstallerType = installerTypeProp.GetString() ?? "";
+                        }
+
+                        if (root.TryGetProperty("installer_path", out var installerPathProp))
+                        {
+                            cimianEvent.InstallerPath = installerPathProp.GetString() ?? "";
+                        }
+
+                        if (root.TryGetProperty("installer_output", out var installerOutputProp))
+                        {
+                            cimianEvent.InstallerOutput = installerOutputProp.GetString() ?? "";
+                        }
+
+                        if (root.TryGetProperty("checkonly_mode", out var checkOnlyProp))
+                        {
+                            cimianEvent.CheckOnlyMode = checkOnlyProp.GetBoolean();
+                        }
+
+                        if (root.TryGetProperty("system_context", out var systemContextProp))
+                        {
+                            foreach (var contextItem in systemContextProp.EnumerateObject())
+                            {
+                                cimianEvent.SystemContext[contextItem.Name] = contextItem.Value.ToString();
+                            }
+                        }
+
+                        if (root.TryGetProperty("performance_counters", out var perfCountersProp))
+                        {
+                            foreach (var counterItem in perfCountersProp.EnumerateObject())
+                            {
+                                cimianEvent.PerformanceCounters[counterItem.Name] = counterItem.Value.ToString();
                             }
                         }
 
@@ -1149,10 +1263,32 @@ namespace ReportMate.WindowsClient.Services.Modules
                         }
                     }
                     
-                    // Primary fields - use new Cimian field names
+                    // Primary fields - use new Cimian field names with proper empty string handling
                     if (string.IsNullOrEmpty(extractedVersion))
                     {
-                        extractedVersion = GetDictValue(item, "latest_version") ?? GetDictValue(item, "installed_version") ?? "Unknown";
+                        var latestVersion = GetDictValue(item, "latest_version");
+                        var installedVersion = GetDictValue(item, "installed_version");
+                        
+                        // Debug logging to see what we're actually getting
+                        var debugItemId = GetDictValue(item, "id");
+                        _logger.LogInformation("DEBUG VERSION EXTRACTION - Item: {ItemId}, latest_version: '{LatestVersion}', installed_version: '{InstalledVersion}'", 
+                            debugItemId, latestVersion, installedVersion);
+                        
+                        if (!string.IsNullOrEmpty(latestVersion))
+                        {
+                            extractedVersion = latestVersion;
+                            _logger.LogInformation("DEBUG VERSION - Using latest_version: {Version} for {ItemId}", latestVersion, debugItemId);
+                        }
+                        else if (!string.IsNullOrEmpty(installedVersion))
+                        {
+                            extractedVersion = installedVersion;
+                            _logger.LogInformation("DEBUG VERSION - Using installed_version: {Version} for {ItemId}", installedVersion, debugItemId);
+                        }
+                        else
+                        {
+                            extractedVersion = "Unknown";
+                            _logger.LogInformation("DEBUG VERSION - No version found, using Unknown for {ItemId}", debugItemId);
+                        }
                     }
                     if (string.IsNullOrEmpty(cimianStatus))
                     {
@@ -1166,6 +1302,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                         bool.TryParse(installLoopObj.ToString(), out var loopDetected))
                     {
                         hasInstallLoop = loopDetected;
+                    }
+                    
+                    // ENHANCEMENT: If version is "Unknown", override status to "Error" regardless of current_status
+                    if (extractedVersion == "Unknown" || string.IsNullOrEmpty(extractedVersion))
+                    {
+                        cimianStatus = "Error"; // Use uppercase to match existing patterns
+                        _logger.LogInformation("OVERRIDE STATUS - Item {ItemId}: version='{Version}' -> forcing status to 'Error'", 
+                            GetDictValue(item, "id"), extractedVersion);
                     }
                     
                     // Map Cimian's detailed status to ReportMate's simplified dashboard status
@@ -1435,6 +1579,90 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
+                // Generate events from enhanced analytics and recommendations
+                if (data.CacheStatus.TryGetValue("enhanced_analytics", out var analyticsObj) && analyticsObj is Dictionary<string, object> analytics)
+                {
+                    // Generate performance alert events
+                    if (analytics.TryGetValue("performance", out var perfObj) && perfObj is object perfData)
+                    {
+                        try
+                        {
+                            var perfDict = JsonSerializer.Deserialize<Dictionary<string, object>>(JsonSerializer.Serialize(perfData));
+                            
+                            if (perfDict?.TryGetValue("success_rate", out var successRateObj) == true 
+                                && double.TryParse(successRateObj.ToString(), out var successRate))
+                            {
+                                if (successRate < 50)
+                                {
+                                    events.Add(CreateEvent("error", 
+                                        $"Critical: Cimian session success rate is {successRate:F1}%", 
+                                        new Dictionary<string, object> 
+                                        { 
+                                            ["success_rate"] = successRate,
+                                            ["threshold"] = 50,
+                                            ["category"] = "performance_alert"
+                                        }));
+                                }
+                                else if (successRate < 80)
+                                {
+                                    events.Add(CreateEvent("warning", 
+                                        $"Cimian session success rate is {successRate:F1}%", 
+                                        new Dictionary<string, object> 
+                                        { 
+                                            ["success_rate"] = successRate,
+                                            ["threshold"] = 80,
+                                            ["category"] = "performance_warning"
+                                        }));
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug("Error processing performance analytics for events: {Error}", ex.Message);
+                        }
+                    }
+
+                    // Generate blocking application events
+                    if (analytics.TryGetValue("blocking_applications", out var blockingObj))
+                    {
+                        events.Add(CreateEvent("warning", 
+                            "Blocking applications detected during Cimian sessions", 
+                            new Dictionary<string, object> 
+                            { 
+                                ["category"] = "blocking_applications",
+                                ["recommendation"] = "Schedule installations during maintenance windows"
+                            }));
+                    }
+
+                    // Generate events from performance recommendations
+                    if (data.CacheStatus.TryGetValue("performance_recommendations", out var recommendationsObj) 
+                        && recommendationsObj is List<string> recommendations && recommendations.Any())
+                    {
+                        var criticalRecommendations = recommendations.Where(r => r.StartsWith("Critical:")).ToList();
+                        var warningRecommendations = recommendations.Except(criticalRecommendations).Take(2).ToList();
+
+                        foreach (var criticalRec in criticalRecommendations.Take(1))
+                        {
+                            events.Add(CreateEvent("error", criticalRec, 
+                                new Dictionary<string, object> 
+                                { 
+                                    ["category"] = "critical_recommendation",
+                                    ["type"] = "performance_issue"
+                                }));
+                        }
+
+                        foreach (var warningRec in warningRecommendations)
+                        {
+                            events.Add(CreateEvent("warning", warningRec, 
+                                new Dictionary<string, object> 
+                                { 
+                                    ["category"] = "performance_recommendation",
+                                    ["type"] = "optimization_opportunity"
+                                }));
+                        }
+                    }
+                }
+
                 _logger.LogDebug("Generated {EventCount} ReportMate events from Cimian data", events.Count);
             }
             catch (Exception ex)
@@ -1572,6 +1800,199 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return isValid;
+        }
+
+        /// <summary>
+        /// Generate enhanced analytics from structured logging data
+        /// </summary>
+        private Dictionary<string, object> GenerateEnhancedAnalytics(InstallsData data)
+        {
+            var analytics = new Dictionary<string, object>();
+
+            try
+            {
+                // Performance analytics
+                if (data.RecentSessions?.Any() == true)
+                {
+                    var sessions = data.RecentSessions;
+                    analytics["performance"] = new PerformanceAnalytics
+                    {
+                        AvgSessionDuration = sessions.Average(s => s.DurationSeconds),
+                        TotalSessions = sessions.Count,
+                        SuccessfulSessions = sessions.Count(s => s.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)),
+                        FailedSessions = sessions.Count(s => s.Status.Equals("failed", StringComparison.OrdinalIgnoreCase)),
+                        SuccessRate = sessions.Any() ? (double)sessions.Count(s => s.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)) / sessions.Count * 100 : 0,
+                        AvgPackagesPerSession = sessions.Average(s => s.TotalPackagesManaged),
+                        TotalInstalls = sessions.Sum(s => s.Installs),
+                        TotalUpdates = sessions.Sum(s => s.Updates),
+                        TotalRemovals = sessions.Sum(s => s.Removals)
+                    };
+
+                    // Batch operations analytics
+                    var batchOperations = sessions.SelectMany(s => s.BatchOperations).ToList();
+                    if (batchOperations.Any())
+                    {
+                        analytics["batch_operations"] = new BatchOperationsAnalytics
+                        {
+                            TotalBatches = batchOperations.Count,
+                            AvgBatchSize = batchOperations.Average(b => b.TotalItems),
+                            BatchSuccessRate = (double)batchOperations.Sum(b => b.SuccessfulItems) / batchOperations.Sum(b => b.TotalItems) * 100,
+                            AvgBatchDuration = batchOperations.Where(b => b.Duration.HasValue).Any() ? 
+                                               batchOperations.Where(b => b.Duration.HasValue).Average(b => b.Duration!.Value.TotalSeconds) : 0
+                        };
+                    }
+
+                    // Blocking applications analytics
+                    var allBlockingApps = sessions.SelectMany(s => s.BlockingApplications).ToList();
+                    if (allBlockingApps.Any())
+                    {
+                        var blockingAppsDict = allBlockingApps
+                            .SelectMany(ba => ba.Value.Select(app => new { Package = ba.Key, App = app }))
+                            .GroupBy(x => x.App)
+                            .OrderByDescending(g => g.Count())
+                            .Take(10)
+                            .ToDictionary(g => g.Key, g => new BlockingApplicationInfo
+                            {
+                                Count = g.Count(),
+                                AffectedPackages = g.Select(x => x.Package).Distinct().ToList()
+                            });
+                        
+                        analytics["blocking_applications"] = blockingAppsDict;
+                    }
+
+                    // Performance trends (if we have timestamped data)
+                    var sortedSessions = sessions.OrderBy(s => s.StartTime).ToList();
+                    if (sortedSessions.Count >= 5)
+                    {
+                        var recentSessions = sortedSessions.TakeLast(5).ToList();
+                        var olderSessions = sortedSessions.Take(sortedSessions.Count - 5).ToList();
+                        
+                        if (olderSessions.Any())
+                        {
+                            analytics["performance_trends"] = new PerformanceTrends
+                            {
+                                RecentAvgDuration = recentSessions.Average(s => s.DurationSeconds),
+                                HistoricalAvgDuration = olderSessions.Average(s => s.DurationSeconds),
+                                RecentSuccessRate = (double)recentSessions.Count(s => s.Successes > s.Failures) / recentSessions.Count * 100,
+                                HistoricalSuccessRate = (double)olderSessions.Count(s => s.Successes > s.Failures) / olderSessions.Count * 100
+                            };
+                        }
+                    }
+                }
+
+                // Event-level analytics
+                if (data.RecentEvents?.Any() == true)
+                {
+                    var events = data.RecentEvents;
+                    
+                    analytics["events"] = new EventAnalytics
+                    {
+                        TotalEvents = events.Count,
+                        ErrorEvents = events.Count(e => e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase)),
+                        WarningEvents = events.Count(e => e.Level.Equals("WARNING", StringComparison.OrdinalIgnoreCase)),
+                        InstallEvents = events.Count(e => e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase)),
+                        AvgInstallDuration = events.Where(e => e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) && e.Duration.HasValue).Any() ?
+                                                        events.Where(e => e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) && e.Duration.HasValue)
+                                                              .Average(e => e.Duration!.Value.TotalSeconds) : 0,
+                        MostCommonErrors = events.Where(e => !string.IsNullOrEmpty(e.Error))
+                                                      .GroupBy(e => e.Error)
+                                                      .OrderByDescending(g => g.Count())
+                                                      .Take(5)
+                                                      .ToDictionary(g => g.Key, g => g.Count())
+                    };
+
+                    // Package-specific analytics
+                    var packageEvents = events.Where(e => !string.IsNullOrEmpty(e.Package)).ToList();
+                    if (packageEvents.Any())
+                    {
+                        var packageAnalyticsDict = packageEvents
+                            .GroupBy(e => e.Package)
+                            .OrderByDescending(g => g.Count())
+                            .Take(10)
+                            .ToDictionary(g => g.Key, g => new PackageAnalytics
+                            {
+                                TotalEvents = g.Count(),
+                                SuccessEvents = g.Count(e => e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)),
+                                ErrorEvents = g.Count(e => e.Status.Equals("failed", StringComparison.OrdinalIgnoreCase)),
+                                AvgDuration = g.Where(e => e.Duration.HasValue).Any() ? 
+                                             g.Where(e => e.Duration.HasValue).Average(e => e.Duration!.Value.TotalSeconds) : 0
+                            });
+                        
+                        analytics["package_analytics"] = packageAnalyticsDict;
+                    }
+                }
+
+                _logger.LogDebug("Generated enhanced analytics with {AnalyticsCount} categories", analytics.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error generating enhanced analytics");
+                analytics["error"] = "Failed to generate analytics";
+            }
+
+            return analytics;
+        }
+
+        /// <summary>
+        /// Generate performance recommendations based on analytics
+        /// </summary>
+        private List<string> GeneratePerformanceRecommendations(Dictionary<string, object> analytics)
+        {
+            var recommendations = new List<string>();
+
+            try
+            {
+                // Check session performance
+                if (analytics.TryGetValue("performance", out var perfObj) && perfObj is PerformanceAnalytics perfData)
+                {
+                    if (perfData.SuccessRate < 80)
+                    {
+                        recommendations.Add($"Session success rate is {perfData.SuccessRate:F1}% - consider investigating common failure patterns");
+                    }
+                    
+                    if (perfData.SuccessRate < 50)
+                    {
+                        recommendations.Add("Critical: Session success rate is below 50% - immediate attention required");
+                    }
+
+                    if (perfData.AvgSessionDuration > 1800) // 30 minutes
+                    {
+                        recommendations.Add($"Average session duration is {perfData.AvgSessionDuration/60:F1} minutes - consider optimizing package installation order");
+                    }
+                }
+
+                // Check blocking applications
+                if (analytics.TryGetValue("blocking_applications", out var blockingObj))
+                {
+                    recommendations.Add("Blocking applications detected - consider scheduling installations during maintenance windows");
+                }
+
+                // Check performance trends
+                if (analytics.TryGetValue("performance_trends", out var trendsObj) && trendsObj is PerformanceTrends trendsData)
+                {
+                    if (trendsData.RecentAvgDuration > trendsData.HistoricalAvgDuration * 1.5)
+                    {
+                        recommendations.Add("Recent sessions are taking significantly longer than historical average - investigate system performance");
+                    }
+                }
+
+                // Check error patterns
+                if (analytics.TryGetValue("events", out var eventsObj) && eventsObj is EventAnalytics eventsData)
+                {
+                    var errorRate = eventsData.TotalEvents > 0 ? (double)eventsData.ErrorEvents / eventsData.TotalEvents * 100 : 0;
+                    if (errorRate > 20)
+                    {
+                        recommendations.Add($"High error rate detected ({errorRate:F1}%) - review error patterns and system health");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error generating performance recommendations");
+                recommendations.Add("Unable to generate performance recommendations due to analysis error");
+            }
+
+            return recommendations;
         }
     }
 }
