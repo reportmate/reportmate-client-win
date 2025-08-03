@@ -13,8 +13,11 @@
     <AssemblyDescription>Windows client for ReportMate device management and security monitoring</AssemblyDescription>
     <AssemblyCompany>ReportMate</AssemblyCompany>
     <AssemblyProduct>ReportMate</AssemblyProduct>
-    <AssemblyVersion>2025.08.02.0</AssemblyVersion>
-    <FileVersion>2025.08.02.0</FileVersion>
+    
+    <!-- Dynamic version based on current date (YYYY.MM.DD) -->
+    <VersionPrefix>$([System.DateTime]::Now.ToString("yyyy.MM.dd"))</VersionPrefix>
+    <AssemblyVersion>$(VersionPrefix)</AssemblyVersion>
+    <FileVersion>$(VersionPrefix)</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     
     <!-- Suppress trim warnings for assemblies that are not fully trim-compatible -->

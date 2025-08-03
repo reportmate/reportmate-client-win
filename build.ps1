@@ -431,31 +431,11 @@ Write-Output ""
 if (-not $SkipBuild) {
     Write-Step "Building .NET application..."
     
-    # Update version in project file
+    # Update version in project file - now handled by dynamic VersionPrefix in .csproj
     $csprojPath = "$SrcDir/ReportMate.WindowsClient.csproj"
-    Write-Verbose "Updating version in: $csprojPath"
+    Write-Verbose "Using dynamic versioning from project file: $csprojPath"
     
-    # Create .NET-compatible version (must be numeric)
-    $assemblyVersion = if ($Version -match '^(\d{4})\.(\d{2})\.(\d{2})') {
-        # YYYY.MM.DD format - convert to valid assembly version
-        "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
-    } elseif ($Version -match '^(\d+)\.(\d+)\.(\d+)') {
-        # Standard version format - use as-is with .0 build
-        "$Version.0"
-    } else {
-        # Fallback to current date-based version
-        $dateVersion = Get-Date -Format "yyyy.M.d"
-        "$dateVersion.0"
-    }
-    
-    $content = Get-Content $csprojPath -Raw
-    $content = $content -replace '<AssemblyVersion>.*?</AssemblyVersion>', "<AssemblyVersion>$assemblyVersion</AssemblyVersion>"
-    $content = $content -replace '<FileVersion>.*?</FileVersion>', "<FileVersion>$assemblyVersion</FileVersion>"
-    # Remove any trailing newlines and add exactly one
-    $content = $content.TrimEnd(@("`r", "`n")) + "`n"
-    Set-Content $csprojPath $content -Encoding UTF8 -NoNewline
-    
-    Write-Info "Updated assembly version to: $assemblyVersion"
+    Write-Info "Building with version: $Version"
     
     # Restore dependencies
     Write-Verbose "Restoring NuGet packages..."
