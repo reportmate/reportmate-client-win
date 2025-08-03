@@ -499,7 +499,7 @@ public class Program
         var forceOption = new Option<bool>("--force", "Force data collection even if recent run detected");
         var collectOnlyOption = new Option<bool>("--collect-only", "Collect data only without transmitting to API");
         var transmitOnlyOption = new Option<bool>("--transmit-only", "Transmit cached data only without collecting new data");
-        var runModuleOption = new Option<string>("--run-module", "Run only a specific module (e.g., network, hardware, security)");
+        var runModuleOption = new Option<string>("--run-module", "Run only a specific module (e.g., network, hardware, security). By default, this will collect and transmit the module data.");
         
         // Add global options to root command
         rootCommand.AddGlobalOption(verboseOption);
@@ -626,10 +626,17 @@ public class Program
                     Logger.Section("Single Module Collection", $"Collecting data for module: {runModule}");
                     Logger.Info("Mode: Single module collection (modular architecture)");
                     Logger.Info("Module: {0}", runModule);
-                    Logger.Info("Output: JSON data will be displayed and cached locally");
+                    if (collectOnly)
+                    {
+                        Logger.Info("Output: JSON data will be displayed and cached locally (NO TRANSMISSION)");
+                    }
+                    else
+                    {
+                        Logger.Info("Output: JSON data will be displayed, cached locally, and transmitted to API");
+                    }
                 }
                 
-                return await HandleSingleModuleCollection(runModule, verbose);
+                return await HandleSingleModuleCollection(runModule, verbose, collectOnly);
             }
             
             // Handle transmit-only mode (send cached data without collection)
@@ -890,7 +897,7 @@ public class Program
     /// <summary>
     /// Handle single module data collection
     /// </summary>
-    private static async Task<int> HandleSingleModuleCollection(string moduleId, int verbose)
+    private static async Task<int> HandleSingleModuleCollection(string moduleId, int verbose, bool collectOnly = false)
     {
         try
         {
@@ -904,9 +911,17 @@ public class Program
             if (verbose > 0)
             {
                 Logger.Info("Starting single module collection for: {0}", moduleId);
+                if (collectOnly)
+                {
+                    Logger.Info("Mode: Collection only (no transmission)");
+                }
+                else
+                {
+                    Logger.Info("Mode: Collection and transmission");
+                }
             }
             
-            _logger!.LogInformation("Starting single module collection for: {ModuleId}", moduleId);
+            _logger!.LogInformation("Starting single module collection for: {ModuleId} (CollectOnly: {CollectOnly})", moduleId, collectOnly);
             
             // Use the efficient single module collection method
             var moduleData = await modularService.CollectSingleModuleDataAsync(moduleId);
@@ -958,12 +973,74 @@ public class Program
             // Output the JSON data
             Console.WriteLine(jsonData);
 
-            if (verbose > 0)
+            // Handle transmission if not in collect-only mode
+            if (!collectOnly)
             {
-                Console.WriteLine();
-                Logger.Info("✅ Single module collection completed successfully");
-                Logger.Info("TIP: Now you can use --transmit-only to send this module's data");
-                Logger.Info("TIP: Use --collect-only with full collection to save all modules without transmission");
+                if (verbose > 0)
+                {
+                    Console.WriteLine();
+                    Logger.Section("Data Transmission", "Sending module data to ReportMate API");
+                    Logger.Info("Transmitting module '{0}' data to API...", moduleId);
+                }
+
+                try
+                {
+                    var apiService = _serviceProvider!.GetRequiredService<IApiService>();
+                    var transmissionResult = await apiService.SendUnifiedPayloadAsync(unifiedPayload);
+
+                    if (transmissionResult)
+                    {
+                        if (verbose > 0)
+                        {
+                            Logger.Info("✅ Transmission completed successfully");
+                            Logger.Info("DASHBOARD: Check your ReportMate dashboard for updated {0} data", moduleId);
+                            Logger.Info("DEVICE: Data for device {0} has been updated", moduleData.DeviceId);
+                        }
+                        _logger!.LogInformation("Single module transmission completed successfully for: {ModuleId}", moduleId);
+                    }
+                    else
+                    {
+                        if (verbose > 0)
+                        {
+                            Logger.Error("❌ Transmission failed");
+                            Logger.Error("The module data has been collected and cached locally");
+                            Logger.Info("TIP: Use --transmit-only later to retry transmission");
+                            Logger.Info("TIP: Check your API configuration and network connectivity");
+                        }
+                        _logger!.LogError("Single module transmission failed for: {ModuleId}", moduleId);
+                        return 1;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (verbose > 0)
+                    {
+                        Logger.Error("❌ Transmission error: {0}", ex.Message);
+                        Logger.Error("The module data has been collected and cached locally");
+                        Logger.Info("TIP: Use --transmit-only later to retry transmission");
+                        if (verbose >= 3)
+                        {
+                            Logger.Debug("Transmission stack trace: {0}", ex.StackTrace ?? "No stack trace available");
+                        }
+                    }
+                    _logger!.LogError(ex, "Error during single module transmission for: {ModuleId}", moduleId);
+                    return 1;
+                }
+            }
+            else
+            {
+                if (verbose > 0)
+                {
+                    Console.WriteLine();
+                    Logger.Info("✅ Single module collection completed successfully (transmission skipped)");
+                    Logger.Info("TIP: Run without --collect-only to both collect and transmit this module's data");
+                    Logger.Info("TIP: Use --transmit-only to send all cached data");
+                }
+            }
+
+            if (verbose > 0 && collectOnly)
+            {
+                Logger.Info("CACHE: Module data saved to local cache files only");
             }
 
             _logger!.LogInformation("Single module collection completed successfully for: {ModuleId}", moduleId);            return 0;
