@@ -62,6 +62,7 @@ namespace ReportMate.WindowsClient.Models.Modules
     /// </summary>
     public class ReportMateEvent
     {
+        public string ModuleId { get; set; } = string.Empty;
         public string EventType { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;

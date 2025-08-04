@@ -185,10 +185,11 @@ namespace ReportMate.WindowsClient.Services
         /// <summary>
         /// Helper method to create ReportMate events from module data
         /// </summary>
-        protected static ReportMateEvent CreateEvent(string eventType, string message, Dictionary<string, object>? details = null, DateTime? timestamp = null)
+        protected ReportMateEvent CreateEvent(string eventType, string message, Dictionary<string, object>? details = null, DateTime? timestamp = null)
         {
             return new ReportMateEvent
             {
+                ModuleId = ModuleId,
                 EventType = eventType,
                 Message = message,
                 Timestamp = timestamp ?? DateTime.UtcNow,
