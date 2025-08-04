@@ -1482,6 +1482,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         /// <summary>
         /// Generate ReportMate events from processed Cimian data for dashboard display
+        /// Now generates accurate Success, Warning, Error events based on the last Cimian run
         /// </summary>
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(InstallsData data)
         {
@@ -1489,185 +1490,151 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             try
             {
-                // Generate events from Cimian ERROR/WARN events
-                if (data.RecentEvents?.Any() == true)
-                {
-                    // Process high priority events (ERROR, WARN) first
-                    var priorityEvents = data.RecentEvents
-                        .Where(e => e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase) || 
-                                   e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase))
-                        .OrderByDescending(e => e.Timestamp)
-                        .Take(10); // Limit to 10 most recent priority events
-
-                    foreach (var cimianEvent in priorityEvents)
-                    {
-                        var eventType = cimianEvent.Level.ToLowerInvariant() == "error" ? "error" : "warning";
-                        var message = $"Cimian {cimianEvent.EventType}: {cimianEvent.Message}";
-                        
-                        var details = new Dictionary<string, object>
-                        {
-                            ["action"] = cimianEvent.Action,
-                            ["status"] = cimianEvent.Status,
-                            ["session_id"] = cimianEvent.SessionId,
-                            ["event_id"] = cimianEvent.EventId
-                        };
-
-                        if (!string.IsNullOrEmpty(cimianEvent.Package))
-                            details["package"] = cimianEvent.Package;
-                        if (!string.IsNullOrEmpty(cimianEvent.Version))
-                            details["version"] = cimianEvent.Version;
-                        if (!string.IsNullOrEmpty(cimianEvent.Error))
-                            details["error_details"] = cimianEvent.Error;
-                        if (!string.IsNullOrEmpty(cimianEvent.SourceFile))
-                            details["source"] = $"{cimianEvent.SourceFile}:{cimianEvent.SourceLine}";
-
-                        events.Add(CreateEvent(eventType, message, details, cimianEvent.Timestamp));
-                    }
-                }
+                _logger.LogInformation("Starting event generation with {EventCount} recent events", data.RecentEvents?.Count ?? 0);
                 
-                // Generate events from session failures
-                if (data.RecentSessions?.Any() == true)
+                // Count ALL recent events from the latest Cimian run (regardless of session filtering issues)
+                var allRecentEvents = data.RecentEvents ?? new List<CimianEvent>();
+                var errorEvents = allRecentEvents.Where(e => e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase)).ToList();
+                var warningEvents = allRecentEvents.Where(e => e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase)).ToList();
+                var infoEvents = allRecentEvents.Where(e => e.Level.Equals("INFO", StringComparison.OrdinalIgnoreCase)).ToList();
+                
+                _logger.LogInformation("Event counts - Errors: {ErrorCount}, Warnings: {WarningCount}, Info: {InfoCount}", 
+                    errorEvents.Count, warningEvents.Count, infoEvents.Count);
+                
+                // Get latest session info if available
+                var latestSession = data.RecentSessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
+                var sessionInfo = latestSession != null ? new Dictionary<string, object>
                 {
-                    var failedSessions = data.RecentSessions
-                        .Where(s => s.Status.Equals("FAILED", StringComparison.OrdinalIgnoreCase) || s.Failures > 0)
-                        .OrderByDescending(s => s.StartTime)
-                        .Take(5); // Limit to 5 most recent failed sessions
-
-                    foreach (var session in failedSessions)
+                    ["session_id"] = latestSession.SessionId ?? "unknown",
+                    ["run_type"] = latestSession.RunType ?? "unknown",
+                    ["successes"] = latestSession.Successes,
+                    ["failures"] = latestSession.Failures,
+                    ["duration_seconds"] = latestSession.DurationSeconds
+                } : new Dictionary<string, object>();
+                
+                // Generate events based on priority: Error > Warning > Success
+                if (errorEvents.Any())
+                {
+                    // ERROR: Generate error event for any ERROR level events
+                    var sampleErrors = errorEvents.Take(3).ToList();
+                    var firstError = sampleErrors.FirstOrDefault();
+                    var errorMessage = errorEvents.Count == 1 
+                        ? $"Installation error: {firstError?.Package} - {firstError?.Message}"
+                        : $"Multiple installation errors ({errorEvents.Count} packages affected)";
+                    
+                    var errorDetails = new Dictionary<string, object>(sessionInfo)
                     {
-                        var eventType = session.Status.Equals("FAILED", StringComparison.OrdinalIgnoreCase) ? "error" : "warning";
-                        var message = $"Cimian session {session.SessionId} completed with {session.Failures} failures";
-                        
-                        var details = new Dictionary<string, object>
+                        ["error_count"] = errorEvents.Count,
+                        ["sample_errors"] = sampleErrors.Select(e => new Dictionary<string, object>
                         {
-                            ["session_id"] = session.SessionId,
-                            ["run_type"] = session.RunType,
-                            ["failures"] = session.Failures,
-                            ["successes"] = session.Successes,
-                            ["total_actions"] = session.TotalActions,
-                            ["duration_seconds"] = session.DurationSeconds
-                        };
-
-                        if (session.PackagesHandled?.Any() == true)
-                            details["packages"] = string.Join(", ", session.PackagesHandled.Take(5));
-
-                        events.Add(CreateEvent(eventType, message, details, session.StartTime));
-                    }
+                            ["package"] = e.Package ?? "unknown",
+                            ["message"] = e.Message ?? "unknown",
+                            ["event_type"] = e.EventType ?? "unknown",
+                            ["timestamp"] = e.Timestamp
+                        }).ToList(),
+                        ["total_events"] = allRecentEvents.Count,
+                        ["module_status"] = "error"
+                    };
+                    
+                    events.Add(CreateEvent("error", errorMessage, errorDetails, DateTime.UtcNow));
+                    _logger.LogInformation("Generated ERROR event for {ErrorCount} Cimian errors", errorEvents.Count);
+                }
+                else if (warningEvents.Any())
+                {
+                    // WARNING: Generate warning event for any WARN level events
+                    var sampleWarnings = warningEvents.Take(3).ToList();
+                    var firstWarning = sampleWarnings.FirstOrDefault();
+                    var warningMessage = warningEvents.Count == 1 
+                        ? $"Installation warning: {firstWarning?.Package} - {firstWarning?.Message}"
+                        : $"Multiple installation warnings ({warningEvents.Count} packages affected)";
+                    
+                    var warningDetails = new Dictionary<string, object>(sessionInfo)
+                    {
+                        ["warning_count"] = warningEvents.Count,
+                        ["sample_warnings"] = sampleWarnings.Select(e => new Dictionary<string, object>
+                        {
+                            ["package"] = e.Package ?? "unknown",
+                            ["message"] = e.Message ?? "unknown", 
+                            ["event_type"] = e.EventType ?? "unknown",
+                            ["timestamp"] = e.Timestamp
+                        }).ToList(),
+                        ["total_events"] = allRecentEvents.Count,
+                        ["module_status"] = "warning"
+                    };
+                    
+                    events.Add(CreateEvent("warning", warningMessage, warningDetails, DateTime.UtcNow));
+                    _logger.LogInformation("Generated WARNING event for {WarningCount} Cimian warnings", warningEvents.Count);
+                }
+                else if (infoEvents.Any() || (latestSession?.Successes > 0))
+                {
+                    // SUCCESS: Generate success event when only INFO events or successful operations
+                    var successMessage = latestSession?.Successes > 0 
+                        ? $"Installs completed successfully ({latestSession.Successes} packages processed)"
+                        : $"Installs module data collected successfully";
+                    
+                    var successDetails = new Dictionary<string, object>(sessionInfo)
+                    {
+                        ["info_count"] = infoEvents.Count,
+                        ["sample_info"] = infoEvents.Take(3).Select(e => new Dictionary<string, object>
+                        {
+                            ["package"] = e.Package ?? "unknown",
+                            ["message"] = e.Message ?? "unknown",
+                            ["event_type"] = e.EventType ?? "unknown"
+                        }).ToList(),
+                        ["total_events"] = allRecentEvents.Count,
+                        ["module_status"] = "success"
+                    };
+                    
+                    events.Add(CreateEvent("success", successMessage, successDetails, DateTime.UtcNow));
+                    _logger.LogInformation("Generated SUCCESS event for {InfoCount} Cimian info events", infoEvents.Count);
+                }
+                else if (data.Cimian?.IsInstalled == true)
+                {
+                    // Cimian is installed but no recent activity - info event
+                    events.Add(CreateEvent("info", "Cimian is installed but no recent activity detected", 
+                        new Dictionary<string, object> 
+                        {
+                            ["cimian_version"] = data.Cimian.Version ?? "unknown",
+                            ["status"] = data.Cimian.Status ?? "unknown"
+                        }));
+                    _logger.LogInformation("Generated INFO event - Cimian installed but no recent activity");
+                }
+                else
+                {
+                    // Cimian not installed or no data - warning event
+                    events.Add(CreateEvent("warning", "Cimian managed software system not detected", 
+                        new Dictionary<string, object> 
+                        {
+                            ["recommendation"] = "Install Cimian for managed software deployment"
+                        }));
+                    _logger.LogInformation("Generated WARNING event - Cimian not detected");
                 }
 
-                // Generate info events for successful operations (limited)
-                if (data.Cimian?.IsInstalled == true && events.Count < 3)
+                // Only add critical performance events if they're related to real session failures
+                if (latestSession?.Failures > 0 && latestSession.Successes + latestSession.Failures > 0)
                 {
-                    var recentSuccessfulSessions = data.RecentSessions?
-                        .Where(s => s.Status.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase) && s.Successes > 0)
-                        .OrderByDescending(s => s.StartTime)
-                        .Take(2);
-
-                    foreach (var session in recentSuccessfulSessions ?? Enumerable.Empty<CimianSession>())
+                    var actualSuccessRate = (double)latestSession.Successes / (latestSession.Successes + latestSession.Failures) * 100;
+                    if (actualSuccessRate < 50 && !events.Any(e => e.EventType == "error"))
                     {
-                        var message = $"Cimian session completed successfully with {session.Successes} packages processed";
-                        var details = new Dictionary<string, object>
-                        {
-                            ["session_id"] = session.SessionId,
-                            ["successes"] = session.Successes,
-                            ["installs"] = session.Installs,
-                            ["updates"] = session.Updates,
-                            ["removals"] = session.Removals
-                        };
-
-                        events.Add(CreateEvent("success", message, details, session.StartTime));
-                    }
-                }
-
-                // Generate events from enhanced analytics and recommendations
-                if (data.CacheStatus.TryGetValue("enhanced_analytics", out var analyticsObj) && analyticsObj is Dictionary<string, object> analytics)
-                {
-                    // Generate performance alert events
-                    if (analytics.TryGetValue("performance", out var perfObj) && perfObj is object perfData)
-                    {
-                        try
-                        {
-                            var perfDict = JsonSerializer.Deserialize<Dictionary<string, object>>(JsonSerializer.Serialize(perfData));
-                            
-                            if (perfDict?.TryGetValue("success_rate", out var successRateObj) == true 
-                                && double.TryParse(successRateObj.ToString(), out var successRate))
-                            {
-                                if (successRate < 50)
-                                {
-                                    events.Add(CreateEvent("error", 
-                                        $"Critical: Cimian session success rate is {successRate:F1}%", 
-                                        new Dictionary<string, object> 
-                                        { 
-                                            ["success_rate"] = successRate,
-                                            ["threshold"] = 50,
-                                            ["category"] = "performance_alert"
-                                        }));
-                                }
-                                else if (successRate < 80)
-                                {
-                                    events.Add(CreateEvent("warning", 
-                                        $"Cimian session success rate is {successRate:F1}%", 
-                                        new Dictionary<string, object> 
-                                        { 
-                                            ["success_rate"] = successRate,
-                                            ["threshold"] = 80,
-                                            ["category"] = "performance_warning"
-                                        }));
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogDebug("Error processing performance analytics for events: {Error}", ex.Message);
-                        }
-                    }
-
-                    // Generate blocking application events
-                    if (analytics.TryGetValue("blocking_applications", out var blockingObj))
-                    {
-                        events.Add(CreateEvent("warning", 
-                            "Blocking applications detected during Cimian sessions", 
+                        events.Add(CreateEvent("error", 
+                            $"Critical session failure rate: {100 - actualSuccessRate:F1}% of packages failed", 
                             new Dictionary<string, object> 
                             { 
-                                ["category"] = "blocking_applications",
-                                ["recommendation"] = "Schedule installations during maintenance windows"
+                                ["success_rate"] = actualSuccessRate,
+                                ["failed_packages"] = latestSession.Failures,
+                                ["successful_packages"] = latestSession.Successes,
+                                ["category"] = "session_performance"
                             }));
-                    }
-
-                    // Generate events from performance recommendations
-                    if (data.CacheStatus.TryGetValue("performance_recommendations", out var recommendationsObj) 
-                        && recommendationsObj is List<string> recommendations && recommendations.Any())
-                    {
-                        var criticalRecommendations = recommendations.Where(r => r.StartsWith("Critical:")).ToList();
-                        var warningRecommendations = recommendations.Except(criticalRecommendations).Take(2).ToList();
-
-                        foreach (var criticalRec in criticalRecommendations.Take(1))
-                        {
-                            events.Add(CreateEvent("error", criticalRec, 
-                                new Dictionary<string, object> 
-                                { 
-                                    ["category"] = "critical_recommendation",
-                                    ["type"] = "performance_issue"
-                                }));
-                        }
-
-                        foreach (var warningRec in warningRecommendations)
-                        {
-                            events.Add(CreateEvent("warning", warningRec, 
-                                new Dictionary<string, object> 
-                                { 
-                                    ["category"] = "performance_recommendation",
-                                    ["type"] = "optimization_opportunity"
-                                }));
-                        }
+                        _logger.LogInformation("Generated additional ERROR event for poor session performance");
                     }
                 }
 
-                _logger.LogDebug("Generated {EventCount} ReportMate events from Cimian data", events.Count);
+                _logger.LogInformation("Generated {EventCount} total ReportMate events from Cimian data with types: {EventTypes}", 
+                    events.Count, string.Join(", ", events.Select(e => e.EventType)));
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error generating events from Cimian data");
+                _logger.LogError(ex, "Error generating events from Cimian data");
                 
                 // Add error event for the generation failure itself
                 events.Add(CreateEvent("error", "Failed to process Cimian events for dashboard display", 
@@ -1847,14 +1814,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (allBlockingApps.Any())
                     {
                         var blockingAppsDict = allBlockingApps
-                            .SelectMany(ba => ba.Value.Select(app => new { Package = ba.Key, App = app }))
-                            .GroupBy(x => x.App)
+                            .SelectMany(ba => ba.Value.Select(app => new Dictionary<string, object> { ["Package"] = ba.Key, ["App"] = app }))
+                            .GroupBy(x => (string)x["App"])
                             .OrderByDescending(g => g.Count())
                             .Take(10)
                             .ToDictionary(g => g.Key, g => new BlockingApplicationInfo
                             {
                                 Count = g.Count(),
-                                AffectedPackages = g.Select(x => x.Package).Distinct().ToList()
+                                AffectedPackages = g.Select(x => (string)x["Package"]).Distinct().ToList()
                             });
                         
                         analytics["blocking_applications"] = blockingAppsDict;
