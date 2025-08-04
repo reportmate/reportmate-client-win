@@ -1,0 +1,62 @@
+{
+  "module": "printers",
+  "version": "1.0.0",
+  "description": "Comprehensive printer and print queue information",
+  "queries": {
+    "printer_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%' AND type = 'subkey' AND name NOT IN ('DefaultSpoolDirectory', 'ResetDevmodesAttempts', 'LANGIDOfLastDefaultDevmode');",
+      "interval": 3600,
+      "description": "Printer registry information"
+    },
+    "printer_details": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%\\%' AND name IN ('Port', 'Printer Driver', 'Location', 'Description', 'Share Name', 'Server', 'Attributes', 'Priority') AND data != '';",
+      "interval": 3600,
+      "description": "Detailed printer properties from registry"
+    },
+    "printer_drivers_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Environments\\%';",
+      "interval": 3600,
+      "description": "Print driver registry information"
+    },
+    "printer_ports_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors\\%';",
+      "interval": 3600,
+      "description": "Print port configuration from registry"
+    },
+    "spooler_service": {
+      "query": "SELECT name, status, start_type, path, display_name, description FROM services WHERE name = 'Spooler';",
+      "interval": 1800,
+      "description": "Print spooler service status"
+    },
+    "spooler_settings": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\%' AND name IN ('DefaultSpoolDirectory', 'BeepEnabled', 'NetPopup', 'LogEvents', 'RestartJobOnPoolError', 'RestartJobOnPoolEnabled', 'PortThreadPriority', 'PortThreadPriorityClass', 'SchedulerThreadPriority', 'SchedulerThreadPriorityClass') AND data != '';",
+      "interval": 3600,
+      "description": "Print spooler configuration settings from registry"
+    },
+    "print_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Printers\\%' OR path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Printers\\%') AND data != '';",
+      "interval": 3600,
+      "description": "Print-related Group Policy settings"
+    },
+    "printer_security": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%\\Security' AND data != '';",
+      "interval": 3600,
+      "description": "Printer security settings and permissions"
+    },
+    "shared_printers": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\lanmanserver\\Shares\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Shared printer information from registry"
+    },
+    "print_processor_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Environments\\%\\Print Processors\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Print processor registry information"
+    },
+    "printer_status_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%\\PrinterDriverData' AND data != '';",
+      "interval": 3600,
+      "description": "Printer status and configuration data from registry"
+    }
+  }
+}
