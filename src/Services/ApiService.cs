@@ -930,42 +930,134 @@ public class ApiService : IApiService
                 return;
             }
             
-            // Create structured event for the API
-            var eventRequest = new StructuredEventRequest
+            // Extract and send individual events with their correct event types
+            var eventsSent = 0;
+            
+            // Look for events in the event.json payload
+            if (eventData.TryGetValue("events", out var eventsObj) && eventsObj is JsonElement eventsElement)
             {
-                Device = deviceSerial,
-                Kind = "Info",
-                Ts = DateTime.UtcNow.ToString("O"),
-                Payload = eventData
-            };
-            
-            var eventJsonPayload = JsonSerializer.Serialize(eventRequest, _jsonOptions);
-            var eventHttpContent = new StringContent(eventJsonPayload, System.Text.Encoding.UTF8, "application/json");
-            
-            _logger.LogInformation("Sending structured event to /api/events...");
-            _logger.LogInformation("Event payload size: {Size} KB", Math.Round(eventJsonPayload.Length / 1024.0, 2));
-            
-            var eventResponse = await _httpClient.PostAsync("/api/events", eventHttpContent);
-            
-            if (eventResponse.IsSuccessStatusCode)
-            {
-                _logger.LogInformation("✅ SUCCESS: Structured event sent to ReportMate API");
-                var eventResponseContent = await eventResponse.Content.ReadAsStringAsync();
-                _logger.LogInformation("Event API Response: {Response}", eventResponseContent);
+                if (eventsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var eventElement in eventsElement.EnumerateArray())
+                    {
+                        try
+                        {
+                            // Parse individual event
+                            var eventType = eventElement.GetProperty("eventType").GetString() ?? "info";
+                            var message = eventElement.GetProperty("message").GetString() ?? "";
+                            var timestamp = eventElement.TryGetProperty("timestamp", out var tsElement) 
+                                ? tsElement.GetString() ?? DateTime.UtcNow.ToString("O")
+                                : DateTime.UtcNow.ToString("O");
+                            
+                            // Get event details if present
+                            var details = new Dictionary<string, object>();
+                            if (eventElement.TryGetProperty("details", out var detailsElement))
+                            {
+                                details = JsonSerializer.Deserialize<Dictionary<string, object>>(detailsElement.GetRawText(), _jsonOptions) ?? new Dictionary<string, object>();
+                            }
+                            
+                            // Create individual event request with correct event type
+                            var individualEventRequest = new StructuredEventRequest
+                            {
+                                Device = deviceSerial,
+                                Kind = CapitalizeEventType(eventType), // success -> Success, error -> Error, etc.
+                                Ts = timestamp,
+                                Payload = new Dictionary<string, object>
+                                {
+                                    ["message"] = message,
+                                    ["details"] = details,
+                                    ["module"] = "installs",
+                                    ["eventType"] = eventType
+                                }
+                            };
+                            
+                            var individualEventJsonPayload = JsonSerializer.Serialize(individualEventRequest, _jsonOptions);
+                            var individualEventHttpContent = new StringContent(individualEventJsonPayload, System.Text.Encoding.UTF8, "application/json");
+                            
+                            _logger.LogInformation("Sending {EventType} event: {Message}", eventType.ToUpper(), message);
+                            
+                            var eventResponse = await _httpClient.PostAsync("/api/events", individualEventHttpContent);
+                            
+                            if (eventResponse.IsSuccessStatusCode)
+                            {
+                                _logger.LogInformation("✅ SUCCESS: {EventType} event sent to ReportMate API", eventType.ToUpper());
+                                eventsSent++;
+                            }
+                            else
+                            {
+                                _logger.LogWarning("⚠️ Failed to send {EventType} event: {StatusCode} {ReasonPhrase}", 
+                                    eventType.ToUpper(), eventResponse.StatusCode, eventResponse.ReasonPhrase);
+                                var errorContent = await eventResponse.Content.ReadAsStringAsync();
+                                _logger.LogWarning("Error response: {ErrorContent}", errorContent);
+                            }
+                        }
+                        catch (Exception eventEx)
+                        {
+                            _logger.LogWarning("Error processing individual event: {Error}", eventEx.Message);
+                        }
+                    }
+                }
             }
-            else
+            
+            if (eventsSent == 0)
             {
-                _logger.LogWarning("⚠️ Failed to send structured event: {StatusCode} {ReasonPhrase}", 
-                    eventResponse.StatusCode, eventResponse.ReasonPhrase);
-                var errorContent = await eventResponse.Content.ReadAsStringAsync();
-                _logger.LogWarning("Error response: {ErrorContent}", errorContent);
+                // Fallback: send general info event if no specific events found
+                _logger.LogInformation("No individual events found, sending general info event");
+                var fallbackEventRequest = new StructuredEventRequest
+                {
+                    Device = deviceSerial,
+                    Kind = "Info",
+                    Ts = DateTime.UtcNow.ToString("O"),
+                    Payload = new Dictionary<string, object>
+                    {
+                        ["message"] = "Data collection completed",
+                        ["details"] = new Dictionary<string, object>(),
+                        ["module"] = "system"
+                    }
+                };
+                
+                var fallbackJsonPayload = JsonSerializer.Serialize(fallbackEventRequest, _jsonOptions);
+                var fallbackHttpContent = new StringContent(fallbackJsonPayload, System.Text.Encoding.UTF8, "application/json");
+                
+                var fallbackResponse = await _httpClient.PostAsync("/api/events", fallbackHttpContent);
+                
+                if (fallbackResponse.IsSuccessStatusCode)
+                {
+                    _logger.LogInformation("✅ SUCCESS: Fallback info event sent to ReportMate API");
+                    eventsSent++;
+                }
+                else
+                {
+                    _logger.LogWarning("⚠️ Failed to send fallback event: {StatusCode} {ReasonPhrase}", 
+                        fallbackResponse.StatusCode, fallbackResponse.ReasonPhrase);
+                }
             }
+            
+            _logger.LogInformation("Total events sent: {EventsSent}", eventsSent);
         }
         catch (Exception ex)
         {
             _logger.LogError("❌ Error sending structured event: {Message}", ex.Message);
             _logger.LogError("Exception details: {Exception}", ex);
         }
+    }
+
+    /// <summary>
+    /// Capitalize event type for API transmission (success -> Success, error -> Error, etc.)
+    /// </summary>
+    private static string CapitalizeEventType(string eventType)
+    {
+        if (string.IsNullOrEmpty(eventType))
+            return "Info";
+            
+        return eventType switch
+        {
+            "success" => "Success",
+            "warning" => "Warning", 
+            "error" => "Error",
+            "info" => "Info",
+            _ => char.ToUpperInvariant(eventType[0]) + eventType[1..].ToLowerInvariant()
+        };
     }
 }
 

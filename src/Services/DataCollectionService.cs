@@ -355,11 +355,30 @@ public class DataCollectionService : IDataCollectionService
             payload.Metadata = metadataArray.ToArray();
         }
 
+        // Determine the highest priority event type for the main Kind field
+        string primaryKind = "Info"; // Default to Info
+        if (modularPayload.Events != null && modularPayload.Events.Count > 0)
+        {
+            // Priority order: Error > Warning > Success > Info
+            if (modularPayload.Events.Any(e => e.EventType.Equals("error", StringComparison.OrdinalIgnoreCase)))
+            {
+                primaryKind = "Error";
+            }
+            else if (modularPayload.Events.Any(e => e.EventType.Equals("warning", StringComparison.OrdinalIgnoreCase)))
+            {
+                primaryKind = "Warning";
+            }
+            else if (modularPayload.Events.Any(e => e.EventType.Equals("success", StringComparison.OrdinalIgnoreCase)))
+            {
+                primaryKind = "Success";
+            }
+        }
+
         return new DeviceDataRequest
         {
             Device = modularPayload.Metadata.SerialNumber ?? modularPayload.Inventory?.SerialNumber ?? "",
             SerialNumber = modularPayload.Metadata.SerialNumber ?? modularPayload.Inventory?.SerialNumber ?? "",
-            Kind = "Info",
+            Kind = primaryKind,
             Ts = DateTime.UtcNow.ToString("O"),
             Payload = payload
         };

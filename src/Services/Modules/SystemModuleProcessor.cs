@@ -602,5 +602,34 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             return layouts.Distinct().ToList();
         }
+
+        public override Task<List<ReportMateEvent>> GenerateEventsAsync(SystemData data)
+        {
+            var events = new List<ReportMateEvent>();
+
+            if (data != null && !string.IsNullOrEmpty(data.OperatingSystem?.Name))
+            {
+                var message = $"System module data collected successfully";
+                var details = new Dictionary<string, object>
+                {
+                    ["operating_system"] = data.OperatingSystem?.Name ?? "Unknown",
+                    ["version"] = data.OperatingSystem?.Version ?? "Unknown",
+                    ["display_version"] = data.OperatingSystem?.DisplayVersion ?? "Unknown",
+                    ["uptime"] = data.UptimeString ?? "Unknown",
+                    ["module_status"] = "success"
+                };
+
+                events.Add(CreateEvent("success", message, details, DateTime.UtcNow));
+                _logger.LogInformation("Generated SUCCESS event for system module");
+            }
+            else
+            {
+                events.Add(CreateEvent("warning", "System module data collection incomplete", 
+                    new Dictionary<string, object> { ["module_status"] = "warning" }, DateTime.UtcNow));
+                _logger.LogWarning("Generated WARNING event for incomplete system module data");
+            }
+
+            return Task.FromResult(events);
+        }
     }
 }

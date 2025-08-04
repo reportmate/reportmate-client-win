@@ -24,6 +24,9 @@
     
 .PARAMETER SkipZIP
     Skip ZIP creation
+
+.PARAMETER SkipMSI
+    Skip MSI creation
     
 .PARAMETER Clean
     Clean all build artifacts first
@@ -50,7 +53,7 @@
     Override auto-detection with specific certificate thumbprint
 
 .PARAMETER Install
-    Automatically install the built NUPKG package using chocolatey (requires admin privileges)
+    Automatically install the built package using the preferred method (MSI if available, otherwise NUPKG via chocolatey) - requires admin privileges
     
 .EXAMPLE
     .\build.ps1
@@ -79,6 +82,14 @@
 .EXAMPLE
     .\build.ps1 -NoSign
     Build without code signing (even if cert is available)
+
+.EXAMPLE
+    .\build.ps1 -Install
+    Build and automatically install the MSI package (requires admin privileges)
+
+.EXAMPLE
+    .\build.ps1 -SkipNUPKG -SkipZIP
+    Build only EXE and MSI (skip NUPKG and ZIP)
 #>
 
 param(
@@ -88,6 +99,7 @@ param(
     [switch]$SkipBuild = $false,
     [switch]$SkipNUPKG = $false,
     [switch]$SkipZIP = $false,
+    [switch]$SkipMSI = $false,
     [switch]$Clean = $false,
     [string]$ApiUrl = "",
     [switch]$CreateTag = $false,
@@ -309,10 +321,12 @@ Write-Output ""
 # Set paths
 $RootDir = $PSScriptRoot
 $SrcDir = "$RootDir/src"
-$NupkgDir = "$RootDir/nupkg"
+$BuildDir = "$RootDir/build"
+$NupkgDir = "$BuildDir/nupkg"
 $ProgramFilesPayloadDir = "$NupkgDir/payload"
 $ProgramDataPayloadDir = "$NupkgDir/payload/data"
 $CimianPayloadDir = "$NupkgDir/payload/cimian"
+$MsiStagingDir = "$RootDir/dist/msi-staging"
 $PublishDir = "$RootDir/.publish"
 $OutputDir = "$RootDir/dist"
 
@@ -341,6 +355,7 @@ $cleanupPaths = @(
     "$PublishDir/*.pdb",
     "$OutputDir/*.nupkg",
     "$OutputDir/*.zip", 
+    "$OutputDir/*.msi",
     "$OutputDir/*.exe"
 )
 
@@ -356,7 +371,7 @@ Write-Output ""
 
 # Create directories
 Write-Step "Creating directories..."
-@($PublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir) | ForEach-Object {
+@($PublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir, $MsiStagingDir) | ForEach-Object {
     New-Item -ItemType Directory -Path $_ -Force | Out-Null
     Write-Verbose "Created: $_"
 }
@@ -422,6 +437,28 @@ if (-not $SkipNUPKG) {
     
     if (-not $cimipkgPath) {
         Write-Warning "cimipkg not found - will attempt to download"
+    }
+}
+
+# Check WiX Toolset v6 (for MSI)
+$wixFound = $false
+if (-not $SkipMSI) {
+    # Check if WiX v6 is installed as dotnet tool (global or local)
+    $globalWix = & dotnet tool list --global 2>$null | Select-String "wix"
+    $localWix = & dotnet tool list 2>$null | Select-String "wix"
+    
+    if ($globalWix -or $localWix) {
+        $wixFound = $true
+        if ($localWix) {
+            Write-Success "WiX Toolset v6 found as dotnet local tool"
+        } else {
+            Write-Success "WiX Toolset v6 found as dotnet global tool"
+        }
+    } else {
+        Write-Warning "WiX Toolset v6 not found - MSI creation will be skipped"
+        Write-Info "Install with: dotnet tool install --global wix --version 6.0.1"
+        Write-Info "Or locally: dotnet tool install wix --version 6.0.1"
+        $SkipMSI = $true
     }
 }
 
@@ -504,10 +541,43 @@ $versionContent | Out-File "$ProgramFilesPayloadDir/version.txt" -Encoding UTF8
 # Copy configuration files to data directory (will be installed to ProgramData/ManagedReports)
 Copy-Item "$SrcDir/appsettings.yaml" $ProgramDataPayloadDir -Force
 
-# Copy modular osquery configuration from source (single source of truth)
-$osquerySourceDir = "$SrcDir/osquery"
+# Copy modular osquery configuration from centralized build resources (single source of truth)
+$osquerySourceDir = "$BuildDir/resources/osquery"
 $osqueryTargetDataDir = "$ProgramDataPayloadDir/osquery"
 $osqueryTargetProgramDir = "$ProgramFilesPayloadDir/osquery"
+
+# Copy shared resources from build/resources
+$sharedResourcesDir = "$BuildDir/resources"
+$managedInstallsPayloadDir = "$NupkgDir/payload/managedinstalls"
+
+# Create ManagedInstalls payload directory
+if (-not (Test-Path $managedInstallsPayloadDir)) {
+    New-Item -ItemType Directory -Path $managedInstallsPayloadDir -Force | Out-Null
+}
+
+# Copy pre/postinstall scripts to ManagedInstalls payload
+if (Test-Path "$BuildDir/nupkg/scripts/postinstall.ps1") {
+    Copy-Item "$BuildDir/nupkg/scripts/postinstall.ps1" $managedInstallsPayloadDir -Force
+    Write-Verbose "Copied postinstall.ps1 to ManagedInstalls payload"
+}
+if (Test-Path "$BuildDir/nupkg/scripts/preinstall.ps1") {
+    Copy-Item "$BuildDir/nupkg/scripts/preinstall.ps1" $managedInstallsPayloadDir -Force
+    Write-Verbose "Copied preinstall.ps1 to ManagedInstalls payload"
+}
+
+# Copy module schedules and task scripts from shared resources
+if (Test-Path "$sharedResourcesDir/module-schedules.json") {
+    Copy-Item "$sharedResourcesDir/module-schedules.json" $ProgramFilesPayloadDir -Force
+    Write-Verbose "Copied module-schedules.json from shared resources"
+}
+if (Test-Path "$sharedResourcesDir/install-tasks.ps1") {
+    Copy-Item "$sharedResourcesDir/install-tasks.ps1" $ProgramFilesPayloadDir -Force
+    Write-Verbose "Copied install-tasks.ps1 from shared resources"
+}
+if (Test-Path "$sharedResourcesDir/uninstall-tasks.ps1") {
+    Copy-Item "$sharedResourcesDir/uninstall-tasks.ps1" $ProgramFilesPayloadDir -Force
+    Write-Verbose "Copied uninstall-tasks.ps1 from shared resources"
+}
 
 # Always ensure target directories are clean first
 if (Test-Path $osqueryTargetDataDir) {
@@ -536,6 +606,50 @@ if (Test-Path $osquerySourceDir) {
 
 Copy-Item "$SrcDir/appsettings.yaml" "$ProgramDataPayloadDir/appsettings.template.yaml" -Force
 Write-Verbose "Copied configuration files to data payload directory"
+
+# Copy additional shared resources to Program Files payload
+$sharedResourcesDir = "$BuildDir/resources"
+$sharedFiles = @(
+    "module-schedules.json",
+    "install-tasks.ps1", 
+    "uninstall-tasks.ps1"
+)
+
+foreach ($file in $sharedFiles) {
+    $sourcePath = Join-Path $sharedResourcesDir $file
+    if (Test-Path $sourcePath) {
+        Copy-Item $sourcePath $ProgramFilesPayloadDir -Force
+        Write-Verbose "Copied $file from shared resources to Program Files payload"
+    } else {
+        Write-Warning "Shared resource not found: $sourcePath"
+    }
+}
+
+# Copy install scripts directory if it exists
+$installScriptsDir = "$sharedResourcesDir/install-scripts"
+if (Test-Path $installScriptsDir) {
+    Copy-Item $installScriptsDir $ProgramFilesPayloadDir -Recurse -Force
+    Write-Verbose "Copied install-scripts directory from shared resources"
+}
+
+# Copy ManagedInstalls scripts to payload
+$managedInstallsPayloadDir = "$NupkgDir/payload/managedinstalls"
+if (-not (Test-Path $managedInstallsPayloadDir)) {
+    New-Item -ItemType Directory -Path $managedInstallsPayloadDir -Force | Out-Null
+}
+
+$managedInstallsScripts = @(
+    "$BuildDir/nupkg/scripts/postinstall.ps1",
+    "$BuildDir/nupkg/scripts/preinstall.ps1"
+)
+
+foreach ($scriptPath in $managedInstallsScripts) {
+    if (Test-Path $scriptPath) {
+        $scriptName = Split-Path $scriptPath -Leaf
+        Copy-Item $scriptPath $managedInstallsPayloadDir -Force
+        Write-Verbose "Copied $scriptName to ManagedInstalls payload"
+    }
+}
 
 # Ensure Cimian postflight script exists
 if (-not (Test-Path "$CimianPayloadDir/postflight.ps1")) {
@@ -592,6 +706,7 @@ $ErrorActionPreference = 'Stop'
 # Installation paths
 $programFilesLocation = 'C:\Program Files\ReportMate\'
 $programDataLocation = 'C:\ProgramData\ManagedReports\'
+$managedInstallsLocation = 'C:\ProgramData\ManagedInstalls\'
 
 # Create directories if they don't exist
 if ($programFilesLocation) { 
@@ -600,6 +715,9 @@ if ($programFilesLocation) {
 if ($programDataLocation) { 
     New-Item -ItemType Directory -Force -Path $programDataLocation | Out-Null 
 }
+if ($managedInstallsLocation) { 
+    New-Item -ItemType Directory -Force -Path $managedInstallsLocation | Out-Null 
+}
 
 $payloadRoot = Join-Path $PSScriptRoot '..\payload'
 $payloadRoot = [System.IO.Path]::GetFullPath($payloadRoot)
@@ -607,7 +725,7 @@ $payloadRoot = [System.IO.Path]::GetFullPath($payloadRoot)
 Write-Host "Installing ReportMate from payload: $payloadRoot"
 
 # Copy executable and version files to Program Files
-$programFilesFiles = @('runner.exe', 'version.txt')
+$programFilesFiles = @('runner.exe', 'version.txt', 'module-schedules.json', 'install-tasks.ps1', 'uninstall-tasks.ps1')
 foreach ($file in $programFilesFiles) {
     $sourcePath = Join-Path $payloadRoot $file
     if (Test-Path $sourcePath) {
@@ -647,148 +765,53 @@ if (Test-Path $dataPayloadPath) {
     Write-Warning "No data payload directory found at: $dataPayloadPath"
 }
 
-Write-Host "ReportMate chocolatey installation completed successfully"
-
-'@ + @'
-# Post-install script: postinstall.ps1
-# ReportMate Post-Installation Script
-# Configures the ReportMate client after installation
-# Can be configured via environment variables, registry, or CSP policies
-
-$ErrorActionPreference = "Continue"
-
-# Initialize configuration variables
-$ApiUrl = ""
-$ApiKey = ""
-
-Write-Host "ReportMate Post-Installation Script"
-Write-Host "=================================================="
-
-# Check for CSP policies first (managmenet configs)
-$CSPRegistryPath = "HKLM:\SOFTWARE\Policies\ReportMate"
-if (Test-Path $CSPRegistryPath) {
-    Write-Host "Found CSP policy configuration"
-    
-    $CSPApiUrl = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiUrl" -ErrorAction SilentlyContinue
-    if ($CSPApiUrl -and -not [string]::IsNullOrEmpty($CSPApiUrl.ApiUrl)) {
-        $ApiUrl = $CSPApiUrl.ApiUrl
-        Write-Host "Using CSP-configured API URL"
-    }
-    
-    $CSPApiKey = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiKey" -ErrorAction SilentlyContinue
-    if ($CSPApiKey -and -not [string]::IsNullOrEmpty($CSPApiKey.ApiKey)) {
-        $ApiKey = $CSPApiKey.ApiKey
-        Write-Host "Using CSP-configured API Key"
-    }
-}
-
-# Create registry key if it doesn't exist
-$RegistryPath = "HKLM:\SOFTWARE\ReportMate"
-if (-not (Test-Path $RegistryPath)) {
-    try {
-        New-Item -Path $RegistryPath -Force | Out-Null
-        Write-Host "Created registry key: $RegistryPath"
-    } catch {
-        Write-Warning "Failed to create registry key: $_"
-    }
-}
-
-# Set default configuration values
-try {
-    # Set collection interval (default: 1 hour)
-    Set-ItemProperty -Path $RegistryPath -Name "CollectionInterval" -Value 3600 -Type DWord -ErrorAction SilentlyContinue
-    
-    # Set log level (default: Information)
-    Set-ItemProperty -Path $RegistryPath -Name "LogLevel" -Value "Information" -Type String -ErrorAction SilentlyContinue
-    
-    # Set osquery path (default)
-    Set-ItemProperty -Path $RegistryPath -Name "OsQueryPath" -Value "C:\Program Files\osquery\osqueryi.exe" -Type String -ErrorAction SilentlyContinue
-    
-    # Set osquery config path for ReportMate
-    Set-ItemProperty -Path $RegistryPath -Name "OsQueryConfigPath" -Value "C:\ProgramData\ManagedReports\osquery" -Type String -ErrorAction SilentlyContinue
-    
-    Write-Host "Set default configuration values"
-} catch {
-    Write-Warning "Failed to set default configuration: $_"
-}
-
-# Set API URL if provided via environment variable
-$EnvApiUrl = $env:REPORTMATE_API_URL
-if (-not [string]::IsNullOrEmpty($EnvApiUrl)) {
-    $ApiUrl = $EnvApiUrl
-}
-
-if (-not [string]::IsNullOrEmpty($ApiUrl)) {
-    try {
-        Set-ItemProperty -Path $RegistryPath -Name "ApiUrl" -Value $ApiUrl -Type String
-        Write-Host "Set API URL: $ApiUrl"
-    } catch {
-        Write-Warning "Failed to set API URL: $_"
-    }
-}
-
-# Set API Key if provided
-$EnvApiKey = $env:REPORTMATE_API_KEY
-if (-not [string]::IsNullOrEmpty($EnvApiKey)) {
-    $ApiKey = $EnvApiKey
-}
-
-if (-not [string]::IsNullOrEmpty($ApiKey)) {
-    try {
-        Set-ItemProperty -Path $RegistryPath -Name "ApiKey" -Value $ApiKey -Type String
-        Write-Host "Set API Key: [REDACTED]"
-    } catch {
-        Write-Warning "Failed to set API Key: $_"
-    }
-}
-
-# Create data directories
-$DataDirectories = @(
-    "C:\ProgramData\ManagedReports",
-    "C:\ProgramData\ManagedReports\config",
-    "C:\ProgramData\ManagedReports\logs",
-    "C:\ProgramData\ManagedReports\cache",
-    "C:\ProgramData\ManagedReports\data"
-)
-
-foreach ($Directory in $DataDirectories) {
-    if (-not (Test-Path $Directory)) {
-        try {
-            New-Item -ItemType Directory -Path $Directory -Force | Out-Null
-            Write-Host "Created directory: $Directory"
-        } catch {
-            Write-Warning "Failed to create directory $Directory`: $_"
+# Copy ManagedInstalls scripts
+$managedInstallsPayloadPath = Join-Path $payloadRoot 'managedinstalls'
+if (Test-Path $managedInstallsPayloadPath) {
+    Write-Host "Copying ManagedInstalls scripts..."
+    Get-ChildItem -Path $managedInstallsPayloadPath -Recurse | ForEach-Object {
+        $fullName = $_.FullName
+        $fullName = [Management.Automation.WildcardPattern]::Escape($fullName)
+        $relative = $fullName.Substring($managedInstallsPayloadPath.Length).TrimStart('\','/')
+        $dest = Join-Path $managedInstallsLocation $relative
+        
+        if ($_.PSIsContainer) {
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        } else {
+            Copy-Item -LiteralPath $fullName -Destination $dest -Force
+            Write-Host "Copied ManagedInstalls file: $relative"
         }
     }
-}
-
-# Set permissions on data directory
-try {
-    $Acl = Get-Acl "C:\ProgramData\ManagedReports"
-    $AccessRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        "SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
-    )
-    $Acl.SetAccessRule($AccessRule)
-    Set-Acl -Path "C:\ProgramData\ManagedReports" -AclObject $Acl
-    Write-Host "Set permissions on data directory"
-} catch {
-    Write-Warning "Failed to set permissions on data directory: $_"
-}
-
-# Test installation
-$TestResult = & "C:\Program Files\ReportMate\runner.exe" info 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Installation test successful"
+    Write-Host "ManagedInstalls scripts copied successfully"
+    
+    # Execute postinstall script if it exists
+    $postinstallScript = Join-Path $managedInstallsLocation 'postinstall.ps1'
+    if (Test-Path $postinstallScript) {
+        Write-Host "Executing postinstall script..."
+        try {
+            & $postinstallScript
+            Write-Host "Postinstall script completed successfully"
+        } catch {
+            Write-Warning "Postinstall script failed: $_"
+        }
+    }
 } else {
-    Write-Warning "Installation test failed: $TestResult"
+    Write-Verbose "No ManagedInstalls payload directory found at: $managedInstallsPayloadPath"
 }
 
-Write-Host "Post-installation script completed"
-Write-Host ""
-Write-Host "Next steps:"
-Write-Host "1. Configure API URL: Set-ItemProperty -Path 'HKLM:\SOFTWARE\ReportMate' -Name 'ApiUrl' -Value 'https://your-api.azurewebsites.net'"
-Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
-Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"
+Write-Host "ReportMate chocolatey installation completed successfully"
+
+# Clean up executable from payload after installation
+$exePayloadPath = Join-Path $payloadRoot 'runner.exe'
+if (Test-Path $exePayloadPath) {
+    try {
+        Remove-Item $exePayloadPath -Force
+        Write-Host "Cleaned up runner.exe from payload"
+    } catch {
+        Write-Verbose "Could not remove runner.exe from payload: $_"
+    }
+}
+
 '@
 
 $chocolateyInstallContent | Out-File $chocolateyInstallPath -Encoding UTF8
@@ -871,6 +894,17 @@ if (-not $SkipNUPKG) {
                     Write-Success "NUPKG created: $($file.Name) ($([math]::Round($nupkgSize, 2)) MB)"
                 }
                 
+                # Clean up executable from payload after successful NUPKG creation
+                $payloadExe = "$ProgramFilesPayloadDir/runner.exe"
+                if (Test-Path $payloadExe) {
+                    try {
+                        Remove-Item $payloadExe -Force
+                        Write-Verbose "Cleaned up runner.exe from payload after successful build"
+                    } catch {
+                        Write-Warning "Could not remove runner.exe from payload: $_"
+                    }
+                }
+                
                 if (-not $nupkgFiles) {
                     Write-Warning "No .nupkg files found after cimipkg execution"
                 }
@@ -889,6 +923,171 @@ if (-not $SkipNUPKG) {
     }
 } else {
     Write-Info "Skipping NUPKG creation"
+}
+
+Write-Output ""
+
+# Create MSI installer
+if (-not $SkipMSI) {
+    Write-Step "Creating MSI installer..."
+    
+    # Check for WiX Toolset
+    $wixFound = $false
+    $wixBuild = Get-Command wix.exe -ErrorAction SilentlyContinue
+    $candle = Get-Command candle.exe -ErrorAction SilentlyContinue
+    $light = Get-Command light.exe -ErrorAction SilentlyContinue
+    
+    if ($wixBuild) {
+        $wixFound = $true
+        Write-Success "WiX Toolset v6 found"
+    } elseif ($candle -and $light) {
+        $wixFound = $true
+        Write-Success "WiX Toolset v3 (legacy) found"
+    } else {
+        Write-Warning "WiX Toolset not found in PATH - checking common locations..."
+        $wixLocations = @(
+            "${env:ProgramFiles}\WiX Toolset v6.0\bin",
+            "${env:ProgramFiles(x86)}\WiX Toolset v6.0\bin",
+            "${env:ProgramFiles}\WiX Toolset v5.0\bin",
+            "${env:ProgramFiles(x86)}\WiX Toolset v5.0\bin",
+            "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin",
+            "${env:ProgramFiles}\WiX Toolset v3.14\bin",
+            "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin",
+            "${env:ProgramFiles}\WiX Toolset v3.11\bin",
+            "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0A\Bin",
+            "${env:ProgramFiles}\Microsoft SDKs\Windows\v7.0A\Bin"
+        )
+        
+        foreach ($location in $wixLocations) {
+            if (Test-Path "$location\wix.exe") {
+                $env:PATH = "$location;$env:PATH"
+                $wixFound = $true
+                Write-Success "WiX Toolset v6 found at: $location"
+                break
+            } elseif ((Test-Path "$location\candle.exe") -and (Test-Path "$location\light.exe")) {
+                $env:PATH = "$location;$env:PATH"
+                $wixFound = $true
+                Write-Success "WiX Toolset v3 (legacy) found at: $location"
+                break
+            }
+        }
+    }
+    
+    if ($wixFound) {
+        try {
+            Write-Verbose "Preparing MSI staging directory..."
+            
+            # Clean and prepare MSI staging directory
+            if (Test-Path $MsiStagingDir) {
+                Remove-Item $MsiStagingDir -Recurse -Force
+            }
+            New-Item -ItemType Directory -Path $MsiStagingDir -Force | Out-Null
+            
+            # Copy binary files to staging
+            Copy-Item "$PublishDir/runner.exe" "$MsiStagingDir/runner.exe" -Force
+            Write-Verbose "Copied runner.exe to MSI staging"
+            
+            # Copy configuration files to staging
+            Copy-Item "$SrcDir/appsettings.json" "$MsiStagingDir/appsettings.json" -Force
+            Copy-Item "$SrcDir/appsettings.yaml" "$MsiStagingDir/appsettings.yaml" -Force
+            Write-Verbose "Copied configuration files to MSI staging"
+            
+            # Copy osquery modules to staging (using centralized build resources as single source of truth)
+            $osquerySourceDir = "$BuildDir/resources/osquery"
+            if (Test-Path $osquerySourceDir) {
+                Copy-Item $osquerySourceDir "$MsiStagingDir" -Recurse -Force
+                Write-Verbose "Copied osquery modules from src to MSI staging"
+            }
+            
+            # Create version.txt for MSI
+            $versionContent = @"
+ReportMate
+Version: $Version
+Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
+Platform: Windows x64
+Commit: $env:GITHUB_SHA
+"@
+            $versionContent | Out-File "$MsiStagingDir/version.txt" -Encoding UTF8
+            Write-Verbose "Created version.txt for MSI"
+            
+            # Copy license file for MSI
+            if (Test-Path "$BuildDir/msi/License.rtf") {
+                Copy-Item "$BuildDir/msi/License.rtf" "$MsiStagingDir/License.rtf" -Force
+                Write-Verbose "Copied license file to MSI staging"
+            }
+            
+            # Copy shared installation scripts
+            $sharedScriptsDir = "$BuildDir/resources/install-scripts"
+            if (Test-Path $sharedScriptsDir) {
+                Copy-Item $sharedScriptsDir "$MsiStagingDir/install-scripts" -Recurse -Force
+                Write-Verbose "Copied shared installation scripts to MSI staging"
+            }
+            
+            # Copy PowerShell task installation scripts
+            $installTasksScript = "$BuildDir/resources/install-tasks.ps1"
+            $uninstallTasksScript = "$BuildDir/resources/uninstall-tasks.ps1"
+            
+            if (Test-Path $installTasksScript) {
+                Copy-Item $installTasksScript "$MsiStagingDir/install-tasks.ps1" -Force
+                Write-Verbose "Copied install-tasks.ps1 to MSI staging"
+            }
+            
+            if (Test-Path $uninstallTasksScript) {
+                Copy-Item $uninstallTasksScript "$MsiStagingDir/uninstall-tasks.ps1" -Force
+                Write-Verbose "Copied uninstall-tasks.ps1 to MSI staging"
+            }
+            
+            # Copy module schedules configuration
+            $scheduleConfigPath = "$BuildDir/resources/module-schedules.json"
+            if (Test-Path $scheduleConfigPath) {
+                Copy-Item $scheduleConfigPath "$MsiStagingDir/module-schedules.json" -Force
+                Write-Verbose "Copied module schedules configuration to MSI staging"
+            }
+            
+            Write-Verbose "Building MSI with WiX..."
+            
+            # Convert date version to MSI-compatible format
+            # 2025.08.03 -> 25.8.3 (MSI versions need parts < 256)
+            $msiVersion = $Version -replace '^20(\d{2})\.0?(\d+)\.0?(\d+)$', '$1.$2.$3'
+            Write-Verbose "Converting version $Version to MSI-compatible: $msiVersion"
+            
+            $wxsPath = "$BuildDir/msi/ReportMate.wxs"
+            $msiPath = "$OutputDir/ReportMate-$Version.msi"
+            
+            # Use WiX v6 via dotnet tool run
+            Write-Verbose "Using WiX v6 build command via dotnet tool"
+            & dotnet tool run wix -- build -out $msiPath -define "SourceDir=$MsiStagingDir" -define "ResourceDir=$BuildDir/resources" -define "Version=$msiVersion" -define "APIURL=$ApiUrl" $wxsPath
+            if ($LASTEXITCODE -ne 0) {
+                throw "WiX v6 build failed with exit code $LASTEXITCODE"
+            }
+            
+            # Sign MSI if signing is enabled
+            if ($Sign) {
+                Write-Step "Signing MSI..."
+                try {
+                    signPackage -FilePath $msiPath
+                    Write-Success "Signed MSI ✔"
+                }
+                catch {
+                    Write-Error "Failed to sign MSI: $_"
+                    exit 1
+                }
+            }
+            
+            $msiSize = (Get-Item $msiPath).Length / 1MB
+            Write-Success "MSI created: ReportMate-$Version.msi ($([math]::Round($msiSize, 2)) MB)"
+            
+        } catch {
+            Write-Error "MSI creation failed: $($_.Exception.Message)"
+            Write-Warning "Continuing without MSI..."
+        }
+    } else {
+        Write-Warning "WiX Toolset not found - MSI creation skipped"
+        Write-Info "To build MSI installers, install WiX Toolset v3.11 or later"
+        Write-Info "Download from: https://github.com/wixtoolset/wix3/releases"
+    }
+} else {
+    Write-Info "Skipping MSI creation"
 }
 
 Write-Output ""
@@ -1060,7 +1259,6 @@ Configure via Registry (CSP/OMA-URI):
 Write-Output ""
 # Build summary
 Write-Header "Build Summary"
-Write-Header "============="
 Write-Info "Version: $Version"
 Write-Info "Configuration: $Configuration"
 Write-Info "Output Directory: $OutputDir"
@@ -1085,9 +1283,10 @@ if ($outputFiles) {
 
 Write-Output ""
 Write-Header "Next Steps"
-Write-Info "1. Test NUPKG: choco install `"$OutputDir/ReportMate-$Version.nupkg`" --source=."
-Write-Info "2. Test ZIP: Extract and run install.bat as administrator"
-Write-Info "3. Deploy via Chocolatey, package management, or manual installation"
+Write-Info "1. Test MSI: msiexec.exe /i `"$OutputDir/ReportMate-$Version.msi`" /quiet /norestart"
+Write-Info "2. Test NUPKG: choco install `"$OutputDir/ReportMate-$Version.nupkg`" --source=."
+Write-Info "3. Test ZIP: Extract and run install.bat as administrator"
+Write-Info "4. Deploy via Windows Installer, Chocolatey, or manual installation"
 
 if ($ApiUrl) {
     Write-Info "5. Configured API URL: $ApiUrl"
@@ -1105,14 +1304,65 @@ if ($CreateRelease -and $ghFound) {
 if ($Install) {
     Write-Step "Installing ReportMate package..."
     
+    # Prioritize MSI installation if available
+    $msiPath = "$OutputDir/ReportMate-$Version.msi"
     $nupkgPath = "$OutputDir/ReportMate-$Version.nupkg"
-    if (Test-Path $nupkgPath) {
+    
+    if ((Test-Path $msiPath) -and (-not $SkipMSI)) {
+        Write-Info "Installing MSI package: ReportMate-$Version.msi"
         try {
             # Check if running as administrator
             $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
             
             if (-not $isAdmin) {
-                Write-Warning "Installation requires administrator privileges. Using native Windows sudo..."
+                Write-Warning "MSI installation requires administrator privileges. Using native Windows sudo..."
+                
+                # Use msiexec with quiet installation
+                $installCmd = "msiexec.exe /i `"$($msiPath -replace '/', '\')`" /quiet /norestart /l*v `"$($OutputDir -replace '/', '\')\ReportMate-Install.log`""
+                
+                # Execute with native sudo
+                sudo powershell -Command $installCmd
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "MSI installation completed successfully"
+                    Write-Info "Installation log: $OutputDir\ReportMate-Install.log"
+                } else {
+                    Write-Error "MSI installation failed with exit code: $LASTEXITCODE"
+                    Write-Info "Check installation log: $OutputDir\ReportMate-Install.log"
+                    throw "MSI installation failed"
+                }
+            } else {
+                # Already running as admin, install directly
+                Write-Verbose "Installing MSI with msiexec: $msiPath"
+                $installArgs = @(
+                    "/i", "`"$($msiPath -replace '/', '\')`"",
+                    "/quiet",
+                    "/norestart",
+                    "/l*v", "`"$($OutputDir -replace '/', '\')\ReportMate-Install.log`""
+                )
+                
+                & msiexec.exe @installArgs
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Success "MSI installation completed successfully"
+                    Write-Info "Installation log: $OutputDir\ReportMate-Install.log"
+                } else {
+                    Write-Error "MSI installation failed with exit code: $LASTEXITCODE"
+                    Write-Info "Check installation log: $OutputDir\ReportMate-Install.log"
+                }
+            }
+        } catch {
+            Write-Error "Failed to install MSI: $_"
+            Write-Info "Manual installation: msiexec.exe /i `"$msiPath`" /quiet /norestart"
+        }
+    } elseif (Test-Path $nupkgPath) {
+        Write-Info "Installing NUPKG package: ReportMate-$Version.nupkg"
+        try {
+            # Check if running as administrator
+            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
+            
+            if (-not $isAdmin) {
+                Write-Warning "NUPKG installation requires administrator privileges. Using native Windows sudo..."
                 
                 # Use native Windows sudo (available in Windows 11 and modern Windows 10)
                 $installCmd = "choco install `"$nupkgPath`" --source=. --force --yes"
@@ -1121,9 +1371,9 @@ if ($Install) {
                 sudo powershell -Command $installCmd
                 
                 if ($LASTEXITCODE -eq 0) {
-                    Write-Success "Installation command executed with native sudo"
+                    Write-Success "NUPKG installation completed successfully"
                 } else {
-                    Write-Error "Installation failed with exit code: $LASTEXITCODE"
+                    Write-Error "NUPKG installation failed with exit code: $LASTEXITCODE"
                     throw "Chocolatey installation failed"
                 }
             } else {
@@ -1132,20 +1382,40 @@ if ($Install) {
                 choco install "$nupkgPath" --source=. --force --yes
                 
                 if ($LASTEXITCODE -eq 0) {
-                    Write-Success "ReportMate package installed successfully"
+                    Write-Success "NUPKG installation completed successfully"
                 } else {
-                    Write-Error "Package installation failed with exit code: $LASTEXITCODE"
+                    Write-Error "NUPKG installation failed with exit code: $LASTEXITCODE"
                 }
             }
         } catch {
-            Write-Error "Failed to install package: $_"
+            Write-Error "Failed to install NUPKG: $_"
             Write-Info "Manual installation: choco install `"$nupkgPath`" --source=. --force --yes"
         }
     } else {
-        Write-Error "NUPKG file not found: $nupkgPath"
-        Write-Info "Make sure the package was built successfully"
+        Write-Error "No installation packages found"
+        Write-Info "Expected files:"
+        Write-Info "  - MSI: $msiPath"
+        Write-Info "  - NUPKG: $nupkgPath"
+        Write-Info "Make sure packages were built successfully"
     }
 }
+
+Write-Output ""
+
+# Clean up duplicate osquery files after package creation  
+Write-Step "Cleaning up duplicate osquery files..."
+$osqueryPayloadDirs = @(
+    "$ProgramDataPayloadDir/osquery",
+    "$ProgramFilesPayloadDir/osquery"
+)
+
+foreach ($dir in $osqueryPayloadDirs) {
+    if (Test-Path $dir) {
+        Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Verbose "Removed duplicate osquery directory: $dir"
+    }
+}
+Write-Success "Duplicate osquery files cleaned up"
 
 Write-Output ""
 Write-Success "Build completed successfully!"
