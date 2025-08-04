@@ -393,13 +393,23 @@ appsettings.Local.json
 # Logs
 *.log
 
-# Build artifacts specific to this project (entire folders are generated)
-build/
+# Build artifacts specific to this project 
+# Keep build/ source directory in version control, but exclude generated artifacts
+build/nupkg/payload/Program Files/ReportMate/runner.exe
+build/nupkg/payload/Program Files/ReportMate/version.txt
+build/nupkg/payload/data/
+build/nupkg/payload/osquery/
+build/nupkg/payload/data/osquery/
+build/nupkg/tools/*.log
+build/**/obj/
+build/**/bin/
+build/**/*.wixobj
+build/**/*.wixpdb
 .publish/
 dist/
 installer/
 
-# Package payload (generated during build)
+# Package payload (generated during build - legacy paths)
 nupkg/payload/Program Files/ReportMate/runner.exe
 nupkg/payload/Program Files/ReportMate/version.txt
 

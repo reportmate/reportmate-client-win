@@ -57,8 +57,9 @@
     <None Include="appsettings.yaml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Include="osquery\**\*.json">
+    <None Include="..\build\resources\osquery\**\*.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      <Link>osquery\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>
   </ItemGroup>
 
