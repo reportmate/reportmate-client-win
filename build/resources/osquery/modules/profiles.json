@@ -1,0 +1,182 @@
+{
+  "module": "profiles", 
+  "version": "2.0.0",
+  "description": "Comprehensive configuration profiles, policies, CSP/GPO settings, and MDM management preferences",
+  "queries": {
+    "group_policy_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Group Policy settings from registry with full path information"
+    },
+    "mdm_configuration_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\%' AND name != '';",
+      "interval": 3600,
+      "description": "MDM configuration service provider (CSP) policies"
+    },
+    "intune_policy_manager": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device%' AND type = 'subkey';",
+      "interval": 1800,
+      "description": "Intune PolicyManager current device policy areas"
+    },
+    "intune_enrollment_info": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Enrollments\\%' AND name != '';",
+      "interval": 3600,
+      "description": "Intune enrollment and management information"
+    },
+    "intune_management_extensions": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\IntuneManagementExtension\\%' AND name != '';",
+      "interval": 3600,
+      "description": "Intune Management Extension configurations"
+    },
+    "csp_policy_configurations": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\providers\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Configuration Service Provider (CSP) policy configurations"
+    },
+    "oma_uri_settings": {
+      "query": "SELECT path, name, type, data FROM registry WHERE (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\user\\%') AND name LIKE '%OMA-URI%';",
+      "interval": 3600,
+      "description": "OMA-URI custom profile settings"
+    },
+    "windows_defender_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Windows Defender security policies"
+    },
+    "firewall_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Windows Firewall policy configuration"
+    },
+    "update_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Windows Update policy settings"
+    },
+    "bitlocker_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\FVE\\%' AND data != '';",
+      "interval": 3600,
+      "description": "BitLocker encryption policy settings"
+    },
+    "user_account_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\%' AND data != '';",
+      "interval": 3600,
+      "description": "User account control and security policies"
+    },
+    "power_management_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Power\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Power management policy configuration"
+    },
+    "edge_browser_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Microsoft Edge browser policy settings"
+    },
+    "chrome_browser_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Google\\Chrome\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Google Chrome browser policy settings"
+    },
+    "office_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Office\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Microsoft Office application policies"
+    },
+    "app_locker_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\SrpV2\\%' AND data != '';",
+      "interval": 3600,
+      "description": "AppLocker application control policies"
+    },
+    "credential_guard_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeviceGuard\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Windows Credential Guard policies"
+    },
+    "security_compliance_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\DeviceCompliance\\%' AND name != '';",
+      "interval": 1800,
+      "description": "Device compliance and security policies"
+    },
+    "device_configuration_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device' AND type = 'subkey';",
+      "interval": 1800,
+      "description": "Device configuration policy areas from MDM"
+    },
+    "endpoint_protection_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Defender\\%' AND name NOT LIKE '%_ProviderSet' AND name NOT LIKE '%_WinningProvider' AND name NOT LIKE '%_LastWrite' AND data != '';",
+      "interval": 1800,
+      "description": "Endpoint protection and antivirus policies"
+    },
+    "settings_catalog_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\SettingsCatalog\\%' AND name != '';",
+      "interval": 1800,
+      "description": "Intune Settings Catalog configuration policies"
+    },
+    "administrative_templates": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\ADMX\\%' AND name != '';",
+      "interval": 3600,
+      "description": "Administrative Templates (ADMX) policies from Intune"
+    },
+    "user_configuration_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\PolicyManager\\%' AND name != '';",
+      "interval": 3600,
+      "description": "User-specific configuration policies"
+    },
+    "wip_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\WindowsInformationProtection\\%' AND name != '';",
+      "interval": 3600,
+      "description": "Windows Information Protection (WIP) policies"
+    },
+    "vpn_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\VPN\\%' AND name != '';",
+      "interval": 3600,
+      "description": "VPN configuration policies"
+    },
+    "wifi_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\WiFi\\%' AND name != '';",
+      "interval": 3600,
+      "description": "WiFi configuration policies"
+    },
+    "certificate_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Certificates\\%' AND name != '';",
+      "interval": 3600,
+      "description": "Certificate deployment and management policies"
+    },
+    "kiosk_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\AssignedAccess\\%' AND name != '';",
+      "interval": 3600,
+      "description": "Kiosk mode and assigned access policies"
+    },
+    "intune_defender_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Defender\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Detailed Windows Defender policies from Intune"
+    },
+    "intune_application_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\ApplicationManagement\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Application management policies from Intune"
+    },
+    "intune_browser_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Browser\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Browser management policies from Intune"
+    },
+    "intune_privacy_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Privacy\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Privacy and data collection policies from Intune"
+    },
+    "intune_security_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Security\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Security configuration policies from Intune"
+    },
+    "intune_dataprotection_policies": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\DataProtection\\%' AND data != '';",
+      "interval": 1800,
+      "description": "Data protection and WIP policies from Intune"
+    }
+  }
+}

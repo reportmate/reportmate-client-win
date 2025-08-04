@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  
+  <!-- Package Information (WiX v6 uses Package as root element) -->
+  <Package Name="ReportMate Windows Client" 
+           Language="1033" 
+           Version="$(Version)" 
+           Manufacturer="ReportMate" 
+           UpgradeCode="8A5D2E3F-7B6C-4891-A0B2-C3D4E5F60718"
+           InstallerVersion="500" 
+           Compressed="yes"
+           Scope="perMachine">
+    
+    <!-- Media -->
+    <Media Id="1" Cabinet="ReportMate.cab" EmbedCab="yes" />
+    
+    <!-- Features -->
+    <Feature Id="ProductFeature" Title="ReportMate Windows Client" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="OSQueryModuleFiles" />
+    </Feature>
+    
+    <!-- Upgrade Logic -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of ReportMate is already installed." />
+    
+    <!-- Directory Structure -->
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="ReportMate" />
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATADIR" Name="ManagedReports" />
+    </StandardDirectory>
+    
+    <!-- Components -->
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <!-- Main Executable -->
+      <Component Id="ReportMateExe" Guid="*">
+        <File Id="ReportMateExe" 
+              Source="$(var.SourceDir)\runner.exe" 
+              KeyPath="yes" />
+      </Component>
+      
+      <!-- Configuration Files -->
+      <Component Id="ConfigFiles" Guid="8B6C2E3F-9A7D-4891-B0C2-D4E5F6071829">
+        <File Id="AppSettingsJson" Source="$(var.SourceDir)\appsettings.json" />
+        <File Id="AppSettingsYaml" Source="$(var.SourceDir)\appsettings.yaml" />
+        <File Id="ModuleSchedulesJson" Source="$(var.ResourceDir)\module-schedules.json" />
+      </Component>
+      
+      <!-- OSQuery Modules -->
+      <Component Id="OSQueryModules" Guid="*">
+        <File Id="EnabledModulesJson" Source="$(var.ResourceDir)\osquery\enabled-modules.json" />
+        <CreateFolder />
+      </Component>
+      
+      <!-- Scheduled Task Scripts -->
+      <Component Id="ScheduledTaskScripts" Guid="9C7D3E4F-AB8E-5902-C1D3-E5F6A7182940">
+        <File Id="TaskInstallScript" Source="$(var.ResourceDir)\install-tasks.ps1" />
+        <File Id="TaskUninstallScript" Source="$(var.ResourceDir)\uninstall-tasks.ps1" />
+      </Component>
+    </ComponentGroup>
+    
+    <!-- OSQuery Module Files -->
+    <ComponentGroup Id="OSQueryModuleFiles" Directory="DATADIR">
+      <Component Id="OSQueryApplicationsModule" Guid="*">
+        <File Id="ApplicationsJson" Source="$(var.ResourceDir)\osquery\modules\applications.json" />
+      </Component>
+      <Component Id="OSQueryDisplaysModule" Guid="*">
+        <File Id="DisplaysJson" Source="$(var.ResourceDir)\osquery\modules\displays.json" />
+      </Component>
+      <Component Id="OSQueryHardwareModule" Guid="*">
+        <File Id="HardwareJson" Source="$(var.ResourceDir)\osquery\modules\hardware.json" />
+      </Component>
+      <Component Id="OSQueryInstallsModule" Guid="*">
+        <File Id="InstallsJson" Source="$(var.ResourceDir)\osquery\modules\installs.json" />
+      </Component>
+      <Component Id="OSQueryInventoryModule" Guid="*">
+        <File Id="InventoryJson" Source="$(var.ResourceDir)\osquery\modules\inventory.json" />
+      </Component>
+      <Component Id="OSQueryManagementModule" Guid="*">
+        <File Id="ManagementJson" Source="$(var.ResourceDir)\osquery\modules\management.json" />
+      </Component>
+      <Component Id="OSQueryNetworkModule" Guid="*">
+        <File Id="NetworkJson" Source="$(var.ResourceDir)\osquery\modules\network.json" />
+      </Component>
+      <Component Id="OSQueryPrintersModule" Guid="*">
+        <File Id="PrintersJson" Source="$(var.ResourceDir)\osquery\modules\printers.json" />
+      </Component>
+      <Component Id="OSQueryProfilesModule" Guid="*">
+        <File Id="ProfilesJson" Source="$(var.ResourceDir)\osquery\modules\profiles.json" />
+      </Component>
+      <Component Id="OSQuerySecurityModule" Guid="*">
+        <File Id="SecurityJson" Source="$(var.ResourceDir)\osquery\modules\security.json" />
+      </Component>
+      <Component Id="OSQuerySystemModule" Guid="*">
+        <File Id="SystemJson" Source="$(var.ResourceDir)\osquery\modules\system.json" />
+      </Component>
+    </ComponentGroup>
+    
+    <!-- Custom Actions for Scheduled Task Management -->
+    <CustomAction Id="InstallScheduledTasks" 
+                  Execute="deferred" 
+                  Impersonate="no" 
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="powershell.exe -ExecutionPolicy Bypass -File install-tasks.ps1 -InstallPath [INSTALLFOLDER]" 
+                  Return="check" />
+    
+    <CustomAction Id="UninstallScheduledTasks" 
+                  Execute="deferred" 
+                  Impersonate="no" 
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="powershell.exe -ExecutionPolicy Bypass -File uninstall-tasks.ps1" 
+                  Return="ignore" />
+    
+    <!-- Custom Actions for Configuration -->
+    <CustomAction Id="SetApiConfiguration" 
+                  Execute="immediate"
+                  Property="ApiConfigScript"
+                  Value="if ('$(var.APIURL)' -ne '') { New-Item -Path 'HKLM:\SOFTWARE\ReportMate' -Force; Set-ItemProperty -Path 'HKLM:\SOFTWARE\ReportMate' -Name 'ApiUrl' -Value '$(var.APIURL)' -Force }" />
+    
+    <CustomAction Id="RunApiConfiguration" 
+                  Execute="deferred" 
+                  Impersonate="no" 
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="powershell.exe -ExecutionPolicy Bypass -Command [ApiConfigScript]" 
+                  Return="ignore" />
+    
+    <!-- Install Sequence -->
+    <InstallExecuteSequence>
+      <Custom Action="SetApiConfiguration" After="CostFinalize" Condition="NOT Installed" />
+      <Custom Action="RunApiConfiguration" After="InstallFiles" Condition="NOT Installed" />
+      <Custom Action="InstallScheduledTasks" After="RunApiConfiguration" Condition="NOT Installed" />
+      <Custom Action="UninstallScheduledTasks" Before="RemoveFiles" Condition="Installed AND NOT REINSTALL" />
+    </InstallExecuteSequence>
+    
+    <!-- Properties -->
+    <?if $(var.APIURL) != ""?>
+    <Property Id="APIURL" Value="$(var.APIURL)" />
+    <?else?>
+    <Property Id="APIURL" Value="https://api.reportmate.com" />
+    <?endif?>
+    <Property Id="APIKEY" Secure="yes" />
+    
+  </Package>
+</Wix>
