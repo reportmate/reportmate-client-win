@@ -1,0 +1,108 @@
+{
+  "module": "system",
+  "version": "1.0.0",
+  "description": "Operating system information and configuration",
+  "queries": {
+    "os_version": {
+      "query": "SELECT name, version, major, minor, patch, build, platform, platform_like, arch, install_date FROM os_version;",
+      "interval": 3600,
+      "description": "Operating system version information"
+    },
+    "uptime": {
+      "query": "SELECT days, hours, minutes, seconds, total_seconds FROM uptime;",
+      "interval": 300,
+      "description": "System uptime information"
+    },
+    "boot_time": {
+      "query": "SELECT datetime('now', '-' || total_seconds || ' seconds') as boot_time FROM uptime;",
+      "interval": 300,
+      "description": "System boot time calculated from current time minus uptime"
+    },
+    "system_info": {
+      "query": "SELECT hostname, uuid, cpu_subtype, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory FROM system_info;",
+      "interval": 3600,
+      "description": "System hardware information"
+    },
+    "logged_in_users": {
+      "query": "SELECT user, tty, host, time, pid FROM logged_in_users;",
+      "interval": 300,
+      "description": "Currently logged in users"
+    },
+    "services": {
+      "query": "SELECT name, service_type, start_type, status, pid, path, description, display_name FROM services WHERE start_type != 'DISABLED';",
+      "interval": 3600,
+      "description": "Windows services information"
+    },
+
+    "environment_variables": {
+      "query": "SELECT variable as name, value FROM default_environment WHERE variable IN ('ComSpec', 'OS', 'Path', 'PATHEXT', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_IDENTIFIER', 'NUMBER_OF_PROCESSORS', 'COMPUTERNAME', 'USERNAME', 'USERDOMAIN');",
+      "interval": 3600,
+      "description": "Key environment variables"
+    },
+    "windows_patches": {
+      "query": "SELECT hotfix_id, description, installed_on, installed_by FROM patches ORDER BY installed_on DESC LIMIT 50;",
+      "interval": 3600,
+      "description": "Recent Windows updates and patches"
+    },
+    "windows_crashes": {
+      "query": "SELECT datetime, module, path, pid, tid, version, process_uptime FROM windows_crashes WHERE datetime > datetime('now', '-24 hours');",
+      "interval": 3600,
+      "description": "Recent Windows crashes"
+    },
+    "windows_events": {
+      "query": "SELECT datetime, source, provider_name, provider_guid, eventid, task, level, keywords, data FROM windows_events WHERE source = 'Service Control Manager' AND datetime > datetime('now', '-1 hours') ORDER BY datetime DESC LIMIT 100;",
+      "interval": 300,
+      "description": "Recent Windows system events"
+    },
+    "time_info": {
+      "query": "SELECT timezone, timestamp, datetime(timestamp, 'unixepoch') as current_time FROM time;",
+      "interval": 3600,
+      "description": "System time and timezone information"
+    },
+    "os_edition": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\EditionID' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProductName';",
+      "interval": 3600,
+      "description": "Windows edition information from registry"
+    },
+    "install_date": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\InstallDate';",
+      "interval": 3600,
+      "description": "Windows install date from registry"
+    },
+    "locale_info": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Language\\Default' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation\\TimeZoneKeyName' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Locale\\InstallLanguage' OR path = 'HKEY_CURRENT_USER\\Control Panel\\International\\LocaleName' OR path = 'HKEY_CURRENT_USER\\Control Panel\\International\\sLanguage';",
+      "interval": 3600,
+      "description": "System locale and timezone from registry"
+    },
+    "detailed_build": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\UBR' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\CurrentBuild' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\BuildLabEx';",
+      "interval": 3600,
+      "description": "Detailed Windows build information including UBR for full build number"
+    },
+    "experience_pack": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FESearches\\DevicePackageInfo' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\WinPE' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Hotfix\\KB4023057' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsFeatureExperience' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureExperience';",
+      "interval": 3600,
+      "description": "Windows Feature Experience Pack information"
+    },
+    "build_lab": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\BuildLab' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\BuildLabEx';",
+      "interval": 3600,
+      "description": "Build lab information for detailed version tracking"
+    },
+    "display_version": {
+      "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\DisplayVersion' OR path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ReleaseId';",
+      "interval": 3600,
+      "description": "Windows display version (24H2, 23H2, etc.)"
+    },
+    "keyboard_layouts": {
+      "query": "WITH user_sid AS (SELECT registry_hive FROM logged_in_users WHERE type = 'active' AND user != '' LIMIT 1) SELECT r.name, r.type, r.data FROM registry r, user_sid u WHERE r.path LIKE u.registry_hive || '\\Keyboard Layout\\Preload\\%';",
+      "interval": 3600,
+      "description": "User keyboard layout preferences - only preloaded layouts for the currently logged in user"
+    },
+    "active_keyboard_layout": {
+      "query": "WITH user_sid AS (SELECT registry_hive FROM logged_in_users WHERE type = 'active' AND user != '' LIMIT 1) SELECT r.name, r.type, r.data FROM registry r, user_sid u WHERE r.path = u.registry_hive || '\\Keyboard Layout\\Toggle\\Layout Hotkey';",
+      "interval": 300,
+      "description": "Active keyboard layout hotkey setting for the currently logged in user"
+    }
+  }
+}

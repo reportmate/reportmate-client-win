@@ -1,0 +1,20 @@
+{
+  "enabled": [
+    "hardware",
+    "system", 
+    "network",
+    "inventory",
+    "applications",
+    "security",
+    "installs",
+    "management",
+    "printers",
+    "displays",
+    "profiles"
+  ],
+  "version": "1.0.0",
+  "generated": "2025-07-12T10:30:00Z",
+  "description": "Complete modular osquery configuration for ReportMate data collection",
+  "platform": "windows",
+  "note": "All 11 core modules now enabled for comprehensive device data collection including printer and display management"
+}
