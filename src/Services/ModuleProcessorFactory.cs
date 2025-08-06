@@ -60,6 +60,7 @@ namespace ReportMate.WindowsClient.Services
                 ["installs"] = typeof(InstallsModuleProcessor),
                 ["management"] = typeof(ManagementModuleProcessor),
                 ["network"] = typeof(NetworkModuleProcessor),
+                ["peripherals"] = typeof(PeripheralsModuleProcessor),
                 ["printer"] = typeof(PrinterModuleProcessor),
                 ["profiles"] = typeof(ProfilesModuleProcessor),
                 ["security"] = typeof(SecurityModuleProcessor),
@@ -76,6 +77,7 @@ namespace ReportMate.WindowsClient.Services
                 [typeof(InstallsData)] = typeof(InstallsModuleProcessor),
                 [typeof(ManagementData)] = typeof(ManagementModuleProcessor),
                 [typeof(NetworkData)] = typeof(NetworkModuleProcessor),
+                [typeof(PeripheralsModuleData)] = typeof(PeripheralsModuleProcessor),
                 [typeof(PrinterData)] = typeof(PrinterModuleProcessor),
                 [typeof(ProfilesData)] = typeof(ProfilesModuleProcessor),
                 [typeof(SecurityData)] = typeof(SecurityModuleProcessor),
@@ -145,13 +147,12 @@ namespace ReportMate.WindowsClient.Services
             var enabledModules = new[]
             {
                 "applications",
-                "display",
                 "hardware", 
                 "inventory",
                 "installs",
                 "management",
                 "network",
-                "printer",
+                "peripherals",
                 "profiles",
                 "security",
                 "system"
