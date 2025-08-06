@@ -1,0 +1,87 @@
+{
+  "module": "peripherals",
+  "version": "1.0.0",
+  "description": "Comprehensive peripheral device information collection including displays, printers, input devices, and USB devices",
+  "queries": {
+    "displays_video_info": {
+      "query": "SELECT model, manufacturer, driver_version, driver_date FROM video_info;",
+      "interval": 3600,
+      "description": "Graphics card and display adapter information"
+    },
+    "displays_registry_adapters": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverDesc' AND data != '';",
+      "interval": 3600,
+      "description": "Display adapter information from registry"
+    },
+    "displays_driver_versions": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverVersion' AND data != '';",
+      "interval": 3600,
+      "description": "Display driver versions from registry"
+    },
+    "displays_memory_info": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\MemorySize' AND data != '';",
+      "interval": 3600,
+      "description": "Display adapter memory size from registry"
+    },
+    "displays_monitors": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Monitor device information from registry"
+    },
+    "displays_current_settings": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_CURRENT_USER\\Control Panel\\Desktop\\%' AND name IN ('DPIScalingVer', 'Win8DpiScaling', 'LogPixels') AND data != '';",
+      "interval": 3600,
+      "description": "Current display DPI and scaling settings"
+    },
+    "printers_info": {
+      "query": "SELECT name, driver, location, status, sharename, attributes FROM printers;",
+      "interval": 3600,
+      "description": "Installed printers and their configuration"
+    },
+    "printers_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Printer configuration from registry"
+    },
+    "usb_devices": {
+      "query": "SELECT vendor, vendor_id, model, model_id, serial, class, subclass, protocol, removable FROM usb_devices;",
+      "interval": 3600,
+      "description": "Connected USB devices"
+    },
+    "usb_device_details": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USB\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Detailed USB device information from registry"
+    },
+    "input_devices_keyboards": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\HID\\%\\%\\DeviceDesc' AND data LIKE '%keyboard%';",
+      "interval": 3600,
+      "description": "Connected keyboard devices"
+    },
+    "input_devices_mice": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\HID\\%\\%\\DeviceDesc' AND data LIKE '%mouse%';",
+      "interval": 3600,
+      "description": "Connected mouse and pointing devices"
+    },
+    "audio_devices": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Audio input and output devices"
+    },
+    "bluetooth_devices": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Paired Bluetooth devices"
+    },
+    "camera_devices": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\DeviceClasses\\{65e8773d-8f56-11d0-a3b9-00a0c9223196}\\%' AND data != '';",
+      "interval": 3600,
+      "description": "Camera and imaging devices"
+    },
+    "storage_devices": {
+      "query": "SELECT device, device_id, label, type, size, encrypted FROM logical_drives WHERE type != '';",
+      "interval": 3600,
+      "description": "Connected storage devices and drives"
+    }
+  }
+}

@@ -475,6 +475,7 @@ public class Program
         services.AddScoped<InstallsModuleProcessor>();
         services.AddScoped<ManagementModuleProcessor>();
         services.AddScoped<NetworkModuleProcessor>();
+        services.AddScoped<PeripheralsModuleProcessor>();
         services.AddScoped<PrinterModuleProcessor>();
         services.AddScoped<ProfilesModuleProcessor>();
         services.AddScoped<SecurityModuleProcessor>();
