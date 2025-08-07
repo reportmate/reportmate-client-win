@@ -36,96 +36,132 @@ namespace ReportMate.WindowsClient.Models.Modules
     }
 
     /// <summary>
-    /// Display and graphics device information
+    /// Display and external monitor device information for inventory tracking
     /// </summary>
     public class DisplayInfo
     {
-        [JsonPropertyName("videoInfo")]
-        public List<VideoAdapter>? VideoInfo { get; set; }
+        [JsonPropertyName("externalMonitors")]
+        public List<ExternalMonitor>? ExternalMonitors { get; set; }
 
-        [JsonPropertyName("registryAdapters")]
-        public List<RegistryDisplayAdapter>? RegistryAdapters { get; set; }
+        [JsonPropertyName("edidData")]
+        public List<EdidDisplayInfo>? EdidData { get; set; }
 
-        [JsonPropertyName("driverVersions")]
-        public List<DisplayDriverVersion>? DriverVersions { get; set; }
+        [JsonPropertyName("pnpDisplays")]
+        public List<PnpDisplayDevice>? PnpDisplays { get; set; }
 
-        [JsonPropertyName("memoryInfo")]
-        public List<DisplayMemoryInfo>? MemoryInfo { get; set; }
-
-        [JsonPropertyName("monitors")]
-        public List<MonitorInfo>? Monitors { get; set; }
-
-        [JsonPropertyName("currentSettings")]
-        public List<DisplaySetting>? CurrentSettings { get; set; }
+        [JsonPropertyName("registryDisplays")]
+        public List<RegistryDisplayInfo>? RegistryDisplays { get; set; }
     }
 
-    public class VideoAdapter
+    /// <summary>
+    /// External monitor information for inventory tracking
+    /// </summary>
+    public class ExternalMonitor
     {
-        [JsonPropertyName("model")]
-        public string? Model { get; set; }
+        [JsonPropertyName("serialNumber")]
+        public string? SerialNumber { get; set; }
 
         [JsonPropertyName("manufacturer")]
         public string? Manufacturer { get; set; }
 
-        [JsonPropertyName("driverVersion")]
-        public string? DriverVersion { get; set; }
+        [JsonPropertyName("model")]
+        public string? Model { get; set; }
 
-        [JsonPropertyName("driverDate")]
-        public string? DriverDate { get; set; }
+        [JsonPropertyName("friendlyName")]
+        public string? FriendlyName { get; set; }
+
+        [JsonPropertyName("hardwareId")]
+        public string? HardwareId { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("deviceDescription")]
+        public string? DeviceDescription { get; set; }
+
+        [JsonPropertyName("pnpDeviceId")]
+        public string? PnpDeviceId { get; set; }
+
+        [JsonPropertyName("isExternal")]
+        public bool IsExternal { get; set; }
     }
 
-    public class RegistryDisplayAdapter
+    /// <summary>
+    /// EDID display information for external monitors
+    /// </summary>
+    public class EdidDisplayInfo
     {
-        [JsonPropertyName("path")]
-        public string? Path { get; set; }
+        [JsonPropertyName("pnpId")]
+        public string? PnpId { get; set; }
 
-        [JsonPropertyName("name")]
-        public string? Name { get; set; }
+        [JsonPropertyName("serialNumber")]
+        public string? SerialNumber { get; set; }
+
+        [JsonPropertyName("manufacturerId")]
+        public string? ManufacturerId { get; set; }
+
+        [JsonPropertyName("productCode")]
+        public string? ProductCode { get; set; }
+
+        [JsonPropertyName("weekOfManufacture")]
+        public int WeekOfManufacture { get; set; }
+
+        [JsonPropertyName("yearOfManufacture")]
+        public int YearOfManufacture { get; set; }
+
+        [JsonPropertyName("edidVersion")]
+        public string? EdidVersion { get; set; }
+
+        [JsonPropertyName("rawEdidData")]
+        public string? RawEdidData { get; set; }
+    }
+
+    /// <summary>
+    /// PnP display device registry information
+    /// </summary>
+    public class PnpDisplayDevice
+    {
+        [JsonPropertyName("pnpDeviceId")]
+        public string? PnpDeviceId { get; set; }
+
+        [JsonPropertyName("friendlyName")]
+        public string? FriendlyName { get; set; }
+
+        [JsonPropertyName("hardwareId")]
+        public string? HardwareId { get; set; }
+
+        [JsonPropertyName("deviceDescription")]
+        public string? DeviceDescription { get; set; }
+
+        [JsonPropertyName("class")]
+        public string? Class { get; set; }
+
+        [JsonPropertyName("service")]
+        public string? Service { get; set; }
+
+        [JsonPropertyName("registryPath")]
+        public string? RegistryPath { get; set; }
+    }
+
+    /// <summary>
+    /// Registry display enumeration information
+    /// </summary>
+    public class RegistryDisplayInfo
+    {
+        [JsonPropertyName("registryKey")]
+        public string? RegistryKey { get; set; }
+
+        [JsonPropertyName("displayName")]
+        public string? DisplayName { get; set; }
+
+        [JsonPropertyName("deviceKey")]
+        public string? DeviceKey { get; set; }
+
+        [JsonPropertyName("data")]
+        public string? Data { get; set; }
 
         [JsonPropertyName("type")]
         public string? Type { get; set; }
-
-        [JsonPropertyName("data")]
-        public string? Data { get; set; }
-    }
-
-    public class DisplayDriverVersion
-    {
-        [JsonPropertyName("path")]
-        public string? Path { get; set; }
-
-        [JsonPropertyName("version")]
-        public string? Version { get; set; }
-    }
-
-    public class DisplayMemoryInfo
-    {
-        [JsonPropertyName("path")]
-        public string? Path { get; set; }
-
-        [JsonPropertyName("memorySize")]
-        public string? MemorySize { get; set; }
-    }
-
-    public class MonitorInfo
-    {
-        [JsonPropertyName("path")]
-        public string? Path { get; set; }
-
-        [JsonPropertyName("name")]
-        public string? Name { get; set; }
-
-        [JsonPropertyName("data")]
-        public string? Data { get; set; }
-    }
-
-    public class DisplaySetting
-    {
-        [JsonPropertyName("setting")]
-        public string? Setting { get; set; }
-
-        [JsonPropertyName("value")]
-        public string? Value { get; set; }
     }
 
     /// <summary>
@@ -252,6 +288,9 @@ namespace ReportMate.WindowsClient.Models.Modules
 
         [JsonPropertyName("deviceType")]
         public string? DeviceType { get; set; }
+
+        [JsonPropertyName("hidDeviceId")]
+        public string? HidDeviceId { get; set; }
     }
 
     /// <summary>
