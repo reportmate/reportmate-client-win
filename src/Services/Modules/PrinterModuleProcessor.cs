@@ -112,9 +112,19 @@ namespace ReportMate.WindowsClient.Services.Modules
                             continue;
                         }
                         
+                        // Filter out virtual printers that shouldn't be considered real hardware
+                        if (printerName?.Contains("Microsoft Print to PDF", StringComparison.OrdinalIgnoreCase) == true ||
+                            printerName?.Contains("Microsoft XPS Document Writer", StringComparison.OrdinalIgnoreCase) == true ||
+                            printerName?.Contains("Fax", StringComparison.OrdinalIgnoreCase) == true ||
+                            printerName?.Contains("OneNote", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            _logger.LogInformation("Skipping virtual printer: {PrinterName}", printerName);
+                            continue;
+                        }
+                        
                         _logger.LogInformation("Adding printer: '{PrinterName}'", printerName);
                         
-                        if (!printersByName.ContainsKey(printerName))
+                        if (!string.IsNullOrEmpty(printerName) && !printersByName.ContainsKey(printerName))
                         {
                             printersByName[printerName] = new PrinterInfo
                             {
@@ -128,6 +138,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                             };
                         }
 
+                        if (string.IsNullOrEmpty(printerName)) continue;
                         var printer = printersByName[printerName];
 
                         // Map registry values to printer properties (only if we have data)
