@@ -609,7 +609,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             if (data != null && !string.IsNullOrEmpty(data.OperatingSystem?.Name))
             {
-                var message = $"System module data collected successfully";
+                var message = $"System module data reported";
                 var details = new Dictionary<string, object>
                 {
                     ["operating_system"] = data.OperatingSystem?.Name ?? "Unknown",

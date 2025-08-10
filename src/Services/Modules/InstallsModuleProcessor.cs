@@ -485,9 +485,15 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         private void ProcessRecentInstalls(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
         {
+            // Check if we have enhanced Cimian reports first
+            const string CIMIAN_REPORTS_PATH = @"C:\ProgramData\ManagedInstalls\reports";
+            var itemsPath = Path.Combine(CIMIAN_REPORTS_PATH, "items.json");
+            var hasEnhancedReports = File.Exists(itemsPath);
+            
             // Process managed software installs from Cimian
-            if (osqueryResults.TryGetValue("cimian_managed_software", out var recentInstalls))
+            if (osqueryResults.TryGetValue("cimian_managed_software", out var recentInstalls) && !hasEnhancedReports)
             {
+                // Only process basic registry data if enhanced reports are not available
                 foreach (var install in recentInstalls)
                 {
                     var managedInstall = new ManagedInstall
@@ -507,6 +513,12 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                     data.RecentInstalls.Add(managedInstall);
                 }
+                
+                _logger.LogDebug("Added {Count} managed installs from Windows registry (no enhanced reports available)", recentInstalls.Count);
+            }
+            else if (hasEnhancedReports)
+            {
+                _logger.LogDebug("Skipping basic registry-based installs - enhanced Cimian reports are available");
             }
 
             // Process pending packages from cache
@@ -1097,7 +1109,26 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
 
                 var json = File.ReadAllText(filePath);
+                if (string.IsNullOrWhiteSpace(json) || json.Trim() == "null")
+                {
+                    _logger.LogDebug("Cimian items report is null or empty: {FilePath}", filePath);
+                    return items;
+                }
+
                 using var document = JsonDocument.Parse(json);
+                
+                // Check if the root element is null or not an array
+                if (document.RootElement.ValueKind == JsonValueKind.Null)
+                {
+                    _logger.LogDebug("Cimian items report contains null value: {FilePath}", filePath);
+                    return items;
+                }
+
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    _logger.LogDebug("Cimian items report is not an array (found {ValueKind}): {FilePath}", document.RootElement.ValueKind, filePath);
+                    return items;
+                }
                 
                 foreach (var itemElement in document.RootElement.EnumerateArray())
                 {
@@ -1570,7 +1601,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     // SUCCESS: Generate success event when only INFO events or successful operations
                     var successMessage = latestSession?.Successes > 0 
                         ? $"Installs completed successfully ({latestSession.Successes} packages processed)"
-                        : $"Installs module data collected successfully";
+                        : $"Installs module data reported";
                     
                     var successDetails = new Dictionary<string, object>(sessionInfo)
                     {
