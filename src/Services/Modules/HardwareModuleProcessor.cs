@@ -1492,28 +1492,29 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Process PCI devices for NPU
-            if (osqueryResults.TryGetValue("npu_pci_devices", out var npuPciDevices) && npuPciDevices.Count > 0)
+            // Process NPU drivers instead of PCI devices
+            if (osqueryResults.TryGetValue("npu_drivers", out var npuDrivers) && npuDrivers.Count > 0)
             {
-                foreach (var pciDevice in npuPciDevices)
+                foreach (var driver in npuDrivers)
                 {
-                    var model = GetStringValue(pciDevice, "model");
-                    var vendor = GetStringValue(pciDevice, "vendor");
-                    var driver = GetStringValue(pciDevice, "driver");
+                    var deviceName = GetStringValue(driver, "device_name");
+                    var description = GetStringValue(driver, "description");
+                    var manufacturer = GetStringValue(driver, "manufacturer");
+                    var version = GetStringValue(driver, "version");
                     
-                    if (!string.IsNullOrEmpty(model) && string.IsNullOrEmpty(data.Npu.Name))
+                    if (!string.IsNullOrEmpty(deviceName) && string.IsNullOrEmpty(data.Npu.Name))
                     {
-                        data.Npu.Name = CleanNpuName(model);
-                        data.Npu.Manufacturer = CleanManufacturerName(vendor);
+                        data.Npu.Name = CleanNpuName(deviceName);
+                        data.Npu.Manufacturer = CleanManufacturerName(manufacturer);
                         data.Npu.IsAvailable = true;
                         
-                        if (model.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
+                        if (description.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
                         {
                             data.Npu.Architecture = "Hexagon";
-                            ExtractTopsFromName(model, data.Npu);
+                            ExtractTopsFromName(description, data.Npu);
                         }
                         
-                        _logger.LogDebug("Found NPU from PCI devices: {NPU} (Vendor: {Vendor})", model, vendor);
+                        _logger.LogDebug("Found NPU from drivers: {NPU} (Manufacturer: {Manufacturer})", deviceName, manufacturer);
                         break;
                     }
                 }
@@ -1542,9 +1543,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             ProcessNpuSpecifications(osqueryResults, data);
             ProcessNpuProcessorTops(osqueryResults, data);
             
-            // Process new NPU detection queries
-            ProcessNpuPciDevices(osqueryResults, data);
-            ProcessNpuWmiDevices(osqueryResults, data);
+            // Process additional NPU detection queries
             ProcessNpuTopsRegistry(osqueryResults, data);
             
             // PowerShell-based NPU detection as additional fallback
@@ -1886,93 +1885,6 @@ namespace ReportMate.WindowsClient.Services.Modules
                 {
                     data.Npu.ComputeUnits = 45; // Default Qualcomm Snapdragon TOPS
                     _logger.LogDebug("Set default 45 TOPS for Qualcomm Snapdragon processor");
-                }
-            }
-        }
-
-        /// <summary>
-        /// Process NPU devices from PCI enumeration
-        /// </summary>
-        private void ProcessNpuPciDevices(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
-        {
-            if (osqueryResults.TryGetValue("npu_pci_devices", out var npuPciDevices) && npuPciDevices.Count > 0 && data.Npu != null)
-            {
-                foreach (var pciDevice in npuPciDevices)
-                {
-                    var model = GetStringValue(pciDevice, "model");
-                    var vendor = GetStringValue(pciDevice, "vendor");
-                    var vendorId = GetStringValue(pciDevice, "vendor_id");
-                    var deviceId = GetStringValue(pciDevice, "device_id");
-                    
-                    if (!string.IsNullOrEmpty(model) && IsValidNpuDevice(model))
-                    {
-                        if (string.IsNullOrEmpty(data.Npu.Name))
-                        {
-                            data.Npu.Name = CleanNpuName(model);
-                        }
-                        
-                        if (string.IsNullOrEmpty(data.Npu.Manufacturer))
-                        {
-                            data.Npu.Manufacturer = CleanManufacturerName(vendor);
-                        }
-                        
-                        data.Npu.IsAvailable = true;
-                        
-                        // Extract TOPS from model name
-                        ExtractTopsFromName(model, data.Npu);
-                        
-                        _logger.LogDebug("Found NPU from PCI enumeration - Model: {Model}, Vendor: {Vendor}, VendorID: {VendorId}, DeviceID: {DeviceId}", 
-                            model, vendor, vendorId, deviceId);
-                        
-                        break; // Use first valid NPU found
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Process NPU devices from WMI enumeration
-        /// </summary>
-        private void ProcessNpuWmiDevices(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
-        {
-            if (osqueryResults.TryGetValue("npu_wmi_devices", out var npuWmiDevices) && npuWmiDevices.Count > 0 && data.Npu != null)
-            {
-                foreach (var wmiDevice in npuWmiDevices)
-                {
-                    var name = GetStringValue(wmiDevice, "name");
-                    var manufacturer = GetStringValue(wmiDevice, "manufacturer");
-                    var deviceId = GetStringValue(wmiDevice, "device_id");
-                    var hardwareId = GetStringValue(wmiDevice, "hardware_id");
-                    var status = GetStringValue(wmiDevice, "status");
-                    
-                    if (!string.IsNullOrEmpty(name) && IsValidNpuDevice(name))
-                    {
-                        if (string.IsNullOrEmpty(data.Npu.Name))
-                        {
-                            data.Npu.Name = CleanNpuName(name);
-                        }
-                        
-                        if (string.IsNullOrEmpty(data.Npu.Manufacturer) && !string.IsNullOrEmpty(manufacturer))
-                        {
-                            data.Npu.Manufacturer = CleanManufacturerName(manufacturer);
-                        }
-                        
-                        data.Npu.IsAvailable = true;
-                        
-                        // Extract TOPS from device name
-                        ExtractTopsFromName(name, data.Npu);
-                        
-                        // Also check hardware ID for additional specs
-                        if (!string.IsNullOrEmpty(hardwareId))
-                        {
-                            ExtractTopsFromName(hardwareId, data.Npu);
-                        }
-                        
-                        _logger.LogDebug("Found NPU from WMI enumeration - Name: {Name}, Manufacturer: {Manufacturer}, Status: {Status}", 
-                            name, manufacturer, status);
-                        
-                        break; // Use first valid NPU found
-                    }
                 }
             }
         }

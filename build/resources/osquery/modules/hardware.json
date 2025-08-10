@@ -178,15 +178,15 @@
       "interval": 3600,
       "description": "Processor-level NPU TOPS information"
     },
-    "npu_pci_devices": {
-      "query": "SELECT vendor, device, model, driver, vendor_id, device_id FROM pci_devices WHERE (model LIKE '%NPU%' OR model LIKE '%Neural%' OR model LIKE '%Hexagon%' OR model LIKE '%TOPS%' OR model LIKE '%AI%' OR model LIKE '%Tensor%' OR vendor LIKE '%Qualcomm%' OR vendor LIKE '%Intel%' OR vendor LIKE '%AMD%') AND model IS NOT NULL;",
+    "npu_drivers": {
+      "query": "SELECT device_name, description, manufacturer, provider, version, date FROM drivers WHERE (device_name LIKE '%NPU%' OR description LIKE '%NPU%' OR description LIKE '%Neural%' OR description LIKE '%Hexagon%' OR description LIKE '%TOPS%' OR description LIKE '%AI%' OR description LIKE '%Tensor%' OR manufacturer LIKE '%Qualcomm%' OR manufacturer LIKE '%Intel%' OR manufacturer LIKE '%AMD%') AND device_name IS NOT NULL;",
       "interval": 3600,
-      "description": "NPU devices from PCI enumeration"
+      "description": "NPU devices from drivers enumeration"
     },
-    "npu_wmi_devices": {
-      "query": "SELECT name, manufacturer, device_id, hardware_id, status FROM wmi_devices WHERE (name LIKE '%NPU%' OR name LIKE '%Neural%' OR name LIKE '%Hexagon%' OR name LIKE '%TOPS%' OR name LIKE '%AI%' OR name LIKE '%Tensor%' OR manufacturer LIKE '%Qualcomm%' OR manufacturer LIKE '%Intel%' OR manufacturer LIKE '%AMD%') AND name IS NOT NULL;",
+    "video_drivers": {
+      "query": "SELECT device_name, description, manufacturer, provider, version FROM drivers WHERE (class LIKE '%Display%' OR class LIKE '%Video%' OR description LIKE '%Graphics%' OR description LIKE '%Video%' OR description LIKE '%Display%') AND device_name IS NOT NULL;",
       "interval": 3600,
-      "description": "NPU devices from WMI enumeration"
+      "description": "Video/graphics device drivers for additional hardware detection"
     },
     "npu_tops_registry": {
       "query": "SELECT path, name, type, data FROM registry WHERE (path LIKE '%TOPS%' OR path LIKE '%Neural%' OR path LIKE '%NPU%' OR path LIKE '%AI%') AND (data LIKE '%45%' OR data LIKE '%TOPS%' OR data LIKE '%Neural%' OR data LIKE '%45 TOPS%' OR data LIKE '%45TOPS%' OR data LIKE '%Tera%' OR data LIKE '%Operations%');",

@@ -501,6 +501,7 @@ public class Program
         var collectOnlyOption = new Option<bool>("--collect-only", "Collect data only without transmitting to API");
         var transmitOnlyOption = new Option<bool>("--transmit-only", "Transmit cached data only without collecting new data");
         var runModuleOption = new Option<string>("--run-module", "Run only a specific module (e.g., network, hardware, security). By default, this will collect and transmit the module data.");
+        var runModulesOption = new Option<string>("--run-modules", "Run multiple specific modules separated by commas (e.g., hardware,installs,security). By default, this will collect and transmit the module data.");
         
         // Add global options to root command
         rootCommand.AddGlobalOption(verboseOption);
@@ -508,12 +509,13 @@ public class Program
         rootCommand.AddOption(collectOnlyOption);
         rootCommand.AddOption(transmitOnlyOption);
         rootCommand.AddOption(runModuleOption);
+        rootCommand.AddOption(runModulesOption);
         rootCommand.AddOption(deviceIdOption);
         rootCommand.AddOption(apiUrlOption);
 
         // Set default handler for root command (when no subcommand is specified)
         // This makes running the binary without any command default to data collection
-        rootCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
+        rootCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, runModulesOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Run command - explicit run data collection (optional, since it's the default)
         var runCommand = new Command("run", "Run data collection and send to API (same as default behavior)")
@@ -522,10 +524,11 @@ public class Program
             collectOnlyOption,
             transmitOnlyOption,
             runModuleOption,
+            runModulesOption,
             deviceIdOption,
             apiUrlOption
         };
-        runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, deviceIdOption, apiUrlOption, verboseOption);
+        runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, runModulesOption, deviceIdOption, apiUrlOption, verboseOption);
 
         // Transmit command - send cached data without collection
         var transmitCommand = new Command("transmit", "Transmit cached data without collecting new data (alias for --transmit-only)")
@@ -566,7 +569,7 @@ public class Program
         return rootCommand;
     }
 
-    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, bool transmitOnly, string? runModule, string? deviceId, string? apiUrl, int verbose)
+    private static async Task<int> HandleRunCommand(bool force, bool collectOnly, bool transmitOnly, string? runModule, string? runModules, string? deviceId, string? apiUrl, int verbose)
     {
         try
         {
@@ -597,7 +600,11 @@ public class Program
                     ["Force"] = force,
                     ["Collect Only"] = collectOnly,
                     ["Transmit Only"] = transmitOnly,
-                    ["Run Module"] = runModule ?? "ALL (full collection)",
+                    ["Run Module"] = runModule ?? "NONE",
+                    ["Run Modules"] = runModules ?? "NONE",
+                    ["Effective Mode"] = !string.IsNullOrEmpty(runModule) ? $"Single Module: {runModule}" :
+                                        !string.IsNullOrEmpty(runModules) ? $"Multiple Modules: {runModules}" :
+                                        "ALL (full collection)",
                     ["Custom Device ID"] = deviceId ?? "NONE (will auto-detect)",
                     ["Custom API URL"] = apiUrl ?? "NONE (using config)",
                     ["Verbose Level"] = $"{verbose} ({GetVerboseLevelName(verbose)})"
@@ -638,6 +645,31 @@ public class Program
                 }
                 
                 return await HandleSingleModuleCollection(runModule, verbose, collectOnly);
+            }
+            
+            // Handle multiple modules data collection if specified
+            if (!string.IsNullOrEmpty(runModules))
+            {
+                var moduleList = runModules.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                          .Select(m => m.Trim())
+                                          .ToArray();
+                
+                if (verbose > 0)
+                {
+                    Logger.Section("Multiple Module Collection", $"Collecting data for {moduleList.Length} modules: {string.Join(", ", moduleList)}");
+                    Logger.Info("Mode: Multiple module collection (modular architecture)");
+                    Logger.Info("Modules: {0}", string.Join(", ", moduleList));
+                    if (collectOnly)
+                    {
+                        Logger.Info("Output: JSON data will be displayed and cached locally (NO TRANSMISSION)");
+                    }
+                    else
+                    {
+                        Logger.Info("Output: JSON data will be displayed, cached locally, and transmitted to API");
+                    }
+                }
+                
+                return await HandleMultipleModuleCollection(moduleList, verbose, collectOnly);
             }
             
             // Handle transmit-only mode (send cached data without collection)
@@ -1057,6 +1089,211 @@ public class Program
                 }
             }
             _logger!.LogError(ex, "Error during single module collection for: {ModuleId}", moduleId);
+            return 1;
+        }
+    }
+    
+    /// <summary>
+    /// Handle multiple module collection
+    /// </summary>
+    private static async Task<int> HandleMultipleModuleCollection(string[] moduleIds, int verbose, bool collectOnly = false)
+    {
+        try
+        {
+            if (verbose > 0)
+            {
+                Logger.Info("Initializing modular data collection service for multiple modules...");
+            }
+            
+            var modularService = _serviceProvider!.GetRequiredService<IModularDataCollectionService>();
+            var results = new List<BaseModuleData>();
+            var errors = new List<string>();
+            
+            foreach (var moduleId in moduleIds)
+            {
+                try
+                {
+                    if (verbose > 0)
+                    {
+                        Logger.Info("Starting collection for module: {0}", moduleId);
+                    }
+                    
+                    _logger!.LogInformation("Starting collection for module: {ModuleId}", moduleId);
+                    
+                    var moduleData = await modularService.CollectSingleModuleDataAsync(moduleId);
+                    
+                    if (moduleData == null)
+                    {
+                        var errorMsg = $"Module '{moduleId}' not found or failed to collect data";
+                        errors.Add(errorMsg);
+                        
+                        if (verbose > 0)
+                        {
+                            Logger.Error("❌ {0}", errorMsg);
+                        }
+                        _logger!.LogError("Module '{ModuleId}' not found or failed to collect data", moduleId);
+                        continue;
+                    }
+                    
+                    results.Add(moduleData);
+                    
+                    if (verbose > 0)
+                    {
+                        Logger.Info("✅ Successfully collected data for module: {0}", moduleId);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    var errorMsg = $"Error collecting data for module '{moduleId}': {ex.Message}";
+                    errors.Add(errorMsg);
+                    
+                    if (verbose > 0)
+                    {
+                        Logger.Error("❌ {0}", errorMsg);
+                        if (verbose >= 3)
+                        {
+                            Logger.Debug("Stack trace: {0}", ex.StackTrace ?? "No stack trace available");
+                        }
+                    }
+                    _logger!.LogError(ex, "Error collecting data for module: {ModuleId}", moduleId);
+                }
+            }
+            
+            if (results.Count == 0)
+            {
+                if (verbose > 0)
+                {
+                    Logger.Error("❌ No modules collected successfully");
+                    Logger.Error("Available modules: applications, hardware, inventory, installs, management, network, printer, profiles, security, system");
+                }
+                return 1;
+            }
+            
+            // Create unified payloads for successful modules
+            var unifiedPayloads = new List<UnifiedDevicePayload>();
+            foreach (var moduleData in results)
+            {
+                var unifiedPayload = await modularService.CreateSingleModuleUnifiedPayloadAsync(moduleData);
+                unifiedPayloads.Add(unifiedPayload);
+            }
+            
+            if (verbose > 0)
+            {
+                Logger.Section("Multiple Module Collection Summary", $"Collected {results.Count} of {moduleIds.Length} modules");
+                Logger.Info("Successful modules: {0}", string.Join(", ", results.Select(r => r.ModuleId)));
+                if (errors.Any())
+                {
+                    Logger.Warning("Failed modules: {0}", errors.Count);
+                }
+                
+                Console.WriteLine();
+                Logger.Section("JSON Output", "Module data in JSON format");
+            }
+            
+            // Output JSON for each successful module
+            var jsonOptions = new JsonSerializerOptions(ReportMateJsonContext.Default.Options)
+            {
+                WriteIndented = true
+            };
+            
+            foreach (var moduleData in results)
+            {
+                var jsonData = JsonSerializer.Serialize(moduleData, moduleData.GetType(), jsonOptions);
+                Console.WriteLine($"// Module: {moduleData.ModuleId}");
+                Console.WriteLine(jsonData);
+                Console.WriteLine();
+            }
+            
+            // Handle transmission if not in collect-only mode
+            if (!collectOnly)
+            {
+                if (verbose > 0)
+                {
+                    Console.WriteLine();
+                    Logger.Section("Data Transmission", $"Sending {results.Count} module data to ReportMate API");
+                }
+                
+                var apiService = _serviceProvider!.GetRequiredService<IApiService>();
+                int successCount = 0;
+                
+                for (int i = 0; i < unifiedPayloads.Count; i++)
+                {
+                    var payload = unifiedPayloads[i];
+                    var moduleId = results[i].ModuleId;
+                    
+                    try
+                    {
+                        var transmissionResult = await apiService.SendUnifiedPayloadAsync(payload);
+                        
+                        if (transmissionResult)
+                        {
+                            successCount++;
+                            if (verbose > 0)
+                            {
+                                Logger.Info("✅ Successfully transmitted data for module: {0}", moduleId);
+                            }
+                        }
+                        else
+                        {
+                            if (verbose > 0)
+                            {
+                                Logger.Error("❌ Failed to transmit data for module: {0}", moduleId);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        if (verbose > 0)
+                        {
+                            Logger.Error("❌ Transmission error for module {0}: {1}", moduleId, ex.Message);
+                        }
+                        _logger!.LogError(ex, "Error during transmission for module: {ModuleId}", moduleId);
+                    }
+                }
+                
+                if (verbose > 0)
+                {
+                    if (successCount == unifiedPayloads.Count)
+                    {
+                        Logger.Info("✅ All transmissions completed successfully ({0}/{1})", successCount, unifiedPayloads.Count);
+                        Logger.Info("DASHBOARD: Check your ReportMate dashboard for updated module data");
+                    }
+                    else
+                    {
+                        Logger.Warning("⚠️  Partial success: {0}/{1} transmissions completed", successCount, unifiedPayloads.Count);
+                        Logger.Info("TIP: Use --transmit-only later to retry failed transmissions");
+                    }
+                }
+                
+                return successCount == unifiedPayloads.Count ? 0 : 1;
+            }
+            else
+            {
+                if (verbose > 0)
+                {
+                    Console.WriteLine();
+                    Logger.Info("✅ Multiple module collection completed successfully (transmission skipped)");
+                    Logger.Info("TIP: Run without --collect-only to both collect and transmit module data");
+                    Logger.Info("TIP: Use --transmit-only to send all cached data");
+                }
+            }
+            
+            _logger!.LogInformation("Multiple module collection completed successfully for: {Modules}", 
+                string.Join(", ", results.Select(r => r.ModuleId)));
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            if (verbose > 0)
+            {
+                Logger.Error("Error during multiple module collection: {0}", ex.Message);
+                if (verbose >= 3)
+                {
+                    Logger.Debug("Stack trace: {0}", ex.StackTrace ?? "No stack trace available");
+                }
+            }
+            _logger!.LogError(ex, "Error during multiple module collection for modules: {Modules}", 
+                string.Join(", ", moduleIds));
             return 1;
         }
     }
