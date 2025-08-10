@@ -19,6 +19,7 @@
     <Feature Id="ProductFeature" Title="ReportMate Windows Client" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
       <ComponentGroupRef Id="OSQueryModuleFiles" />
+      <ComponentGroupRef Id="CimianComponents" />
     </Feature>
     
     <!-- Upgrade Logic -->
@@ -27,6 +28,7 @@
     <!-- Directory Structure -->
     <StandardDirectory Id="ProgramFilesFolder">
       <Directory Id="INSTALLFOLDER" Name="ReportMate" />
+      <Directory Id="CIMIANFOLDER" Name="Cimian" />
     </StandardDirectory>
     <StandardDirectory Id="CommonAppDataFolder">
       <Directory Id="DATADIR" Name="ManagedReports" />
@@ -95,6 +97,13 @@
       </Component>
       <Component Id="OSQuerySystemModule" Guid="*">
         <File Id="SystemJson" Source="$(var.ResourceDir)\osquery\modules\system.json" />
+      </Component>
+    </ComponentGroup>
+    
+    <!-- Cimian Integration Components -->
+    <ComponentGroup Id="CimianComponents" Directory="CIMIANFOLDER">
+      <Component Id="CimianPostflightScript" Guid="*">
+        <File Id="CimianPostflightPs1" Source="$(var.SourceDir)\cimian\postflight.ps1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
     

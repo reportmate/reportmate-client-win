@@ -64,9 +64,9 @@
       "description": "Cimian-related Windows services and their status"
     },
     "cimian_executable_version": {
-      "query": "SELECT filename, path, version, size, mtime FROM file WHERE path = 'C:\\Program Files\\Cimian\\managedsoftwareupdate.exe' AND type = 'regular';",
+      "query": "SELECT filename, path, size, mtime FROM file WHERE path = 'C:\\Program Files\\Cimian\\managedsoftwareupdate.exe' AND type = 'regular';",
       "interval": 1800,
-      "description": "Cimian managedsoftwareupdate.exe executable version and file information"
+      "description": "Cimian managedsoftwareupdate.exe executable file information"
     },
     "cimian_managed_software": {
       "query": "SELECT name, version, publisher, install_location, install_date FROM programs WHERE (name LIKE '%Cimian%' OR publisher LIKE '%Cimian%') OR name = 'Managed Software Center';",

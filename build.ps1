@@ -651,46 +651,13 @@ foreach ($scriptPath in $managedInstallsScripts) {
     }
 }
 
-# Ensure Cimian postflight script exists
-if (-not (Test-Path "$CimianPayloadDir/postflight.ps1")) {
-    Write-Verbose "Creating Cimian postflight script..."
-    $postflightContent = @'
-# ReportMate Cimian Postflight Script
-# This script runs after Cimian installation to execute ReportMate
-
-param(
-    [string]$ApiUrl = $env:REPORTMATE_API_URL
-)
-
-Write-Host "ReportMate Cimian postflight script starting..."
-
-try {
-    $reportMateExe = "C:\Program Files\ReportMate\runner.exe"
-    
-    if (Test-Path $reportMateExe) {
-        Write-Host "Found ReportMate executable: $reportMateExe"
-        
-        # Configure API URL if provided
-        if ($ApiUrl) {
-            Write-Host "Configuring API URL: $ApiUrl"
-            & $reportMateExe install --api-url $ApiUrl
-        }
-        
-        # Test the installation
-        Write-Host "Testing ReportMate installation..."
-        & $reportMateExe test
-        
-        Write-Host "ReportMate postflight completed successfully"
-    } else {
-        Write-Error "ReportMate executable not found at: $reportMateExe"
-        exit 1
-    }
-} catch {
-    Write-Error "ReportMate postflight failed: $_"
-    exit 1
-}
-'@
-    $postflightContent | Out-File "$CimianPayloadDir/postflight.ps1" -Encoding UTF8
+# Copy Cimian postflight script from shared resources
+$cimianPostflightSource = "$sharedResourcesDir/cimian-postflight.ps1"
+if (Test-Path $cimianPostflightSource) {
+    Copy-Item $cimianPostflightSource "$CimianPayloadDir/postflight.ps1" -Force
+    Write-Verbose "Copied Cimian postflight script from shared resources"
+} else {
+    Write-Warning "Cimian postflight script not found in shared resources: $cimianPostflightSource"
 }
 
 # Create chocolatey install script for Cimian package
@@ -1042,6 +1009,14 @@ Commit: $env:GITHUB_SHA
             if (Test-Path $scheduleConfigPath) {
                 Copy-Item $scheduleConfigPath "$MsiStagingDir/module-schedules.json" -Force
                 Write-Verbose "Copied module schedules configuration to MSI staging"
+            }
+            
+            # Copy Cimian postflight script to MSI staging
+            $cimianPostflightPath = "$BuildDir/resources/cimian-postflight.ps1"
+            if (Test-Path $cimianPostflightPath) {
+                New-Item -ItemType Directory -Path "$MsiStagingDir/cimian" -Force | Out-Null
+                Copy-Item $cimianPostflightPath "$MsiStagingDir/cimian/postflight.ps1" -Force
+                Write-Verbose "Copied Cimian postflight script to MSI staging"
             }
             
             Write-Verbose "Building MSI with WiX..."
