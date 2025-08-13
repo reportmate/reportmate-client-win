@@ -30,6 +30,10 @@ try {
                     interval = "P1D"
                     modules = @("hardware", "management", "printers", "displays")
                 }
+                all = @{
+                    interval_minutes = 720
+                    modules = "all"
+                }
             }
         }
     }
@@ -38,34 +42,38 @@ try {
     
     # Create hourly collection task
     Write-Host "Creating hourly collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--collect-only --run-modules $($scheduleConfig.schedules.hourly.modules -join ',')" -WorkingDirectory $InstallPath
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.hourly.modules -join ',')" -WorkingDirectory $InstallPath
     $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 1)
-    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable
+    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable -Hidden -AllowStartIfOnBatteries
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     
-    Register-ScheduledTask -TaskName "ReportMate Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects security-critical device data every hour" -Force
+    Register-ScheduledTask -TaskName "ReportMate Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits security-critical device data every hour" -Force
     
     # Create 4-hourly collection task  
     Write-Host "Creating 4-hourly collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--collect-only --run-modules $($scheduleConfig.schedules.every4hours.modules -join ',')" -WorkingDirectory $InstallPath
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.every4hours.modules -join ',')" -WorkingDirectory $InstallPath
     $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 4)
     
-    Register-ScheduledTask -TaskName "ReportMate 4-Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects moderately changing device data every 4 hours" -Force
+    Register-ScheduledTask -TaskName "ReportMate 4-Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits moderately changing device data every 4 hours" -Force
     
     # Create daily collection task
     Write-Host "Creating daily collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--collect-only --run-modules $($scheduleConfig.schedules.daily.modules -join ',')" -WorkingDirectory $InstallPath
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.daily.modules -join ',')" -WorkingDirectory $InstallPath
     $trigger = New-ScheduledTaskTrigger -Daily -At "09:00"
     
-    Register-ScheduledTask -TaskName "ReportMate Daily Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects static device data once daily" -Force
+    Register-ScheduledTask -TaskName "ReportMate Daily Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits static device data once daily" -Force
     
-    # Create transmission task (runs 15 minutes after collections)
-    Write-Host "Creating data transmission task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--transmit-only" -WorkingDirectory $InstallPath
-    $trigger = New-ScheduledTaskTrigger -Once -At "09:15" -RepetitionInterval (New-TimeSpan -Hours 1)
-    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 15) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 2) -RunOnlyIfNetworkAvailable
-    
-    Register-ScheduledTask -TaskName "ReportMate Data Transmission" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Transmits collected data to ReportMate API" -Force
+    # Create all modules collection task (if configured)
+    if ($scheduleConfig.schedules.all) {
+        Write-Host "Creating all modules collection task..."
+        # For 'all' modules, don't use --run-modules flag to run everything
+        $action = New-ScheduledTaskAction -Execute $runnerExe -WorkingDirectory $InstallPath
+        $intervalMinutes = $scheduleConfig.schedules.all.interval_minutes
+        $intervalHours = [math]::Floor($intervalMinutes / 60)
+        $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours $intervalHours)
+        
+        Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits data from all available modules" -Force
+    }
     
     Write-Host "✅ All ReportMate scheduled tasks created successfully"
     

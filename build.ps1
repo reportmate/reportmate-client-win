@@ -443,18 +443,37 @@ if (-not $SkipNUPKG) {
 # Check WiX Toolset v6 (for MSI)
 $wixFound = $false
 if (-not $SkipMSI) {
-    # Check if WiX v6 is installed as dotnet tool (global or local)
-    $globalWix = & dotnet tool list --global 2>$null | Select-String "wix"
-    $localWix = & dotnet tool list 2>$null | Select-String "wix"
+    # First, restore any local dotnet tools from manifest
+    try {
+        Write-Verbose "Restoring dotnet tools from manifest..."
+        & dotnet tool restore 2>$null | Out-Null
+    } catch {
+        Write-Verbose "No dotnet tools manifest found or restoration failed"
+    }
     
-    if ($globalWix -or $localWix) {
-        $wixFound = $true
-        if ($localWix) {
-            Write-Success "WiX Toolset v6 found as dotnet local tool"
-        } else {
-            Write-Success "WiX Toolset v6 found as dotnet global tool"
+    # Check if WiX v6 is available via dotnet tool
+    try {
+        $null = & dotnet wix --version 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $wixFound = $true
+            Write-Success "WiX Toolset v6 found"
         }
-    } else {
+    } catch {
+        # Fallback: Check if WiX v6 is installed as dotnet tool (global or local)
+        $globalWix = & dotnet tool list --global 2>$null | Select-String "wix"
+        $localWix = & dotnet tool list 2>$null | Select-String "wix"
+        
+        if ($globalWix -or $localWix) {
+            $wixFound = $true
+            if ($localWix) {
+                Write-Success "WiX Toolset v6 found as dotnet local tool"
+            } else {
+                Write-Success "WiX Toolset v6 found as dotnet global tool"
+            }
+        }
+    }
+    
+    if (-not $wixFound) {
         Write-Warning "WiX Toolset v6 not found - MSI creation will be skipped"
         Write-Info "Install with: dotnet tool install --global wix --version 6.0.1"
         Write-Info "Or locally: dotnet tool install wix --version 6.0.1"
@@ -1029,9 +1048,9 @@ Commit: $env:GITHUB_SHA
             $wxsPath = "$BuildDir/msi/ReportMate.wxs"
             $msiPath = "$OutputDir/ReportMate-$Version.msi"
             
-            # Use WiX v6 via dotnet tool run
-            Write-Verbose "Using WiX v6 build command via dotnet tool"
-            & dotnet tool run wix -- build -out $msiPath -define "SourceDir=$MsiStagingDir" -define "ResourceDir=$BuildDir/resources" -define "Version=$msiVersion" -define "APIURL=$ApiUrl" $wxsPath
+            # Use WiX v6 build command
+            Write-Verbose "Using WiX v6 build command"
+            & dotnet wix build -out $msiPath -arch x64 -define "SourceDir=$MsiStagingDir" -define "ResourceDir=$BuildDir/resources" -define "Version=$msiVersion" -define "APIURL=$ApiUrl" $wxsPath
             if ($LASTEXITCODE -ne 0) {
                 throw "WiX v6 build failed with exit code $LASTEXITCODE"
             }

@@ -743,7 +743,9 @@ public class Program
             var config = await configService.GetCurrentConfigurationAsync();
             
             Console.WriteLine("=== ReportMate Information ===");
-            Console.WriteLine($"Version: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            var versionString = version != null ? $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}" : "1.0.0";
+            Console.WriteLine($"Version: {versionString}");
             Console.WriteLine($"");
             Console.WriteLine("=== Device Information ===");
             Console.WriteLine($"Device ID: {deviceInfo.DeviceId}");

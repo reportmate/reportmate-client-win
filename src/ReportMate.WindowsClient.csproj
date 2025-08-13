@@ -4,10 +4,9 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>false</UseWindowsForms>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <PublishTrimmed>false</PublishTrimmed>
+    <PublishSingleFile>false</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
     <AssemblyName>runner</AssemblyName>
     <AssemblyTitle>ReportMate</AssemblyTitle>
     <AssemblyDescription>Windows client for ReportMate device management and security monitoring</AssemblyDescription>
