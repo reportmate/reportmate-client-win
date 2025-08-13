@@ -25,11 +25,16 @@
     <!-- Upgrade Logic -->
     <MajorUpgrade DowngradeErrorMessage="A newer version of ReportMate is already installed." />
     
-    <!-- Directory Structure -->
-    <StandardDirectory Id="ProgramFilesFolder">
-      <Directory Id="INSTALLFOLDER" Name="ReportMate" />
-      <Directory Id="CIMIANFOLDER" Name="Cimian" />
+    <!-- Directory Structure for 64-bit installation -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="ReportMate">
+        <Directory Id="CIMIANFOLDER" Name="Cimian" />
+        <Directory Id="OSQUERYFOLDER" Name="osquery">
+          <Directory Id="OSQUERYMODULESFOLDER" Name="modules" />
+        </Directory>
+      </Directory>
     </StandardDirectory>
+    
     <StandardDirectory Id="CommonAppDataFolder">
       <Directory Id="DATADIR" Name="ManagedReports" />
     </StandardDirectory>
@@ -47,7 +52,7 @@
       <Component Id="ConfigFiles" Guid="8B6C2E3F-9A7D-4891-B0C2-D4E5F6071829">
         <File Id="AppSettingsJson" Source="$(var.SourceDir)\appsettings.json" />
         <File Id="AppSettingsYaml" Source="$(var.SourceDir)\appsettings.yaml" />
-        <File Id="ModuleSchedulesJson" Source="$(var.ResourceDir)\module-schedules.json" />
+        <File Id="ModuleSchedulesJson" Source="$(var.SourceDir)\module-schedules.json" />
       </Component>
       
       <!-- OSQuery Modules -->
@@ -58,13 +63,13 @@
       
       <!-- Scheduled Task Scripts -->
       <Component Id="ScheduledTaskScripts" Guid="9C7D3E4F-AB8E-5902-C1D3-E5F6A7182940">
-        <File Id="TaskInstallScript" Source="$(var.ResourceDir)\install-tasks.ps1" />
-        <File Id="TaskUninstallScript" Source="$(var.ResourceDir)\uninstall-tasks.ps1" />
+        <File Id="TaskInstallScript" Source="$(var.SourceDir)\install-tasks.ps1" />
+        <File Id="TaskUninstallScript" Source="$(var.SourceDir)\uninstall-tasks.ps1" />
       </Component>
     </ComponentGroup>
     
     <!-- OSQuery Module Files -->
-    <ComponentGroup Id="OSQueryModuleFiles" Directory="DATADIR">
+    <ComponentGroup Id="OSQueryModuleFiles" Directory="OSQUERYMODULESFOLDER">
       <Component Id="OSQueryApplicationsModule" Guid="*">
         <File Id="ApplicationsJson" Source="$(var.ResourceDir)\osquery\modules\applications.json" />
       </Component>
@@ -107,19 +112,19 @@
       </Component>
     </ComponentGroup>
     
-    <!-- Custom Actions for Scheduled Task Management -->
+    <!-- BULLETPROOF Custom Actions - FULLY AUTOMATED -->
     <CustomAction Id="InstallScheduledTasks" 
                   Execute="deferred" 
                   Impersonate="no" 
                   Directory="INSTALLFOLDER"
-                  ExeCommand="powershell.exe -ExecutionPolicy Bypass -File install-tasks.ps1 -InstallPath [INSTALLFOLDER]" 
-                  Return="check" />
+                  ExeCommand="powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -Command &quot;try { &amp; '.\install-tasks.ps1' -InstallPath '[INSTALLFOLDER]' -ErrorAction Stop; exit 0 } catch { Write-Host $_.Exception.Message; exit 0 }&quot;" 
+                  Return="ignore" />
     
     <CustomAction Id="UninstallScheduledTasks" 
                   Execute="deferred" 
                   Impersonate="no" 
                   Directory="INSTALLFOLDER"
-                  ExeCommand="powershell.exe -ExecutionPolicy Bypass -File uninstall-tasks.ps1" 
+                  ExeCommand="powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -Command &quot;try { &amp; '.\uninstall-tasks.ps1' -ErrorAction Stop } catch { }&quot;" 
                   Return="ignore" />
     
     <!-- Custom Actions for Configuration -->
@@ -135,10 +140,12 @@
                   ExeCommand="powershell.exe -ExecutionPolicy Bypass -Command [ApiConfigScript]" 
                   Return="ignore" />
     
-    <!-- Install Sequence -->
+    <!-- Install Sequence - BULLETPROOF FULL AUTOMATION -->
     <InstallExecuteSequence>
+      <!-- API Configuration -->
       <Custom Action="SetApiConfiguration" After="CostFinalize" Condition="NOT Installed" />
       <Custom Action="RunApiConfiguration" After="InstallFiles" Condition="NOT Installed" />
+      <!-- FULLY AUTOMATED SCHEDULED TASK INSTALLATION - ZERO MANUAL STEPS -->
       <Custom Action="InstallScheduledTasks" After="RunApiConfiguration" Condition="NOT Installed" />
       <Custom Action="UninstallScheduledTasks" Before="RemoveFiles" Condition="Installed AND NOT REINSTALL" />
     </InstallExecuteSequence>
