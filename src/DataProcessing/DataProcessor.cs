@@ -491,7 +491,13 @@ namespace ReportMate.WindowsClient.DataProcessing
         private string GetClientVersion()
         {
             var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-            return assembly.GetName().Version?.ToString() ?? "1.0.0.0";
+            var version = assembly.GetName().Version;
+            if (version != null)
+            {
+                // Format as YYYY.MM.DD instead of the default 4-part version
+                return $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}";
+            }
+            return "1.0.0";
         }
     }
 }
