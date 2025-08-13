@@ -8,7 +8,7 @@ try {
         "ReportMate Hourly Collection",
         "ReportMate 4-Hourly Collection", 
         "ReportMate Daily Collection",
-        "ReportMate Data Transmission"
+        "ReportMate All Modules Collection"
     )
     
     foreach ($taskName in $taskNames) {

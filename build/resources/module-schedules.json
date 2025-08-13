@@ -1,12 +1,12 @@
 {
   "schedules": {
     "hourly": {
-      "modules": ["security", "installs", "profiles", "system", "network"],
+      "modules": ["security", "installs", "profiles", "network"],
       "interval_minutes": 60,
       "description": "Modules that need frequent updates for security and configuration monitoring"
     },
     "every_4_hours": {
-      "modules": ["applications", "inventory"],
+      "modules": ["applications", "inventory", "system"],
       "interval_minutes": 240,
       "description": "Modules that change moderately - software installs and basic device info"
     },
@@ -14,6 +14,11 @@
       "modules": ["hardware", "management", "printers", "displays"],
       "interval_minutes": 1440,
       "description": "Modules that rarely change - physical hardware and peripheral devices"
+    },
+    "all": {
+      "modules": "all",
+      "interval_minutes": 720,
+      "description": "Run all available modules for comprehensive data collection"
     }
   },
   "task_settings": {
@@ -27,6 +32,6 @@
     "stop_if_going_on_batteries": false,
     "disallow_start_if_on_batteries": false
   },
-  "version": "1.0.0",
-  "updated": "2025-08-03T00:00:00Z"
+  "version": "1.1.0",
+  "updated": "2025-08-10T00:00:00Z"
 }
