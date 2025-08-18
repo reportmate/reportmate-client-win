@@ -8,6 +8,17 @@ param(
 Write-Host "Installing ReportMate scheduled tasks..."
 
 try {
+    # First, remove any existing ReportMate tasks to prevent duplicates
+    Write-Host "Removing any existing ReportMate tasks..."
+    Get-ScheduledTask | Where-Object { 
+        $_.TaskName -like "*ReportMate*" -or 
+        $_.Description -like "*ReportMate*" -or
+        $_.TaskName -like "*Report*Mate*"
+    } | ForEach-Object {
+        Write-Host "  Removing existing task: $($_.TaskName)"
+        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    
     # Load module schedules configuration
     $scheduleConfigPath = Join-Path $InstallPath "module-schedules.json"
     if (Test-Path $scheduleConfigPath) {

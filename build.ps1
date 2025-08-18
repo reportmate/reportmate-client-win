@@ -567,23 +567,6 @@ $osqueryTargetProgramDir = "$ProgramFilesPayloadDir/osquery"
 
 # Copy shared resources from build/resources
 $sharedResourcesDir = "$BuildDir/resources"
-$managedInstallsPayloadDir = "$NupkgDir/payload/managedinstalls"
-
-# Create ManagedInstalls payload directory
-if (-not (Test-Path $managedInstallsPayloadDir)) {
-    New-Item -ItemType Directory -Path $managedInstallsPayloadDir -Force | Out-Null
-}
-
-# Copy pre/postinstall scripts to ManagedInstalls payload
-if (Test-Path "$BuildDir/nupkg/scripts/postinstall.ps1") {
-    Copy-Item "$BuildDir/nupkg/scripts/postinstall.ps1" $managedInstallsPayloadDir -Force
-    Write-Verbose "Copied postinstall.ps1 to ManagedInstalls payload"
-}
-if (Test-Path "$BuildDir/nupkg/scripts/preinstall.ps1") {
-    Copy-Item "$BuildDir/nupkg/scripts/preinstall.ps1" $managedInstallsPayloadDir -Force
-    Write-Verbose "Copied preinstall.ps1 to ManagedInstalls payload"
-}
-
 # Copy module schedules and task scripts from shared resources
 if (Test-Path "$sharedResourcesDir/module-schedules.json") {
     Copy-Item "$sharedResourcesDir/module-schedules.json" $ProgramFilesPayloadDir -Force
@@ -649,25 +632,6 @@ $installScriptsDir = "$sharedResourcesDir/install-scripts"
 if (Test-Path $installScriptsDir) {
     Copy-Item $installScriptsDir $ProgramFilesPayloadDir -Recurse -Force
     Write-Verbose "Copied install-scripts directory from shared resources"
-}
-
-# Copy ManagedInstalls scripts to payload
-$managedInstallsPayloadDir = "$NupkgDir/payload/managedinstalls"
-if (-not (Test-Path $managedInstallsPayloadDir)) {
-    New-Item -ItemType Directory -Path $managedInstallsPayloadDir -Force | Out-Null
-}
-
-$managedInstallsScripts = @(
-    "$BuildDir/nupkg/scripts/postinstall.ps1",
-    "$BuildDir/nupkg/scripts/preinstall.ps1"
-)
-
-foreach ($scriptPath in $managedInstallsScripts) {
-    if (Test-Path $scriptPath) {
-        $scriptName = Split-Path $scriptPath -Leaf
-        Copy-Item $scriptPath $managedInstallsPayloadDir -Force
-        Write-Verbose "Copied $scriptName to ManagedInstalls payload"
-    }
 }
 
 # Copy Cimian postflight script from shared resources
@@ -749,40 +713,6 @@ if (Test-Path $dataPayloadPath) {
     Write-Host "Data files copied successfully"
 } else {
     Write-Warning "No data payload directory found at: $dataPayloadPath"
-}
-
-# Copy ManagedInstalls scripts
-$managedInstallsPayloadPath = Join-Path $payloadRoot 'managedinstalls'
-if (Test-Path $managedInstallsPayloadPath) {
-    Write-Host "Copying ManagedInstalls scripts..."
-    Get-ChildItem -Path $managedInstallsPayloadPath -Recurse | ForEach-Object {
-        $fullName = $_.FullName
-        $fullName = [Management.Automation.WildcardPattern]::Escape($fullName)
-        $relative = $fullName.Substring($managedInstallsPayloadPath.Length).TrimStart('\','/')
-        $dest = Join-Path $managedInstallsLocation $relative
-        
-        if ($_.PSIsContainer) {
-            New-Item -ItemType Directory -Force -Path $dest | Out-Null
-        } else {
-            Copy-Item -LiteralPath $fullName -Destination $dest -Force
-            Write-Host "Copied ManagedInstalls file: $relative"
-        }
-    }
-    Write-Host "ManagedInstalls scripts copied successfully"
-    
-    # Execute postinstall script if it exists
-    $postinstallScript = Join-Path $managedInstallsLocation 'postinstall.ps1'
-    if (Test-Path $postinstallScript) {
-        Write-Host "Executing postinstall script..."
-        try {
-            & $postinstallScript
-            Write-Host "Postinstall script completed successfully"
-        } catch {
-            Write-Warning "Postinstall script failed: $_"
-        }
-    }
-} else {
-    Write-Verbose "No ManagedInstalls payload directory found at: $managedInstallsPayloadPath"
 }
 
 Write-Host "ReportMate chocolatey installation completed successfully"
