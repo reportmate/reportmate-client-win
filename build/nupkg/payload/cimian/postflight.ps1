@@ -21,7 +21,7 @@ try {
         
         # Run ReportMate for installs module only
         Write-Host "Running ReportMate installs module..."
-        & $reportMateExe report --installs
+        & $reportMateExe --run-module installs
         
         Write-Host "ReportMate postflight completed successfully"
     } else {

@@ -23,7 +23,9 @@
     </Feature>
     
     <!-- Upgrade Logic -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of ReportMate is already installed." />
+    <MajorUpgrade AllowDowngrades="yes" 
+                  MigrateFeatures="yes"
+                  Schedule="afterInstallInitialize" />
     
     <!-- Directory Structure for 64-bit installation -->
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -151,6 +153,11 @@
     </InstallExecuteSequence>
     
     <!-- Properties -->
+    <!-- Restart Manager Configuration -->
+    <Property Id="MSIRESTARTMANAGERDISABLED" Value="1" />
+    <Property Id="MSISHUTDOWNTIMEOUT" Value="0" />
+    <Property Id="MSIFORCERESTART" Value="0" />
+    
     <?if $(var.APIURL) != ""?>
     <Property Id="APIURL" Value="$(var.APIURL)" />
     <?else?>

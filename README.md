@@ -146,7 +146,7 @@ After deployment, files are organized following Windows conventions:
 
 The application uses a configuration hierarchy to support enterprise deployment and management:
 
-1. **Windows Registry** (`HKLM\SOFTWARE\Policies\ReportMate`) - CSP/MDM configuration managed (highest precedence)
+1. **Windows Registry** (`HKLM\SOFTWARE\Config\ReportMate`) - CSP/MDM configuration managed (highest precedence)
 2. **Environment Variables** (prefix: `REPORTMATE_`) - Container/deployment specific
 3. **Working Configuration** (`ProgramData/ManagedReports/appsettings.yaml`) - Runtime editable
 4. **Enterprise Template Configuration** (`ProgramData/ManagedReports/appsettings.template.yaml`) - CSP/OMA-URI manageable defaults
@@ -175,19 +175,19 @@ All configuration files are stored in `ProgramData` (not `Program Files`) to ens
       <Name>ReportMate Client Configuration</Name>
       <OMAConfigurationData>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/ApiUrl</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl</Target>
           <Data>https://api.reportmate.contoso.com</Data>
         </Item>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/Passphrase</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase</Target>
           <Data>your-secure-passphrase</Data>
         </Item>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/CollectionInterval</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/CollectionInterval</Target>
           <Data>3600</Data>
         </Item>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/LogLevel</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/LogLevel</Target>
           <Data>Information</Data>
         </Item>
       </OMAConfigurationData>
@@ -634,7 +634,7 @@ ReportMate supports enterprise configuration management through Configuration Se
 The application reads configuration from the following Windows Registry locations:
 
 1. **Standard Registry**: `HKLM\SOFTWARE\ReportMate`
-2. **CSP/MDM configuration**: `HKLM\SOFTWARE\Policies\ReportMate` (higher precedence)
+2. **CSP/MDM configuration**: `HKLM\SOFTWARE\Config\ReportMate` (higher precedence)
 
 #### OMA-URI Configuration for Microsoft Intune
 
@@ -650,42 +650,42 @@ The application reads configuration from the following Windows Registry location
 
 **API Configuration:**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/ApiUrl
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl
 Data type: String
 Value: https://api.reportmate.yourdomain.com
 ```
 
 **Device ID (Optional - auto-generated if not specified):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/DeviceId
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/DeviceId
 Data type: String
 Value: {custom-device-identifier}
 ```
 
 **API Authentication Key (Optional):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/ApiKey
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiKey
 Data type: String
 Value: {your-api-key}
 ```
 
 **Client Passphrase (Optional - for restricted access/reporting):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/Passphrase
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase
 Data type: String
 Value: {client-passphrase}
 ```
 
 **Collection Interval (Optional - default: 3600 seconds):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/CollectionInterval
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/CollectionInterval
 Data type: Integer
 Value: 7200
 ```
 
 **Log Level (Optional - default: Information):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/LogLevel
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/LogLevel
 Data type: String
 Value: Information
 ```
@@ -701,7 +701,7 @@ Value: Information
 
 **Registry Key Configuration:**
 - **Hive**: HKEY_LOCAL_MACHINE
-- **Key Path**: SOFTWARE\Policies\ReportMate
+- **Key Path**: SOFTWARE\Config\ReportMate
 - **Action**: Update
 
 **Registry Values:**
@@ -734,7 +734,7 @@ param(
     [string]$LogLevel = "Information"
 )
 
-$RegistryPath = "HKLM:\SOFTWARE\Policies\ReportMate"
+$RegistryPath = "HKLM:\SOFTWARE\Config\ReportMate"
 
 # Create registry key if it doesn't exist
 if (-not (Test-Path $RegistryPath)) {
@@ -775,7 +775,7 @@ Write-Host "Configuration will take effect on the next ReportMate run."
 **Test Configuration:**
 ```powershell
 # Verify registry configuration
-Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\ReportMate" -ErrorAction SilentlyContinue
+Get-ItemProperty -Path "HKLM:\SOFTWARE\Config\ReportMate" -ErrorAction SilentlyContinue
 
 # Test ReportMate configuration
 & "C:\Program Files\ReportMate\runner.exe" test --verbose
