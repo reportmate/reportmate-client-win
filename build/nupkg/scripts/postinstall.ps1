@@ -11,11 +11,10 @@ $ApiKey = ""
 Write-Host "ReportMate Post-Installation Script"
 Write-Host "=================================================="
 
-# Check for CSP policies first (managmenet configs)
-$CSPRegistryPath = "HKLM:\SOFTWARE\Policies\ReportMate"
+# Check for CSP OMA-URI first (management configs)
+$CSPRegistryPath = "HKLM\SOFTWARE\Config\ReportMate"
 if (Test-Path $CSPRegistryPath) {
-    Write-Host "Found CSP policy configuration"
-    
+    Write-Host "Found CSP OMA-URI configuration"
     $CSPApiUrl = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiUrl" -ErrorAction SilentlyContinue
     if ($CSPApiUrl -and -not [string]::IsNullOrEmpty($CSPApiUrl.ApiUrl)) {
         $ApiUrl = $CSPApiUrl.ApiUrl
@@ -30,7 +29,7 @@ if (Test-Path $CSPRegistryPath) {
 }
 
 # Create registry key if it doesn't exist
-$RegistryPath = "HKLM:\SOFTWARE\ReportMate"
+$RegistryPath = "HKLM\SOFTWARE\ReportMate"
 if (-not (Test-Path $RegistryPath)) {
     try {
         New-Item -Path $RegistryPath -Force | Out-Null
@@ -133,6 +132,6 @@ if ($LASTEXITCODE -eq 0) {
 Write-Host "Post-installation script completed"
 Write-Host ""
 Write-Host "Next steps:"
-Write-Host "1. Configure API URL: Set-ItemProperty -Path 'HKLM:\SOFTWARE\ReportMate' -Name 'ApiUrl' -Value 'https://your-api.azurewebsites.net'"
+Write-Host "1. Configure API URL: Set-ItemProperty -Path 'HKLM\SOFTWARE\ReportMate' -Name 'ApiUrl' -Value 'https://your-api.azurewebsites.net'"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"

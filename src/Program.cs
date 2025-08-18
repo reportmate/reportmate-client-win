@@ -233,7 +233,7 @@ public class Program
         {
             Logger.Info("4. Windows Registry (HIGHEST PRECEDENCE)");
             Logger.Debug("HKLM\\SOFTWARE\\ReportMate (standard)");
-            Logger.Debug("HKLM\\SOFTWARE\\Policies\\ReportMate (CSP/Group Policy)");
+            Logger.Debug("HKLM\\SOFTWARE\\Config\\ReportMate (CSP/Group Policy)");
         }
         
         // Add registry configuration for both standard and policy locations
@@ -277,7 +277,7 @@ public class Program
             }
             
             // Policy registry key (CSP/Group Policy) - highest precedence
-            using (var policyKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\ReportMate"))
+            using (var policyKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Config\ReportMate"))
             {
                 if (policyKey != null)
                 {
