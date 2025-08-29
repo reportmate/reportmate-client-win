@@ -6,6 +6,7 @@ using System.IO;
 using System.Text.Json;
 using System.Linq;
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services.Modules;
@@ -1949,6 +1950,37 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogInformation("Processing {ItemCount} items from Cimian report", items.Count);
                 
+                // DYNAMIC MANIFEST FILTERING: Parse actual manifest files to get currently managed packages
+                var activelyManagedPackages = GetActivelyManagedPackagesFromManifests();
+                
+                if (activelyManagedPackages.Any())
+                {
+                    _logger.LogInformation("Filtering to show only {ActiveCount} actively managed packages from manifests: {ActivePackages}", 
+                        activelyManagedPackages.Count, string.Join(", ", activelyManagedPackages.OrderBy(p => p)));
+                    
+                    // Filter items to only process actively managed packages
+                    var filteredItems = items.Where(item => 
+                    {
+                        var itemName = GetDictValue(item, "item_name") ?? GetDictValue(item, "name") ?? GetDictValue(item, "id");
+                        var isActive = activelyManagedPackages.Contains(itemName, StringComparer.OrdinalIgnoreCase);
+                        if (!isActive)
+                        {
+                            _logger.LogDebug("FILTERED OUT: {ItemName} - not in active manifest", itemName);
+                        }
+                        return isActive;
+                    }).ToList();
+                    
+                    _logger.LogInformation("Filtered from {OriginalCount} to {FilteredCount} actively managed packages", 
+                        items.Count, filteredItems.Count);
+                    
+                    // Process only the filtered (actively managed) items
+                    items = filteredItems;
+                }
+                else
+                {
+                    _logger.LogWarning("Could not parse active manifests - showing all packages without filtering");
+                }
+                
                 foreach (var item in items)
                 {
                     // Debug: Log all available keys in this item
@@ -2745,6 +2777,223 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             return expectedWarnings.Any(warning => 
                 message.Contains(warning, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Dynamically parses Cimian manifest files to get currently managed packages
+        /// Follows the manifest hierarchy to collect all managed_installs entries
+        /// </summary>
+        private HashSet<string> GetActivelyManagedPackagesFromManifests()
+        {
+            var managedPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var processedManifests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            
+            try
+            {
+                const string MANIFESTS_PATH = @"C:\ProgramData\ManagedInstalls\manifests";
+                
+                if (!Directory.Exists(MANIFESTS_PATH))
+                {
+                    _logger.LogWarning("Manifests directory not found: {Path}", MANIFESTS_PATH);
+                    return managedPackages;
+                }
+
+                // Start with the user's specific manifest and follow the inclusion chain
+                var userManifest = GetUserSpecificManifest(MANIFESTS_PATH);
+                if (!string.IsNullOrEmpty(userManifest))
+                {
+                    _logger.LogInformation("Starting manifest parsing from user manifest: {UserManifest}", userManifest);
+                    ParseManifestRecursively(Path.Combine(MANIFESTS_PATH, userManifest), MANIFESTS_PATH, managedPackages, processedManifests);
+                }
+                else
+                {
+                    _logger.LogWarning("Could not determine user-specific manifest, falling back to root manifests");
+                    // Fallback: Parse common root manifests
+                    var rootManifests = new[] { "Assigned.yaml", "CoreManifest.yaml" };
+                    foreach (var manifest in rootManifests)
+                    {
+                        var manifestPath = Path.Combine(MANIFESTS_PATH, manifest);
+                        if (File.Exists(manifestPath))
+                        {
+                            ParseManifestRecursively(manifestPath, MANIFESTS_PATH, managedPackages, processedManifests);
+                        }
+                    }
+                }
+
+                _logger.LogInformation("Parsed manifests to find {PackageCount} actively managed packages: {Packages}", 
+                    managedPackages.Count, string.Join(", ", managedPackages.OrderBy(p => p)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing Cimian manifests dynamically");
+            }
+
+            return managedPackages;
+        }
+
+        /// <summary>
+        /// Gets the most specific manifest file for the current user/machine
+        /// </summary>
+        private string GetUserSpecificManifest(string manifestsPath)
+        {
+            try
+            {
+                // Try to find user-specific manifest following the hierarchy:
+                // Assigned/Staff/IT/B1115/RodChristiansen.yaml -> Assigned/Staff/IT/B1115.yaml -> etc.
+                
+                var currentUser = Environment.UserName;
+                var computerName = Environment.MachineName;
+                
+                // First try to find any user-specific manifest by looking for actual files
+                var userSpecificDir = Path.Combine(manifestsPath, @"Assigned\Staff\IT\B1115");
+                if (Directory.Exists(userSpecificDir))
+                {
+                    var userManifests = Directory.GetFiles(userSpecificDir, "*.yaml")
+                        .Where(f => !Path.GetFileNameWithoutExtension(f).Equals("B1115", StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+                    
+                    if (userManifests.Any())
+                    {
+                        var userManifest = userManifests.First();
+                        var relativePath = Path.GetRelativePath(manifestsPath, userManifest).Replace('/', '\\');
+                        _logger.LogDebug("Found user-specific manifest: {UserManifest}", relativePath);
+                        return relativePath;
+                    }
+                }
+                
+                // Try various user-specific paths with common patterns
+                var candidatePaths = new[]
+                {
+                    $@"Assigned\Staff\IT\B1115\{currentUser}.yaml",
+                    $@"Assigned\Staff\IT\B1115\{char.ToUpper(currentUser[0])}{currentUser.Substring(1)}.yaml", // Capitalize first letter
+                    $@"Assigned\Staff\IT\{currentUser}.yaml", 
+                    $@"Assigned\Staff\{currentUser}.yaml",
+                    $@"Assigned\{currentUser}.yaml",
+                    $@"Assigned\Staff\IT\B1115.yaml",
+                    $@"Assigned\Staff\IT.yaml",
+                    $@"Assigned\Staff.yaml",
+                    $@"Assigned.yaml"
+                };
+
+                foreach (var candidatePath in candidatePaths)
+                {
+                    var fullPath = Path.Combine(manifestsPath, candidatePath);
+                    if (File.Exists(fullPath))
+                    {
+                        _logger.LogDebug("Found manifest: {ManifestPath}", candidatePath);
+                        return candidatePath;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error determining user-specific manifest");
+            }
+
+            return "";
+        }
+
+        /// <summary>
+        /// Recursively parses a manifest file and its included manifests
+        /// </summary>
+        private void ParseManifestRecursively(string manifestPath, string manifestsBasePath, HashSet<string> managedPackages, HashSet<string> processedManifests)
+        {
+            try
+            {
+                // Prevent infinite loops
+                var normalizedPath = Path.GetFullPath(manifestPath).ToLowerInvariant();
+                if (processedManifests.Contains(normalizedPath))
+                {
+                    return;
+                }
+                processedManifests.Add(normalizedPath);
+
+                if (!File.Exists(manifestPath))
+                {
+                    _logger.LogDebug("Manifest file not found: {ManifestPath}", manifestPath);
+                    return;
+                }
+
+                _logger.LogDebug("Parsing manifest: {ManifestPath}", manifestPath);
+                var yamlContent = File.ReadAllText(manifestPath);
+                
+                if (string.IsNullOrWhiteSpace(yamlContent))
+                {
+                    return;
+                }
+
+                // Parse YAML content - look for managed_installs and included_manifests sections
+                var lines = yamlContent.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                bool inManagedInstalls = false;
+                bool inIncludedManifests = false;
+                
+                _logger.LogDebug("Parsing {LineCount} lines from {ManifestPath}", lines.Length, Path.GetFileName(manifestPath));
+                
+                foreach (var line in lines)
+                {
+                    var trimmedLine = line.Trim();
+                    
+                    if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#"))
+                        continue;
+
+                    // Check for section headers
+                    if (trimmedLine.StartsWith("managed_installs:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inManagedInstalls = true;
+                        inIncludedManifests = false;
+                        _logger.LogDebug("Entered managed_installs section in {ManifestPath}", Path.GetFileName(manifestPath));
+                        continue;
+                    }
+                    else if (trimmedLine.StartsWith("included_manifests:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inManagedInstalls = false;
+                        inIncludedManifests = true;
+                        _logger.LogDebug("Entered included_manifests section in {ManifestPath}", Path.GetFileName(manifestPath));
+                        continue;
+                    }
+                    else if (trimmedLine.EndsWith(":") && !trimmedLine.StartsWith("-"))
+                    {
+                        // New section started
+                        inManagedInstalls = false;
+                        inIncludedManifests = false;
+                        continue;
+                    }
+
+                    // Parse list items (lines starting with -)
+                    if (trimmedLine.StartsWith("- "))
+                    {
+                        var itemValue = trimmedLine.Substring(2).Trim();
+                        
+                        if (inManagedInstalls && !string.IsNullOrEmpty(itemValue))
+                        {
+                            managedPackages.Add(itemValue);
+                            _logger.LogInformation("Found managed package: {Package} in {Manifest}", itemValue, Path.GetFileName(manifestPath));
+                        }
+                        else if (inIncludedManifests && !string.IsNullOrEmpty(itemValue))
+                        {
+                            // Recursively parse included manifest
+                            string includedManifestPath;
+                            if (itemValue.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Already has .yaml extension
+                                includedManifestPath = Path.Combine(manifestsBasePath, itemValue);
+                            }
+                            else
+                            {
+                                // Add .yaml extension
+                                includedManifestPath = Path.Combine(manifestsBasePath, itemValue + ".yaml");
+                            }
+                            
+                            _logger.LogInformation("Following included manifest: {IncludedManifest} -> {IncludedPath}", itemValue, includedManifestPath);
+                            ParseManifestRecursively(includedManifestPath, manifestsBasePath, managedPackages, processedManifests);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error parsing manifest file: {ManifestPath}", manifestPath);
+            }
         }
     }
 }
