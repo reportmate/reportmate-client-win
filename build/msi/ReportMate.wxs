@@ -30,11 +30,12 @@
     <!-- Directory Structure for 64-bit installation -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="ReportMate">
-        <Directory Id="CIMIANFOLDER" Name="Cimian" />
         <Directory Id="OSQUERYFOLDER" Name="osquery">
           <Directory Id="OSQUERYMODULESFOLDER" Name="modules" />
         </Directory>
       </Directory>
+      <!-- Cimian integration goes to separate Program Files\Cimian directory -->
+      <Directory Id="CIMIANFOLDER" Name="Cimian" />
     </StandardDirectory>
     
     <StandardDirectory Id="CommonAppDataFolder">

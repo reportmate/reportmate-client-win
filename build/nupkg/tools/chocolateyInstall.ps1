@@ -62,6 +62,34 @@ if (Test-Path $dataPayloadPath) {
     Write-Warning "No data payload directory found at: $dataPayloadPath"
 }
 
+# Copy Cimian integration files to C:\Program Files\Cimian\
+$cimianPayloadPath = Join-Path $payloadRoot 'cimian'
+if (Test-Path $cimianPayloadPath) {
+    $cimianDestPath = 'C:\Program Files\Cimian\'
+    Write-Host "Copying Cimian integration files..."
+    
+    # Create Cimian directory if it doesn't exist
+    if (-not (Test-Path $cimianDestPath)) {
+        New-Item -ItemType Directory -Force -Path $cimianDestPath | Out-Null
+        Write-Host "Created directory: $cimianDestPath"
+    }
+    
+    # Copy all files from cimian payload
+    Get-ChildItem -Path $cimianPayloadPath -File | ForEach-Object {
+        $destFile = Join-Path $cimianDestPath $_.Name
+        Copy-Item -LiteralPath $_.FullName -Destination $destFile -Force
+        Write-Host "Copied $($_.Name) to Cimian directory"
+        
+        if (-not (Test-Path -LiteralPath $destFile)) {
+            Write-Error "Failed to copy Cimian file $($_.Name)"
+            exit 1
+        }
+    }
+    Write-Host "Cimian integration files copied successfully"
+} else {
+    Write-Warning "No Cimian payload directory found at: $cimianPayloadPath"
+}
+
 Write-Host "ReportMate chocolatey installation completed successfully"
 
 # Clean up executable from payload after installation

@@ -1001,12 +1001,26 @@ public class Program
                 Logger.Info("Version: {0}", moduleData.Version);
                 Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", moduleData.CollectedAt);
                 Logger.Info("Device ID: {0}", moduleData.DeviceId);
-                Console.WriteLine();
-                Logger.Section("JSON Output", "Raw module data in JSON format");
+                
+                if (verbose >= 3)
+                {
+                    Console.WriteLine();
+                    Logger.Section("JSON Output", "Raw module data in JSON format");
+                    // Output the full JSON data only for very verbose mode (-vvv)
+                    Console.WriteLine(jsonData);
+                }
+                else
+                {
+                    // Show summary for normal verbose modes (-v, -vv)
+                    Console.WriteLine();
+                    Logger.Info("Data collected successfully. Use -vvv to see full JSON output.");
+                    Logger.Info("JSON size: {0:N0} characters", jsonData.Length);
+                }
             }
-
-            // Output the JSON data
-            Console.WriteLine(jsonData);
+            else
+            {
+                // Silent mode - no JSON output
+            }
 
             // Handle transmission if not in collect-only mode
             if (!collectOnly)
@@ -1192,18 +1206,36 @@ public class Program
                 Logger.Section("JSON Output", "Module data in JSON format");
             }
             
-            // Output JSON for each successful module
-            var jsonOptions = new JsonSerializerOptions(ReportMateJsonContext.Default.Options)
+            // Output JSON for each successful module (only in very verbose mode)
+            if (verbose >= 3)
             {
-                WriteIndented = true
-            };
-            
-            foreach (var moduleData in results)
+                var jsonOptions = new JsonSerializerOptions(ReportMateJsonContext.Default.Options)
+                {
+                    WriteIndented = true
+                };
+                
+                foreach (var moduleData in results)
+                {
+                    var jsonData = JsonSerializer.Serialize(moduleData, moduleData.GetType(), jsonOptions);
+                    Console.WriteLine($"// Module: {moduleData.ModuleId}");
+                    Console.WriteLine(jsonData);
+                    Console.WriteLine();
+                }
+            }
+            else if (verbose > 0)
             {
-                var jsonData = JsonSerializer.Serialize(moduleData, moduleData.GetType(), jsonOptions);
-                Console.WriteLine($"// Module: {moduleData.ModuleId}");
-                Console.WriteLine(jsonData);
-                Console.WriteLine();
+                // Show summary for normal verbose modes
+                Logger.Section("Collection Summary", $"Successfully collected data from {results.Count} module(s)");
+                foreach (var moduleData in results)
+                {
+                    var jsonOptions = new JsonSerializerOptions(ReportMateJsonContext.Default.Options)
+                    {
+                        WriteIndented = true
+                    };
+                    var jsonData = JsonSerializer.Serialize(moduleData, moduleData.GetType(), jsonOptions);
+                    Logger.Info("Module: {0}, Size: {1:N0} chars", moduleData.ModuleId, jsonData.Length);
+                }
+                Logger.Info("Use -vvv to see full JSON output");
             }
             
             // Handle transmission if not in collect-only mode
