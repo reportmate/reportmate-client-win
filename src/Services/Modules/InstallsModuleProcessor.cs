@@ -9,6 +9,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services.Modules;
+using ReportMate.WindowsClient.Models;
 
 namespace ReportMate.WindowsClient.Services.Modules
 {
@@ -18,6 +19,14 @@ namespace ReportMate.WindowsClient.Services.Modules
         public class InstallsModuleProcessor : BaseModuleProcessor<InstallsData>
         {
             private readonly ILogger<InstallsModuleProcessor> _logger;
+            
+            // JSON serializer options to support reflection-based deserialization
+            private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                TypeInfoResolver = ReportMateJsonContext.Default
+            };
 
             public override string ModuleId => "installs";
 
@@ -89,12 +98,28 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             // Process Cimian reports data (sessions, items, events)
             ProcessCimianReports(osqueryResults, data);
+            // Generate session ID for snapshot management
+            var currentSessionId = DateTime.UtcNow.ToString("yyyy-MM-dd-HHmmss");
+            
+            // TEMPORARILY DISABLED: Generate Cimian data snapshot for clean reporting integration
+            // TODO: Fix JSON serialization issues with source generator context
+            // GenerateCimianSnapshot(data, currentSessionId);
+            
+            // Process Cimian data transformation for clean reporting
+            var cimianProcessingSuccessful = false; // ProcessCimianData(data, currentSessionId);
+            
+            // Always use legacy processing for now until JSON serialization is fixed
+            // (removing else clause since we always take this path now)
+            _logger.LogInformation("Using legacy processing (snapshot generation temporarily disabled)");
             
             // Process recent installs and deployments
             ProcessRecentInstalls(osqueryResults, data);
             
             // Process cache status
             ProcessCacheStatus(osqueryResults, data);
+
+            // DISABLED: This was overriding the correct status determination from ProcessManagedItemsFromReport
+            // ProcessLiveCimianStatus(osqueryResults, data);
 
             // Generate enhanced analytics from the processed data
             var analytics = GenerateEnhancedAnalytics(data);
@@ -657,6 +682,661 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogWarning(ex, "Error processing enhanced Cimian reports data");
             }
+        }
+
+        /// <summary>
+        /// Captures LIVE Cimian status by reading actual Cimian reports data.
+        /// This provides real-time status from the current items.json report file.
+        /// </summary>
+        private void ProcessLiveCimianStatus(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
+        {
+            try
+            {
+                _logger.LogInformation("Capturing LIVE Cimian status from actual reports data...");
+                
+                // Read current items from reports directory
+                const string ITEMS_REPORT_PATH = @"C:\ProgramData\ManagedInstalls\reports\items.json";
+                
+                if (!File.Exists(ITEMS_REPORT_PATH))
+                {
+                    _logger.LogWarning("Items report not found, skipping live status capture: {Path}", ITEMS_REPORT_PATH);
+                    return;
+                }
+
+                var itemsJson = File.ReadAllText(ITEMS_REPORT_PATH);
+                var reportItems = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(itemsJson, JsonOptions);
+                
+                if (reportItems == null || reportItems.Count == 0)
+                {
+                    _logger.LogWarning("No items found in reports, skipping live status capture");
+                    return;
+                }
+
+                // OVERRIDE all existing data with fresh live status
+                data.RecentInstalls.Clear();
+                if (data.Cimian != null)
+                {
+                    data.Cimian.Items.Clear();
+                }
+
+                // Build live items with current timestamp
+                var currentTime = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+                var currentSessionId = DateTime.UtcNow.ToString("yyyy-MM-dd-HHmmss");
+
+                // TEMPORARILY DISABLED: Generate internal snapshot for caching
+                // TODO: Fix JSON serialization issues with source generator context
+                // GenerateCimianSnapshot(data, currentSessionId);
+
+                // Process each item from the actual reports
+                foreach (var reportItem in reportItems)
+                {
+                    var itemId = GetDictValue(reportItem, "id");
+                    var itemName = GetDictValue(reportItem, "item_name");
+                    var displayName = GetDictValue(reportItem, "display_name");
+                    var latestVersion = GetDictValue(reportItem, "latest_version");
+                    var installedVersion = GetDictValue(reportItem, "installed_version");
+                    
+                    // Determine status based on recent attempts
+                    var status = DetermineStatusFromRecentAttempts(reportItem);
+                    
+                    // Create ManagedInstall item
+                    var managedInstall = new ManagedInstall
+                    {
+                        Id = itemId,
+                        Name = itemName,
+                        DisplayName = displayName,
+                        Status = status,
+                        Version = latestVersion,
+                        InstalledVersion = installedVersion,
+                        LastSeenInSession = currentSessionId,
+                        Source = "Cimian",
+                        Type = "cimian",
+                        ItemType = "unknown"
+                    };
+                    data.RecentInstalls.Add(managedInstall);
+
+                    // Create corresponding CimianItem
+                    if (data.Cimian != null)
+                    {
+                        data.Cimian.Items.Add(new CimianItem
+                        {
+                            Id = itemId,
+                            ItemName = itemName,
+                            DisplayName = displayName,
+                            CurrentStatus = status,
+                            LatestVersion = latestVersion,
+                            InstalledVersion = installedVersion,
+                            LastSeenInSession = currentSessionId
+                        });
+                    }
+                }
+                
+                _logger.LogInformation("LIVE STATUS COMPLETE: Processed {Count} items from actual reports data", 
+                    data.RecentInstalls.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error capturing live Cimian status");
+            }
+        }
+
+        /// <summary>
+        /// Determines status from recent attempts in the reports data
+        /// </summary>
+        private string DetermineStatusFromRecentAttempts(Dictionary<string, object> reportItem)
+        {
+            try
+            {
+                // Check if recent_attempts exists and has data
+                if (reportItem.TryGetValue("recent_attempts", out var attemptsObj) && attemptsObj != null)
+                {
+                    var attemptsJson = JsonSerializer.Serialize(attemptsObj, JsonOptions);
+                    var attempts = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(attemptsJson, JsonOptions);
+                    
+                    if (attempts != null && attempts.Count > 0)
+                    {
+                        // Get the most recent attempt status
+                        var lastAttempt = attempts.Last();
+                        if (lastAttempt.TryGetValue("status", out var statusObj))
+                        {
+                            var status = statusObj?.ToString();
+                            if (!string.IsNullOrEmpty(status))
+                            {
+                                return status;
+                            }
+                        }
+                    }
+                }
+
+                // Check if there's a current_status field
+                if (reportItem.TryGetValue("current_status", out var currentStatusObj))
+                {
+                    var currentStatus = currentStatusObj?.ToString();
+                    if (!string.IsNullOrEmpty(currentStatus))
+                    {
+                        return currentStatus;
+                    }
+                }
+
+                // Fallback - determine status from installed vs latest versions
+                var installedVersion = GetDictValue(reportItem, "installed_version");
+                var latestVersion = GetDictValue(reportItem, "latest_version");
+                
+                if (string.IsNullOrEmpty(installedVersion) || installedVersion == "Unknown")
+                {
+                    return "Error"; // Not installed
+                }
+                
+                if (!string.IsNullOrEmpty(latestVersion) && installedVersion != latestVersion)
+                {
+                    return "Pending"; // Update available
+                }
+                
+                return "Installed"; // Up to date
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error determining status from recent attempts, using fallback");
+                return "Unknown";
+            }
+        }
+
+        /// <summary>
+        /// Generates clean Cimian data snapshot directly from Cimian reports for clean integration
+        /// This replaces the external PowerShell script approach
+        /// Stores snapshot data directly in InstallsData.CimianSnapshot instead of separate file
+        /// </summary>
+        private void GenerateCimianSnapshot(InstallsData data, string sessionId)
+        {
+            try
+            {
+                _logger.LogDebug("Generating Cimian data snapshot internally for session {SessionId}...", sessionId);
+                
+                const string CIMIAN_REPORTS_PATH = @"C:\ProgramData\ManagedInstalls\reports";
+                
+                // No longer saving to file system - storing directly in data object
+                // This keeps snapshot data contained within the module data structure
+                
+                // Check if Cimian reports exist
+                if (!Directory.Exists(CIMIAN_REPORTS_PATH))
+                {
+                    _logger.LogDebug("Cimian reports directory not found: {Path}", CIMIAN_REPORTS_PATH);
+                    return;
+                }
+
+                var itemsPath = Path.Combine(CIMIAN_REPORTS_PATH, "items.json");
+                var sessionsPath = Path.Combine(CIMIAN_REPORTS_PATH, "sessions.json");
+                var eventsPath = Path.Combine(CIMIAN_REPORTS_PATH, "events.json");
+
+                if (!File.Exists(itemsPath) || !File.Exists(sessionsPath))
+                {
+                    _logger.LogDebug("Required Cimian report files not found for data generation");
+                    return;
+                }
+
+                // Load data using source generator context
+                var items = JsonSerializer.Deserialize(File.ReadAllText(itemsPath), ReportMateJsonContext.Default.ListDictionaryStringObject);
+                var sessions = JsonSerializer.Deserialize(File.ReadAllText(sessionsPath), ReportMateJsonContext.Default.ListDictionaryStringObject);
+                
+                List<Dictionary<string, object>>? events = null;
+                if (File.Exists(eventsPath))
+                {
+                    events = JsonSerializer.Deserialize(File.ReadAllText(eventsPath), ReportMateJsonContext.Default.ListDictionaryStringObject);
+                }
+
+                if (items == null || sessions == null)
+                {
+                    _logger.LogWarning("Failed to parse Cimian report data for data generation");
+                    return;
+                }
+
+                // Get latest session
+                var latestSession = sessions
+                    .Where(s => s.ContainsKey("end_time") && s["end_time"] != null)
+                    .OrderByDescending(s => s["end_time"]?.ToString())
+                    .FirstOrDefault();
+                    
+                if (latestSession == null)
+                {
+                    latestSession = sessions
+                        .OrderByDescending(s => s.ContainsKey("start_time") ? s["start_time"]?.ToString() : "")
+                        .FirstOrDefault();
+                }
+
+                if (latestSession == null)
+                {
+                    _logger.LogWarning("No sessions found for data generation");
+                    return;
+                }
+
+                // Build managed packages from items
+                var managedPackages = new List<Dictionary<string, object>>();
+                foreach (var item in items)
+                {
+                    var packageName = item.GetValueOrDefault("item_name", "Unknown")?.ToString() ?? "Unknown";
+                    var currentVersion = item.GetValueOrDefault("installed_version", "Not Installed")?.ToString() ?? "Not Installed";
+                    var latestVersion = item.GetValueOrDefault("latest_version", "Unknown")?.ToString() ?? "Unknown";
+                    
+                    // Determine status based on item data and recent attempts
+                    var status = "Unknown";
+                    var hasErrors = false;
+                    
+                    // Check recent attempts for status
+                    if (item.ContainsKey("recent_attempts") && item["recent_attempts"] is JsonElement attemptsElement)
+                    {
+                        var attempts = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(attemptsElement.GetRawText());
+                        if (attempts?.Any() == true)
+                        {
+                            var latestAttempt = attempts.OrderByDescending(a => a.GetValueOrDefault("timestamp", "")?.ToString()).FirstOrDefault();
+                            if (latestAttempt?.GetValueOrDefault("status", "")?.ToString() == "Error")
+                            {
+                                hasErrors = true;
+                            }
+                        }
+                    }
+                    
+                    // Determine final status
+                    if (hasErrors)
+                    {
+                        status = "Error";
+                    }
+                    else if (!string.IsNullOrEmpty(currentVersion) && currentVersion != "Not Installed")
+                    {
+                        if (!string.IsNullOrEmpty(latestVersion) && currentVersion != latestVersion)
+                        {
+                            status = "Update Available";
+                        }
+                        else
+                        {
+                            status = "Installed";
+                        }
+                    }
+                    else
+                    {
+                        status = "Pending Install";
+                    }
+                    
+                    managedPackages.Add(new Dictionary<string, object>
+                    {
+                        ["name"] = packageName,
+                        ["version"] = currentVersion,
+                        ["latestVersion"] = latestVersion,
+                        ["status"] = status,
+                        ["lastUpdate"] = latestSession.GetValueOrDefault("start_time", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffK"))
+                    });
+                }
+
+                // Extract warnings and errors from events
+                var recentWarnings = new List<Dictionary<string, object>>();
+                var recentErrors = new List<Dictionary<string, object>>();
+                
+                if (events != null)
+                {
+                    recentWarnings = events
+                        .Where(e => e.GetValueOrDefault("level", "")?.ToString()?.ToUpper() is "WARNING" or "WARN")
+                        .OrderByDescending(e => e.GetValueOrDefault("timestamp", "")?.ToString())
+                        .Take(10)
+                        .Select(e => new Dictionary<string, object>
+                        {
+                            ["sessionId"] = latestSession.GetValueOrDefault("session_id", ""),
+                            ["package"] = e.GetValueOrDefault("package", ""),
+                            ["message"] = e.GetValueOrDefault("message", ""),
+                            ["timestamp"] = e.GetValueOrDefault("timestamp", "")
+                        })
+                        .ToList();
+                        
+                    recentErrors = events
+                        .Where(e => e.GetValueOrDefault("level", "")?.ToString()?.ToUpper() == "ERROR")
+                        .OrderByDescending(e => e.GetValueOrDefault("timestamp", "")?.ToString())
+                        .Take(5)
+                        .Select(e => new Dictionary<string, object>
+                        {
+                            ["sessionId"] = latestSession.GetValueOrDefault("session_id", ""),
+                            ["package"] = e.GetValueOrDefault("package", ""),
+                            ["message"] = e.GetValueOrDefault("message", ""),
+                            ["timestamp"] = e.GetValueOrDefault("timestamp", "")
+                        })
+                        .ToList();
+                }
+
+                // Calculate cache size
+                var cachePath = latestSession.ContainsKey("config") && latestSession["config"] is JsonElement configElement
+                    ? JsonSerializer.Deserialize<Dictionary<string, object>>(configElement.GetRawText())?.GetValueOrDefault("cache_path", "")?.ToString()
+                    : "";
+                    
+                var cacheSizeMb = 0.0;
+                if (!string.IsNullOrEmpty(cachePath) && Directory.Exists(cachePath))
+                {
+                    try
+                    {
+                        var cacheSize = Directory.GetFiles(cachePath, "*", SearchOption.AllDirectories)
+                            .Sum(file => new FileInfo(file).Length);
+                        cacheSizeMb = Math.Round(cacheSize / (1024.0 * 1024.0), 2);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error calculating cache size for path: {CachePath}", cachePath);
+                    }
+                }
+
+                // Build Cimian data snapshot
+                var cimianSnapshot = new Dictionary<string, object>
+                {
+                    ["timestamp"] = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffK"),
+                    ["summary"] = new Dictionary<string, object>
+                    {
+                        ["cacheSizeMb"] = cacheSizeMb,
+                        ["totalPackagesManaged"] = managedPackages.Count,
+                        ["packagesWithWarnings"] = recentWarnings.Select(w => w["package"]).Distinct().Count(),
+                        ["packagesWithErrors"] = recentErrors.Select(e => e["package"]).Distinct().Count(),
+                        ["packagesWithUpdates"] = managedPackages.Count(p => p["status"]?.ToString() == "Update Available")
+                    },
+                    ["lastRun"] = new Dictionary<string, object>
+                    {
+                        ["sessionId"] = latestSession.GetValueOrDefault("session_id", ""),
+                        ["timestamp"] = latestSession.GetValueOrDefault("start_time", ""),
+                        ["startTime"] = latestSession.GetValueOrDefault("start_time", ""),
+                        ["endTime"] = latestSession.ContainsKey("end_time") && latestSession["end_time"] != null ? latestSession["end_time"] : "",
+                        ["runType"] = latestSession.GetValueOrDefault("run_type", ""),
+                        ["status"] = latestSession.GetValueOrDefault("status", ""),
+                        ["durationSeconds"] = latestSession.GetValueOrDefault("duration_seconds", 0),
+                        ["packagesHandled"] = latestSession.ContainsKey("packages_handled") ? latestSession["packages_handled"] : new List<object>(),
+                        ["installLoopDetected"] = latestSession.GetValueOrDefault("install_loop_detected", false)
+                    },
+                    ["config"] = latestSession.ContainsKey("config") && latestSession["config"] is JsonElement configEl
+                        ? JsonSerializer.Deserialize<Dictionary<string, object>>(configEl.GetRawText(), JsonOptions) ?? new Dictionary<string, object>()
+                        : new Dictionary<string, object>(),
+                    ["managedPackages"] = managedPackages,
+                    ["recentWarnings"] = recentWarnings,
+                    ["recentErrors"] = recentErrors.Any() ? recentErrors.First() : new Dictionary<string, object>()
+                };
+
+                // Store Cimian data snapshot directly in InstallsData object
+                // This keeps the snapshot as part of the module data structure
+                data.CimianSnapshot = cimianSnapshot;
+                
+                _logger.LogInformation("Cimian data snapshot generated for session {SessionId} and stored in module data - {PackageCount} packages, {UpdateCount} updates, {ErrorCount} errors", 
+                    sessionId, managedPackages.Count, managedPackages.Count(p => p["status"]?.ToString() == "Update Available"), recentErrors.Count);
+
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error generating Cimian snapshot internally");
+            }
+        }
+
+        /// <summary>
+        /// Process Cimian data structure for clean, focused reporting
+        /// Transforms current complex Cimian data into the format needed for dashboard
+        /// Returns true if processing was successful, false if fallback processing should be used
+        /// Reads from CimianSnapshot stored in InstallsData object
+        /// </summary>
+        private bool ProcessCimianData(InstallsData data, string sessionId)
+        {
+            try
+            {
+                _logger.LogInformation("Processing Cimian data from object snapshot for {SessionId}...", sessionId);
+                
+                // Check if Cimian snapshot exists in the data object
+                if (data.CimianSnapshot == null)
+                {
+                    _logger.LogWarning("Cimian snapshot not found in data object for session {SessionId}, falling back to standard processing", sessionId);
+                    ProcessCimianDataFallback(data);
+                    return false;
+                }
+
+                // Use Cimian snapshot from data object
+                var cimianSnapshot = data.CimianSnapshot;
+                
+                if (cimianSnapshot == null)
+                {
+                    _logger.LogWarning("Failed to access Cimian snapshot from data object, falling back to standard processing");
+                    ProcessCimianDataFallback(data);
+                    return false;
+                }
+
+                _logger.LogInformation("Successfully loaded Cimian snapshot, processing clean Cimian data format");
+
+                // Ensure data.Cimian exists
+                if (data.Cimian == null)
+                {
+                    data.Cimian = new CimianInfo();
+                }
+
+                // Extract managed packages from Cimian snapshot
+                if (cimianSnapshot.ContainsKey("managedPackages") && cimianSnapshot["managedPackages"] is JsonElement packagesElement)
+                {
+                    var packages = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(packagesElement.GetRawText(), JsonOptions);
+                    
+                    data.Cimian.Items.Clear();
+                    
+                    foreach (var package in packages ?? new())
+                    {
+                        var item = new CimianItem
+                        {
+                            ItemName = package.GetValueOrDefault("name", "Unknown").ToString() ?? "Unknown",
+                            InstalledVersion = package.GetValueOrDefault("version", "Unknown").ToString() ?? "Unknown", 
+                            LatestVersion = package.GetValueOrDefault("latestVersion", "Unknown").ToString() ?? "Unknown",
+                            CurrentStatus = package.GetValueOrDefault("status", "Unknown").ToString() ?? "Unknown",
+                            LastUpdate = package.ContainsKey("lastUpdate") && DateTime.TryParse(package["lastUpdate"].ToString(), out var lastUpdate) ? lastUpdate : DateTime.UtcNow,
+                            InstallCount = 0,
+                            UpdateCount = 0,
+                            FailureCount = 0,
+                            LastSeenInSession = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffK"),
+                            Type = "cimian"
+                        };
+                        
+                        data.Cimian.Items.Add(item);
+                    }
+                    
+                    _logger.LogInformation("Loaded {PackageCount} packages from Cimian snapshot", data.Cimian.Items.Count);
+                }
+
+                // Extract configuration from Cimian snapshot
+                if (cimianSnapshot.ContainsKey("config") && cimianSnapshot["config"] is JsonElement configElement)
+                {
+                    data.Cimian.Config = JsonSerializer.Deserialize<Dictionary<string, object>>(configElement.GetRawText(), JsonOptions) ?? new();
+                }
+
+                // Extract last run info from Cimian snapshot  
+                if (cimianSnapshot.ContainsKey("lastRun") && cimianSnapshot["lastRun"] is JsonElement lastRunElement)
+                {
+                    var lastRun = JsonSerializer.Deserialize<Dictionary<string, object>>(lastRunElement.GetRawText(), JsonOptions);
+                    if (lastRun != null)
+                    {
+                        // Add to CacheStatus for API consumption
+                        data.CacheStatus["cimian_last_run"] = lastRun;
+                        data.CacheStatus["cimian_packages_handled"] = lastRun.GetValueOrDefault("packagesHandled", new List<object>());
+                        data.CacheStatus["cimian_duration_seconds"] = lastRun.GetValueOrDefault("durationSeconds", 0);
+                        data.CacheStatus["cimian_install_loop_detected"] = lastRun.GetValueOrDefault("installLoopDetected", false);
+                    }
+                }
+
+                // Extract summary stats from Cimian snapshot
+                if (cimianSnapshot.ContainsKey("summary") && cimianSnapshot["summary"] is JsonElement summaryElement)
+                {
+                    var summary = JsonSerializer.Deserialize<Dictionary<string, object>>(summaryElement.GetRawText(), JsonOptions);
+                    if (summary != null)
+                    {
+                        data.CacheStatus["cimian_total_packages"] = summary.GetValueOrDefault("totalPackagesManaged", 0);
+                        data.CacheStatus["cimian_packages_with_updates"] = summary.GetValueOrDefault("packagesWithUpdates", 0);
+                        data.CacheStatus["cimian_packages_with_warnings"] = summary.GetValueOrDefault("packagesWithWarnings", 0);
+                        data.CacheStatus["cimian_packages_with_errors"] = summary.GetValueOrDefault("packagesWithErrors", 0);
+                        data.CacheStatus["cimian_cache_size_mb"] = summary.GetValueOrDefault("cacheSizeMb", 0.0);
+                    }
+                }
+
+                _logger.LogInformation("Cimian data integration completed successfully");
+                return true;
+
+            } catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing Cimian snapshot, falling back to standard processing");
+                ProcessCimianDataFallback(data);
+                return false;
+            }
+        }
+
+        private void ProcessCimianDataFallback(InstallsData data)
+        {
+            try
+            {
+                _logger.LogDebug("Processing Cimian data transformation...");
+                
+                const string CIMIAN_REPORTS_PATH = @"C:\ProgramData\ManagedInstalls\reports";
+                
+                // Check if Cimian reports exist
+                if (!Directory.Exists(CIMIAN_REPORTS_PATH))
+                {
+                    _logger.LogDebug("Cimian reports directory not found: {Path}", CIMIAN_REPORTS_PATH);
+                    return;
+                }
+
+                var itemsPath = Path.Combine(CIMIAN_REPORTS_PATH, "items.json");
+                var sessionsPath = Path.Combine(CIMIAN_REPORTS_PATH, "sessions.json");
+                var eventsPath = Path.Combine(CIMIAN_REPORTS_PATH, "events.json");
+
+                if (!File.Exists(itemsPath) || !File.Exists(sessionsPath))
+                {
+                    _logger.LogDebug("Required Cimian report files not found");
+                    return;
+                }
+
+                // Load and process the Cimian reports using source generator context
+                var items = JsonSerializer.Deserialize(File.ReadAllText(itemsPath), ReportMateJsonContext.Default.ListDictionaryStringObject);
+                var sessions = JsonSerializer.Deserialize(File.ReadAllText(sessionsPath), ReportMateJsonContext.Default.ListDictionaryStringObject);
+                
+                if (items == null || sessions == null)
+                {
+                    _logger.LogWarning("Failed to parse Cimian report data");
+                    return;
+                }
+
+                // Get latest session for config and timing
+                var latestSession = sessions.OrderByDescending(s => 
+                    s.ContainsKey("start_time") ? s["start_time"].ToString() : "").FirstOrDefault();
+
+                if (latestSession == null)
+                {
+                    _logger.LogWarning("No sessions found in Cimian reports");
+                    return;
+                }
+
+                // Build Cimian structure - ensure data.Cimian exists
+                if (data.Cimian == null)
+                {
+                    data.Cimian = new CimianInfo();
+                }
+
+                // Update Cimian configuration from latest session
+                if (latestSession.ContainsKey("config") && latestSession["config"] is JsonElement configElement)
+                {
+                    data.Cimian.Config = JsonSerializer.Deserialize<Dictionary<string, object>>(configElement.GetRawText()) ?? new();
+                }
+
+                // Process managed packages with clean status mapping
+                data.Cimian.Items.Clear();
+                var errorsCount = 0;
+                var warningsCount = 0;
+                var updatesCount = 0;
+
+                foreach (var itemDict in items)
+                {
+                    var item = new CimianItem
+                    {
+                        Id = GetDictValue(itemDict, "id"),
+                        ItemName = GetDictValue(itemDict, "item_name"),
+                        DisplayName = GetDictValue(itemDict, "display_name"),
+                        CurrentStatus = GetDictValue(itemDict, "current_status"),
+                        LatestVersion = GetDictValue(itemDict, "latest_version"),
+                        InstalledVersion = GetDictValue(itemDict, "installed_version"),
+                        LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session")
+                    };
+
+                    // Clean status mapping for Cimian
+                    var cimianStatus = "Unknown";
+                    if (item.CurrentStatus == "Error" || HasFailedAttempts(itemDict))
+                    {
+                        cimianStatus = "Error";
+                        errorsCount++;
+                    }
+                    else if (!string.IsNullOrEmpty(item.InstalledVersion) && !string.IsNullOrEmpty(item.LatestVersion))
+                    {
+                        if (item.InstalledVersion == item.LatestVersion)
+                        {
+                            cimianStatus = "Installed";
+                        }
+                        else
+                        {
+                            cimianStatus = "Pending";  // Update available → Pending
+                            updatesCount++;
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(item.InstalledVersion))
+                    {
+                        cimianStatus = "Installed";
+                    }
+                    else
+                    {
+                        cimianStatus = "Pending";
+                    }
+
+                    // Check for warnings
+                    if (HasWarningAttempts(itemDict) && cimianStatus != "Error")
+                    {
+                        cimianStatus = "Warning";
+                        warningsCount++;
+                    }
+
+                    item.CurrentStatus = cimianStatus; // Override with clean Cimian status
+                    data.Cimian.Items.Add(item);
+                }
+
+                // Update summary data
+                data.Cimian.Status = errorsCount > 0 ? "Error" : warningsCount > 0 ? "Warning" : "Active";
+
+                // Store Cimian summary in CacheStatus for easy access
+                data.CacheStatus["cimian_total_packages"] = data.Cimian.Items.Count;
+                data.CacheStatus["cimian_updates_available"] = updatesCount;
+                data.CacheStatus["cimian_errors"] = errorsCount;
+                data.CacheStatus["cimian_warnings"] = warningsCount;
+                data.CacheStatus["cimian_last_run"] = GetDictValue(latestSession, "end_time") ?? GetDictValue(latestSession, "start_time");
+
+                _logger.LogInformation("Processed Cimian Cimian data: {Packages} packages, {Updates} updates, {Errors} errors, {Warnings} warnings", 
+                    data.Cimian.Items.Count, updatesCount, errorsCount, warningsCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error processing Cimian Cimian data");
+            }
+        }
+
+        private bool HasFailedAttempts(Dictionary<string, object> itemDict)
+        {
+            if (itemDict.ContainsKey("recent_attempts") && itemDict["recent_attempts"] is JsonElement attemptsElement)
+            {
+                try
+                {
+                    foreach (var attempt in attemptsElement.EnumerateArray())
+                    {
+                        if (attempt.TryGetProperty("status", out var statusProp) && 
+                            statusProp.GetString() == "Error")
+                        {
+                            return true;
+                        }
+                    }
+                }
+                catch { }
+            }
+            return false;
+        }
+
+        private bool HasWarningAttempts(Dictionary<string, object> itemDict)
+        {
+            // Don't use historical warnings to override correct status from version comparison
+            // Status should be: Installed (versions match), Pending (update available), or Error (current failures)
+            // Historical warnings should not change a correctly "Installed" package to "Warning"
+            return false;
         }
 
         private void ProcessCacheStatus(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
@@ -1294,12 +1974,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                         }
                     }
                     
-                    // Primary fields - use new Cimian field names with proper empty string handling
+                    // Primary fields - use actual Cimian field names (Cimian uses "installed_version" for installed, "latest_version" for latest)
+                    var latestVersion = GetDictValue(item, "latest_version");
+                    var installedVersion = GetDictValue(item, "installed_version"); // FIXED: Cimian uses "installed_version" not "version"
+                    
                     if (string.IsNullOrEmpty(extractedVersion))
                     {
-                        var latestVersion = GetDictValue(item, "latest_version");
-                        var installedVersion = GetDictValue(item, "installed_version");
-                        
                         // Debug logging to see what we're actually getting
                         var debugItemId = GetDictValue(item, "id");
                         _logger.LogInformation("DEBUG VERSION EXTRACTION - Item: {ItemId}, latest_version: '{LatestVersion}', installed_version: '{InstalledVersion}'", 
@@ -1321,10 +2001,58 @@ namespace ReportMate.WindowsClient.Services.Modules
                             _logger.LogInformation("DEBUG VERSION - No version found, using Unknown for {ItemId}", debugItemId);
                         }
                     }
-                    if (string.IsNullOrEmpty(cimianStatus))
+                    
+                    // CRITICAL FIX: Determine status based on semantic version comparison
+                    string determinedStatus;
+                    if (!string.IsNullOrEmpty(latestVersion) && !string.IsNullOrEmpty(installedVersion))
                     {
-                        cimianStatus = GetDictValue(item, "current_status") ?? "Unknown";
+                        try
+                        {
+                            // Parse versions for semantic comparison
+                            var installedVer = new Version(installedVersion);
+                            var latestVer = new Version(latestVersion);
+                            
+                            if (installedVer >= latestVer)
+                            {
+                                determinedStatus = "Installed"; // Installed version is current or newer
+                                _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: installed_version='{InstalledVersion}' >= latest_version='{LatestVersion}' -> 'Installed'", 
+                                    GetDictValue(item, "id"), installedVersion, latestVersion);
+                            }
+                            else
+                            {
+                                determinedStatus = "Pending"; // Update available
+                                _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: installed_version='{InstalledVersion}' < latest_version='{LatestVersion}' -> 'Pending'", 
+                                    GetDictValue(item, "id"), installedVersion, latestVersion);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Fall back to string comparison if version parsing fails
+                            if (latestVersion.Equals(installedVersion, StringComparison.OrdinalIgnoreCase))
+                            {
+                                determinedStatus = "Installed";
+                                _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: String comparison - versions match -> 'Installed'", 
+                                    GetDictValue(item, "id"));
+                            }
+                            else
+                            {
+                                determinedStatus = "Pending";
+                                _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: String comparison - versions differ -> 'Pending' (parse error: {Error})", 
+                                    GetDictValue(item, "id"), ex.Message);
+                            }
+                        }
                     }
+                    else
+                    {
+                        // Fall back to Cimian status if version comparison isn't possible
+                        determinedStatus = string.IsNullOrEmpty(cimianStatus) ? 
+                            (GetDictValue(item, "current_status") ?? "Unknown") : cimianStatus;
+                        _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: No version comparison possible, using fallback status: '{Status}'", 
+                            GetDictValue(item, "id"), determinedStatus);
+                    }
+                    
+                    // Use the determined status instead of raw cimianStatus
+                    cimianStatus = determinedStatus;
                     
                     // Check for install loop detection flag
                     bool hasInstallLoop = false;
@@ -1362,7 +2090,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         ItemType = GetDictValue(item, "item_type"),
                         Status = reportMateStatus, // Enhanced: Use mapped ReportMate status
                         Version = extractedVersion, // Enhanced: Use version from recent_attempts
-                        InstalledVersion = GetDictValue(item, "installed_version"),
+                        InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
                         LastSeenInSession = GetDictValue(item, "last_seen_in_session"),
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
@@ -1379,7 +2107,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         ItemType = GetDictValue(item, "item_type"),
                         CurrentStatus = cimianStatus, // Enhanced: Store original Cimian status for detailed tracking
                         LatestVersion = extractedVersion, // Enhanced: Use version from recent_attempts
-                        InstalledVersion = GetDictValue(item, "installed_version"),
+                        InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
                         LastSeenInSession = GetDictValue(item, "last_seen_in_session"),
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
@@ -1526,7 +2254,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // Count ALL recent events from the latest Cimian run (regardless of session filtering issues)
                 var allRecentEvents = data.RecentEvents ?? new List<CimianEvent>();
                 var errorEvents = allRecentEvents.Where(e => e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase)).ToList();
-                var warningEvents = allRecentEvents.Where(e => e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase)).ToList();
+                
+                // Filter out expected/non-actionable warnings (like architecture mismatches on ARM64 systems)
+                var warningEvents = allRecentEvents
+                    .Where(e => e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase))
+                    .Where(e => !IsExpectedWarning(e.Message))
+                    .ToList();
+                    
                 var infoEvents = allRecentEvents.Where(e => e.Level.Equals("INFO", StringComparison.OrdinalIgnoreCase)).ToList();
                 
                 _logger.LogInformation("Event counts - Errors: {ErrorCount}, Warnings: {WarningCount}, Info: {InfoCount}", 
@@ -1991,6 +2725,26 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return recommendations;
+        }
+
+        /// <summary>
+        /// Determines if a warning message represents an expected/non-actionable condition
+        /// </summary>
+        private static bool IsExpectedWarning(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return false;
+            
+            // Filter out architecture mismatch warnings - these are expected on ARM64 systems with x64 packages
+            var expectedWarnings = new[]
+            {
+                "Architecture mismatch, skipping",
+                "architecture mismatch",
+                "Refusing downgrade; local version newer",
+                "refusing downgrade"
+            };
+            
+            return expectedWarnings.Any(warning => 
+                message.Contains(warning, StringComparison.OrdinalIgnoreCase));
         }
     }
 }

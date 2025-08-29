@@ -19,6 +19,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? LastCheckIn { get; set; }
         public bool BootstrapModeActive { get; set; }
         public Dictionary<string, object> CacheStatus { get; set; } = new();
+        
+        /// <summary>
+        /// Session-specific snapshot data for this collection run
+        /// Contains processed Cimian data for the current session
+        /// </summary>
+        public Dictionary<string, object>? CimianSnapshot { get; set; }
     }
 
     public class CimianInfo

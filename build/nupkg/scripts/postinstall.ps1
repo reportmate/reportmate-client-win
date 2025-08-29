@@ -1,12 +1,52 @@
 # ReportMate Post-Installation Script
-# Configures the ReportMate client after installation
-# Can be configured via environment variables, registry, or CSP policies
+# Configures the ReportMate client af# Set API URL if provided via environment variable or production default
+if ([string]::IsNullOrEmpty($ApiUrl) -and -not [string]::IsNullOrEmpty($PROD_API_URL)) {
+    $ApiUrl = $PROD_API_URL
+}
+
+if (-not [string]::IsNullOrEmpty($ApiUrl)) {
+    try {
+        Set-ItemProperty -Path $RegistryPath -Name "ApiUrl" -Value $ApiUrl -Type String
+        Write-Host "Set API URL: $ApiUrl"
+    } catch {
+        Write-Warning "Failed to set API URL: $_"
+    }
+}
+
+# Set API Key if provided via environment variable or production default
+if ([string]::IsNullOrEmpty($ApiKey) -and -not [string]::IsNullOrEmpty($PROD_API_KEY)) {
+    $ApiKey = $PROD_API_KEY
+}
+
+if (-not [string]::IsNullOrEmpty($ApiKey)) {
+    try {
+        Set-ItemProperty -Path $RegistryPath -Name "ApiKey" -Value $ApiKey -Type String
+        Write-Host "Set API Key: [CONFIGURED]"
+    } catch {
+        Write-Warning "Failed to set API Key: $_"
+    }
+}
+
+# Set Passphrase if provided via environment variable or production default
+if ([string]::IsNullOrEmpty($Passphrase) -and -not [string]::IsNullOrEmpty($PROD_PASSPHRASE)) {
+    $Passphrase = $PROD_PASSPHRASE
+}# Can be configured via environment variables, registry, or CSP policies
 
 $ErrorActionPreference = "Continue"
+
+# =================================================================
+# PRODUCTION CONFIGURATION VARIABLES
+# =================================================================
+# Environment variables take precedence, fallback to these defaults
+$PROD_API_URL = $env:REPORTMATE_API_URL ?? "https://reportmate-api.azurewebsites.net"
+$PROD_API_KEY = $env:REPORTMATE_API_KEY ?? "SeJ2GSq6besIs6OR3edFi5tx7auCjTeptlr9l6Cj2irrwVBetg7piBl7xa8zwFEKBWBI679vVIjxILicQjHtjA=="
+$PROD_PASSPHRASE = $env:REPORTMATE_PASSPHRASE ?? "BGXCQm3KN0LZPfnFzAclTt5"
+$AUTO_CONFIGURE = [bool]($env:REPORTMATE_AUTO_CONFIGURE ?? $true)
 
 # Initialize configuration variables
 $ApiUrl = ""
 $ApiKey = ""
+$Passphrase = ""
 
 Write-Host "ReportMate Post-Installation Script"
 Write-Host "=================================================="
@@ -25,6 +65,12 @@ if (Test-Path $CSPRegistryPath) {
     if ($CSPApiKey -and -not [string]::IsNullOrEmpty($CSPApiKey.ApiKey)) {
         $ApiKey = $CSPApiKey.ApiKey
         Write-Host "Using CSP-configured API Key"
+    }
+    
+    $CSPPassphrase = Get-ItemProperty -Path $CSPRegistryPath -Name "Passphrase" -ErrorAction SilentlyContinue
+    if ($CSPPassphrase -and -not [string]::IsNullOrEmpty($CSPPassphrase.Passphrase)) {
+        $Passphrase = $CSPPassphrase.Passphrase
+        Write-Host "Using CSP-configured Passphrase"
     }
 }
 
@@ -58,10 +104,9 @@ try {
     Write-Warning "Failed to set default configuration: $_"
 }
 
-# Set API URL if provided via environment variable
-$EnvApiUrl = $env:REPORTMATE_API_URL
-if (-not [string]::IsNullOrEmpty($EnvApiUrl)) {
-    $ApiUrl = $EnvApiUrl
+# Set API URL if provided via environment variable or use production default
+if (-not [string]::IsNullOrEmpty($PROD_API_URL)) {
+    $ApiUrl = $PROD_API_URL
 }
 
 if (-not [string]::IsNullOrEmpty($ApiUrl)) {
@@ -73,20 +118,22 @@ if (-not [string]::IsNullOrEmpty($ApiUrl)) {
     }
 }
 
-# Set API Key if provided
-$EnvApiKey = $env:REPORTMATE_API_KEY
-if (-not [string]::IsNullOrEmpty($EnvApiKey)) {
-    $ApiKey = $EnvApiKey
+# Set Passphrase if provided via environment variable or production default
+if (-not [string]::IsNullOrEmpty($PROD_PASSPHRASE)) {
+    $Passphrase = $PROD_PASSPHRASE
 }
 
-if (-not [string]::IsNullOrEmpty($ApiKey)) {
+if (-not [string]::IsNullOrEmpty($Passphrase)) {
     try {
-        Set-ItemProperty -Path $RegistryPath -Name "ApiKey" -Value $ApiKey -Type String
-        Write-Host "Set API Key: [REDACTED]"
+        Set-ItemProperty -Path $RegistryPath -Name "Passphrase" -Value $Passphrase -Type String
+        Write-Host "Set Client Passphrase: [CONFIGURED]"
     } catch {
-        Write-Warning "Failed to set API Key: $_"
+        Write-Warning "Failed to set Client Passphrase: $_"
     }
 }
+
+# Note: DeviceId is automatically determined by ReportMate using hardware serial number detection
+# Registry override is only needed for special cases and should be set manually if required
 
 # Create data directories
 $DataDirectories = @(
@@ -131,7 +178,23 @@ if ($LASTEXITCODE -eq 0) {
 
 Write-Host "Post-installation script completed"
 Write-Host ""
+Write-Host "Configuration Summary:"
+Write-Host "  API URL: $(if ($ApiUrl) { $ApiUrl } else { 'Not configured' })"
+Write-Host "  API Key: $(if ($ApiKey) { '[CONFIGURED]' } else { 'Not set' })"
+Write-Host "  Passphrase: $(if ($Passphrase) { '[CONFIGURED]' } else { 'Not set' })"
+Write-Host "  Auto-Configure: $AUTO_CONFIGURE"
+Write-Host ""
+Write-Host "Registry Locations:"
+Write-Host "  CSP/Policy: HKLM\SOFTWARE\Config\ReportMate (highest precedence)"
+Write-Host "  Standard: HKLM\SOFTWARE\ReportMate"
+Write-Host ""
+Write-Host "Environment Variables (override defaults):"
+Write-Host "  REPORTMATE_API_URL - Override production API URL"
+Write-Host "  REPORTMATE_API_KEY - Override production API key"
+Write-Host "  REPORTMATE_PASSPHRASE - Override production passphrase"
+Write-Host "  REPORTMATE_AUTO_CONFIGURE - Override auto-configuration setting"
+Write-Host ""
 Write-Host "Next steps:"
-Write-Host "1. Configure API URL: Set-ItemProperty -Path 'HKLM\SOFTWARE\ReportMate' -Name 'ApiUrl' -Value 'https://your-api.azurewebsites.net'"
+Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"

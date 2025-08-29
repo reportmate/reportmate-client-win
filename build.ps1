@@ -318,17 +318,17 @@ if ($CreateRelease) {
 
 Write-Output ""
 
-# Set paths
+# Set paths (use Join-Path for proper Windows path handling)
 $RootDir = $PSScriptRoot
-$SrcDir = "$RootDir/src"
-$BuildDir = "$RootDir/build"
-$NupkgDir = "$BuildDir/nupkg"
-$ProgramFilesPayloadDir = "$NupkgDir/payload"
-$ProgramDataPayloadDir = "$NupkgDir/payload/data"
-$CimianPayloadDir = "$NupkgDir/payload/cimian"
-$MsiStagingDir = "$RootDir/dist/msi-staging"
-$PublishDir = "$RootDir/.publish"
-$OutputDir = "$RootDir/dist"
+$SrcDir = Join-Path $RootDir "src"
+$BuildDir = Join-Path $RootDir "build"
+$NupkgDir = Join-Path $BuildDir "nupkg"
+$ProgramFilesPayloadDir = Join-Path $NupkgDir "payload"
+$ProgramDataPayloadDir = Join-Path $NupkgDir "payload\data"
+$CimianPayloadDir = Join-Path $NupkgDir "payload\cimian"
+$MsiStagingDir = Join-Path $RootDir "dist\msi-staging"
+$PublishDir = Join-Path $RootDir ".publish"
+$OutputDir = Join-Path $RootDir "dist"
 
 Write-Info "Root Directory: $RootDir"
 Write-Info "Output Directory: $OutputDir"
@@ -350,13 +350,13 @@ if ($Clean) {
 # Clean old binaries from previous builds (always, not just when -Clean is specified)
 Write-Step "Cleaning old binaries from .publish and dist directories..."
 $cleanupPaths = @(
-    "$PublishDir/*.exe",
-    "$PublishDir/*.dll", 
-    "$PublishDir/*.pdb",
-    "$OutputDir/*.nupkg",
-    "$OutputDir/*.zip", 
-    "$OutputDir/*.msi",
-    "$OutputDir/*.exe"
+    (Join-Path $PublishDir "*.exe"),
+    (Join-Path $PublishDir "*.dll"), 
+    (Join-Path $PublishDir "*.pdb"),
+    (Join-Path $OutputDir "*.nupkg"),
+    (Join-Path $OutputDir "*.zip"), 
+    (Join-Path $OutputDir "*.msi"),
+    (Join-Path $OutputDir "*.exe")
 )
 
 foreach ($pattern in $cleanupPaths) {
@@ -488,7 +488,7 @@ if (-not $SkipBuild) {
     Write-Step "Building .NET application..."
     
     # Update version in project file - now handled by dynamic VersionPrefix in .csproj
-    $csprojPath = "$SrcDir/ReportMate.WindowsClient.csproj"
+    $csprojPath = Join-Path $SrcDir "ReportMate.WindowsClient.csproj"
     Write-Verbose "Using dynamic versioning from project file: $csprojPath"
     
     Write-Info "Building with version: $Version"
@@ -544,7 +544,7 @@ Write-Output ""
 Write-Step "Preparing package payload..."
 
 # Copy executable to payload root (will be installed to Program Files/ReportMate)
-Copy-Item "$PublishDir/runner.exe" $ProgramFilesPayloadDir -Force
+Copy-Item (Join-Path $PublishDir "runner.exe") $ProgramFilesPayloadDir -Force
 Write-Verbose "Copied runner.exe to payload root"
 
 # Create version file in payload root
@@ -555,29 +555,29 @@ Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
 Platform: Windows x64
 Commit: $env:GITHUB_SHA
 "@
-$versionContent | Out-File "$ProgramFilesPayloadDir/version.txt" -Encoding UTF8
+$versionContent | Out-File (Join-Path $ProgramFilesPayloadDir "version.txt") -Encoding UTF8
 
 # Copy configuration files to data directory (will be installed to ProgramData/ManagedReports)
-Copy-Item "$SrcDir/appsettings.yaml" $ProgramDataPayloadDir -Force
+Copy-Item (Join-Path $SrcDir "appsettings.yaml") $ProgramDataPayloadDir -Force
 
 # Copy modular osquery configuration from centralized build resources (single source of truth)
-$osquerySourceDir = "$BuildDir/resources/osquery"
-$osqueryTargetDataDir = "$ProgramDataPayloadDir/osquery"
-$osqueryTargetProgramDir = "$ProgramFilesPayloadDir/osquery"
+$osquerySourceDir = Join-Path $BuildDir "resources\osquery"
+$osqueryTargetDataDir = Join-Path $ProgramDataPayloadDir "osquery"
+$osqueryTargetProgramDir = Join-Path $ProgramFilesPayloadDir "osquery"
 
 # Copy shared resources from build/resources
-$sharedResourcesDir = "$BuildDir/resources"
+$sharedResourcesDir = Join-Path $BuildDir "resources"
 # Copy module schedules and task scripts from shared resources
-if (Test-Path "$sharedResourcesDir/module-schedules.json") {
-    Copy-Item "$sharedResourcesDir/module-schedules.json" $ProgramFilesPayloadDir -Force
+if (Test-Path (Join-Path $sharedResourcesDir "module-schedules.json")) {
+    Copy-Item (Join-Path $sharedResourcesDir "module-schedules.json") $ProgramFilesPayloadDir -Force
     Write-Verbose "Copied module-schedules.json from shared resources"
 }
-if (Test-Path "$sharedResourcesDir/install-tasks.ps1") {
-    Copy-Item "$sharedResourcesDir/install-tasks.ps1" $ProgramFilesPayloadDir -Force
+if (Test-Path (Join-Path $sharedResourcesDir "install-tasks.ps1")) {
+    Copy-Item (Join-Path $sharedResourcesDir "install-tasks.ps1") $ProgramFilesPayloadDir -Force
     Write-Verbose "Copied install-tasks.ps1 from shared resources"
 }
-if (Test-Path "$sharedResourcesDir/uninstall-tasks.ps1") {
-    Copy-Item "$sharedResourcesDir/uninstall-tasks.ps1" $ProgramFilesPayloadDir -Force
+if (Test-Path (Join-Path $sharedResourcesDir "uninstall-tasks.ps1")) {
+    Copy-Item (Join-Path $sharedResourcesDir "uninstall-tasks.ps1") $ProgramFilesPayloadDir -Force
     Write-Verbose "Copied uninstall-tasks.ps1 from shared resources"
 }
 
@@ -600,13 +600,13 @@ if (Test-Path $osquerySourceDir) {
 } else {
     Write-Warning "Modular osquery directory not found at: $osquerySourceDir"
     # Fallback to unified file if modular not available
-    if (Test-Path "$SrcDir/osquery-unified.json") {
+    if (Test-Path (Join-Path $SrcDir "osquery-unified.json")) {
         Write-Verbose "Fallback: Copying unified osquery configuration..."
-        Copy-Item "$SrcDir/osquery-unified.json" "$ProgramDataPayloadDir/osquery-unified.json" -Force
+        Copy-Item (Join-Path $SrcDir "osquery-unified.json") (Join-Path $ProgramDataPayloadDir "osquery-unified.json") -Force
     }
 }
 
-Copy-Item "$SrcDir/appsettings.yaml" "$ProgramDataPayloadDir/appsettings.template.yaml" -Force
+Copy-Item (Join-Path $SrcDir "appsettings.yaml") (Join-Path $ProgramDataPayloadDir "appsettings.template.yaml") -Force
 Write-Verbose "Copied configuration files to data payload directory"
 
 # Copy additional shared resources to Program Files payload
@@ -628,24 +628,24 @@ foreach ($file in $sharedFiles) {
 }
 
 # Copy install scripts directory if it exists
-$installScriptsDir = "$sharedResourcesDir/install-scripts"
+$installScriptsDir = Join-Path $sharedResourcesDir "install-scripts"
 if (Test-Path $installScriptsDir) {
     Copy-Item $installScriptsDir $ProgramFilesPayloadDir -Recurse -Force
     Write-Verbose "Copied install-scripts directory from shared resources"
 }
 
 # Copy Cimian postflight script from shared resources
-$cimianPostflightSource = "$sharedResourcesDir/cimian-postflight.ps1"
+$cimianPostflightSource = Join-Path $sharedResourcesDir "cimian-postflight.ps1"
 if (Test-Path $cimianPostflightSource) {
-    Copy-Item $cimianPostflightSource "$CimianPayloadDir/postflight.ps1" -Force
+    Copy-Item $cimianPostflightSource (Join-Path $CimianPayloadDir "postflight.ps1") -Force
     Write-Verbose "Copied Cimian postflight script from shared resources"
 } else {
     Write-Warning "Cimian postflight script not found in shared resources: $cimianPostflightSource"
 }
 
 # Create chocolatey install script for Cimian package
-$chocolateyInstallPath = "$NupkgDir/tools/chocolateyInstall.ps1"
-$chocolateyToolsDir = "$NupkgDir/tools"
+$chocolateyInstallPath = Join-Path $NupkgDir "tools\chocolateyInstall.ps1"
+$chocolateyToolsDir = Join-Path $NupkgDir "tools"
 if (-not (Test-Path $chocolateyToolsDir)) {
     New-Item -ItemType Directory -Path $chocolateyToolsDir -Force | Out-Null
 }
@@ -715,6 +715,34 @@ if (Test-Path $dataPayloadPath) {
     Write-Warning "No data payload directory found at: $dataPayloadPath"
 }
 
+# Copy Cimian integration files to C:\Program Files\Cimian\
+$cimianPayloadPath = Join-Path $payloadRoot 'cimian'
+if (Test-Path $cimianPayloadPath) {
+    $cimianDestPath = 'C:\Program Files\Cimian\'
+    Write-Host "Copying Cimian integration files..."
+    
+    # Create Cimian directory if it doesn't exist
+    if (-not (Test-Path $cimianDestPath)) {
+        New-Item -ItemType Directory -Force -Path $cimianDestPath | Out-Null
+        Write-Host "Created directory: $cimianDestPath"
+    }
+    
+    # Copy all files from cimian payload
+    Get-ChildItem -Path $cimianPayloadPath -File | ForEach-Object {
+        $destFile = Join-Path $cimianDestPath $_.Name
+        Copy-Item -LiteralPath $_.FullName -Destination $destFile -Force
+        Write-Host "Copied $($_.Name) to Cimian directory"
+        
+        if (-not (Test-Path -LiteralPath $destFile)) {
+            Write-Error "Failed to copy Cimian file $($_.Name)"
+            exit 1
+        }
+    }
+    Write-Host "Cimian integration files copied successfully"
+} else {
+    Write-Warning "No Cimian payload directory found at: $cimianPayloadPath"
+}
+
 Write-Host "ReportMate chocolatey installation completed successfully"
 
 # Clean up executable from payload after installation
@@ -733,7 +761,7 @@ if (Test-Path $exePayloadPath) {
 $chocolateyInstallContent | Out-File $chocolateyInstallPath -Encoding UTF8
 
 # Update package build-info.yaml
-$buildInfoPath = "$NupkgDir/build-info.yaml"
+$buildInfoPath = Join-Path $NupkgDir "build-info.yaml"
 if (Test-Path $buildInfoPath) {
     $content = Get-Content $buildInfoPath -Raw
     $content = $content -replace 'version: ".*?"', "version: `"$Version`""
@@ -764,7 +792,7 @@ if (-not $SkipNUPKG) {
             }
             
             if ($downloadUrl) {
-                $cimipkgPath = "$RootDir/cimipkg.exe"
+                $cimipkgPath = Join-Path $RootDir "cimipkg.exe"
                 Invoke-WebRequest -Uri $downloadUrl -OutFile $cimipkgPath
                 Write-Success "Downloaded cimipkg: $downloadUrl"
             } else {
@@ -811,7 +839,7 @@ if (-not $SkipNUPKG) {
                 }
                 
                 # Clean up executable from payload after successful NUPKG creation
-                $payloadExe = "$ProgramFilesPayloadDir/runner.exe"
+                $payloadExe = Join-Path $ProgramFilesPayloadDir "runner.exe"
                 if (Test-Path $payloadExe) {
                     try {
                         Remove-Item $payloadExe -Force
@@ -900,18 +928,18 @@ if (-not $SkipMSI) {
             New-Item -ItemType Directory -Path $MsiStagingDir -Force | Out-Null
             
             # Copy binary files to staging
-            Copy-Item "$PublishDir/runner.exe" "$MsiStagingDir/runner.exe" -Force
+            Copy-Item (Join-Path $PublishDir "runner.exe") (Join-Path $MsiStagingDir "runner.exe") -Force
             Write-Verbose "Copied runner.exe to MSI staging"
             
             # Copy configuration files to staging
-            Copy-Item "$SrcDir/appsettings.json" "$MsiStagingDir/appsettings.json" -Force
-            Copy-Item "$SrcDir/appsettings.yaml" "$MsiStagingDir/appsettings.yaml" -Force
+            Copy-Item (Join-Path $SrcDir "appsettings.json") (Join-Path $MsiStagingDir "appsettings.json") -Force
+            Copy-Item (Join-Path $SrcDir "appsettings.yaml") (Join-Path $MsiStagingDir "appsettings.yaml") -Force
             Write-Verbose "Copied configuration files to MSI staging"
             
             # Copy osquery modules to staging (using centralized build resources as single source of truth)
-            $osquerySourceDir = "$BuildDir/resources/osquery"
+            $osquerySourceDir = Join-Path $BuildDir "resources\osquery"
             if (Test-Path $osquerySourceDir) {
-                Copy-Item $osquerySourceDir "$MsiStagingDir" -Recurse -Force
+                Copy-Item $osquerySourceDir $MsiStagingDir -Recurse -Force
                 Write-Verbose "Copied osquery modules from src to MSI staging"
             }
             
@@ -923,48 +951,48 @@ Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
 Platform: Windows x64
 Commit: $env:GITHUB_SHA
 "@
-            $versionContent | Out-File "$MsiStagingDir/version.txt" -Encoding UTF8
+            $versionContent | Out-File (Join-Path $MsiStagingDir "version.txt") -Encoding UTF8
             Write-Verbose "Created version.txt for MSI"
             
             # Copy license file for MSI
-            if (Test-Path "$BuildDir/msi/License.rtf") {
-                Copy-Item "$BuildDir/msi/License.rtf" "$MsiStagingDir/License.rtf" -Force
+            if (Test-Path (Join-Path $BuildDir "msi\License.rtf")) {
+                Copy-Item (Join-Path $BuildDir "msi\License.rtf") (Join-Path $MsiStagingDir "License.rtf") -Force
                 Write-Verbose "Copied license file to MSI staging"
             }
             
             # Copy shared installation scripts
-            $sharedScriptsDir = "$BuildDir/resources/install-scripts"
+            $sharedScriptsDir = Join-Path $BuildDir "resources\install-scripts"
             if (Test-Path $sharedScriptsDir) {
-                Copy-Item $sharedScriptsDir "$MsiStagingDir/install-scripts" -Recurse -Force
+                Copy-Item $sharedScriptsDir (Join-Path $MsiStagingDir "install-scripts") -Recurse -Force
                 Write-Verbose "Copied shared installation scripts to MSI staging"
             }
             
             # Copy PowerShell task installation scripts
-            $installTasksScript = "$BuildDir/resources/install-tasks.ps1"
-            $uninstallTasksScript = "$BuildDir/resources/uninstall-tasks.ps1"
+            $installTasksScript = Join-Path $BuildDir "resources\install-tasks.ps1"
+            $uninstallTasksScript = Join-Path $BuildDir "resources\uninstall-tasks.ps1"
             
             if (Test-Path $installTasksScript) {
-                Copy-Item $installTasksScript "$MsiStagingDir/install-tasks.ps1" -Force
+                Copy-Item $installTasksScript (Join-Path $MsiStagingDir "install-tasks.ps1") -Force
                 Write-Verbose "Copied install-tasks.ps1 to MSI staging"
             }
             
             if (Test-Path $uninstallTasksScript) {
-                Copy-Item $uninstallTasksScript "$MsiStagingDir/uninstall-tasks.ps1" -Force
+                Copy-Item $uninstallTasksScript (Join-Path $MsiStagingDir "uninstall-tasks.ps1") -Force
                 Write-Verbose "Copied uninstall-tasks.ps1 to MSI staging"
             }
             
             # Copy module schedules configuration
-            $scheduleConfigPath = "$BuildDir/resources/module-schedules.json"
+            $scheduleConfigPath = Join-Path $BuildDir "resources\module-schedules.json"
             if (Test-Path $scheduleConfigPath) {
-                Copy-Item $scheduleConfigPath "$MsiStagingDir/module-schedules.json" -Force
+                Copy-Item $scheduleConfigPath (Join-Path $MsiStagingDir "module-schedules.json") -Force
                 Write-Verbose "Copied module schedules configuration to MSI staging"
             }
             
             # Copy Cimian postflight script to MSI staging
-            $cimianPostflightPath = "$BuildDir/resources/cimian-postflight.ps1"
+            $cimianPostflightPath = Join-Path $BuildDir "resources\cimian-postflight.ps1"
             if (Test-Path $cimianPostflightPath) {
-                New-Item -ItemType Directory -Path "$MsiStagingDir/cimian" -Force | Out-Null
-                Copy-Item $cimianPostflightPath "$MsiStagingDir/cimian/postflight.ps1" -Force
+                New-Item -ItemType Directory -Path (Join-Path $MsiStagingDir "cimian") -Force | Out-Null
+                Copy-Item $cimianPostflightPath (Join-Path $MsiStagingDir "cimian\postflight.ps1") -Force
                 Write-Verbose "Copied Cimian postflight script to MSI staging"
             }
             
@@ -975,12 +1003,12 @@ Commit: $env:GITHUB_SHA
             $msiVersion = $Version -replace '^20(\d{2})\.0?(\d+)\.0?(\d+)$', '$1.$2.$3'
             Write-Verbose "Converting version $Version to MSI-compatible: $msiVersion"
             
-            $wxsPath = "$BuildDir/msi/ReportMate.wxs"
-            $msiPath = "$OutputDir/ReportMate-$Version.msi"
+            $wxsPath = Join-Path $BuildDir "msi\ReportMate.wxs"
+            $msiPath = Join-Path $OutputDir "ReportMate-$Version.msi"
             
             # Use WiX v6 build command
             Write-Verbose "Using WiX v6 build command"
-            & dotnet wix build -out $msiPath -arch x64 -define "SourceDir=$MsiStagingDir" -define "ResourceDir=$BuildDir/resources" -define "Version=$msiVersion" -define "APIURL=$ApiUrl" $wxsPath
+            & dotnet wix build -out $msiPath -arch x64 -define "SourceDir=$MsiStagingDir" -define "ResourceDir=$(Join-Path $BuildDir 'resources')" -define "Version=$msiVersion" -define "APIURL=$ApiUrl" $wxsPath
             if ($LASTEXITCODE -ne 0) {
                 throw "WiX v6 build failed with exit code $LASTEXITCODE"
             }
@@ -1019,14 +1047,14 @@ Write-Output ""
 # Create ZIP archive
 if (-not $SkipZIP) {
     Write-Step "Creating ZIP archive..."
-    $zipPath = "$OutputDir/ReportMate-$Version.zip"
+    $zipPath = Join-Path $OutputDir "ReportMate-$Version.zip"
 
-    $tempZipDir = "$OutputDir/temp-zip"
+    $tempZipDir = Join-Path $OutputDir "temp-zip"
     Remove-Item $tempZipDir -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $tempZipDir -Force | Out-Null
 
     # Copy payload structure
-    Copy-Item "$NupkgDir/payload/*" $tempZipDir -Recurse -Force
+    Copy-Item (Join-Path $NupkgDir "payload\*") $tempZipDir -Recurse -Force
 
     # Add deployment scripts
     $deployScript = @"
@@ -1048,9 +1076,9 @@ if exist "C:\Program Files\ReportMate\runner.exe" (
     exit /b 1
 )
 "@
-    $deployScript | Out-File "$tempZipDir/install.bat" -Encoding ASCII
+    $deployScript | Out-File (Join-Path $tempZipDir "install.bat") -Encoding ASCII
 
-    Compress-Archive -Path "$tempZipDir/*" -DestinationPath $zipPath -Force
+    Compress-Archive -Path (Join-Path $tempZipDir "*") -DestinationPath $zipPath -Force
     Remove-Item $tempZipDir -Recurse -Force -ErrorAction SilentlyContinue
 
     $zipSize = (Get-Item $zipPath).Length / 1MB
@@ -1207,8 +1235,8 @@ if ($outputFiles) {
 
 Write-Output ""
 Write-Header "Next Steps"
-Write-Info "1. Test MSI: msiexec.exe /i `"$OutputDir/ReportMate-$Version.msi`" /quiet /norestart"
-Write-Info "2. Test NUPKG: choco install `"$OutputDir/ReportMate-$Version.nupkg`" --source=."
+Write-Info "1. Test MSI: msiexec.exe /i `"$(Join-Path $OutputDir "ReportMate-$Version.msi")`" /quiet /norestart"
+Write-Info "2. Test NUPKG: choco install `"$(Join-Path $OutputDir "ReportMate-$Version.nupkg")`" --source=."
 Write-Info "3. Test ZIP: Extract and run install.bat as administrator"
 Write-Info "4. Deploy via Windows Installer, Chocolatey, or manual installation"
 
@@ -1229,8 +1257,8 @@ if ($Install) {
     Write-Step "Installing ReportMate package..."
     
     # Prioritize MSI installation if available
-    $msiPath = "$OutputDir/ReportMate-$Version.msi"
-    $nupkgPath = "$OutputDir/ReportMate-$Version.nupkg"
+    $msiPath = Join-Path $OutputDir "ReportMate-$Version.msi"
+    $nupkgPath = Join-Path $OutputDir "ReportMate-$Version.nupkg"
     
     if ((Test-Path $msiPath) -and (-not $SkipMSI)) {
         Write-Info "Installing MSI package: ReportMate-$Version.msi"
@@ -1242,37 +1270,39 @@ if ($Install) {
                 Write-Warning "MSI installation requires administrator privileges. Using native Windows sudo..."
                 
                 # Use msiexec with quiet installation
-                $installCmd = "msiexec.exe /i `"$($msiPath -replace '/', '\')`" /quiet /norestart /l*v `"$($OutputDir -replace '/', '\')\ReportMate-Install.log`""
+                $installLogPath = Join-Path $OutputDir "ReportMate-Install.log"
+                $installCmd = "msiexec.exe /i `"$msiPath`" /quiet /norestart /l*v `"$installLogPath`""
                 
                 # Execute with native sudo
                 sudo powershell -Command $installCmd
                 
                 if ($LASTEXITCODE -eq 0) {
                     Write-Success "MSI installation completed successfully"
-                    Write-Info "Installation log: $OutputDir\ReportMate-Install.log"
+                    Write-Info "Installation log: $installLogPath"
                 } else {
                     Write-Error "MSI installation failed with exit code: $LASTEXITCODE"
-                    Write-Info "Check installation log: $OutputDir\ReportMate-Install.log"
+                    Write-Info "Check installation log: $installLogPath"
                     throw "MSI installation failed"
                 }
             } else {
                 # Already running as admin, install directly
                 Write-Verbose "Installing MSI with msiexec: $msiPath"
+                $installLogPath = Join-Path $OutputDir "ReportMate-Install.log"
                 $installArgs = @(
-                    "/i", "`"$($msiPath -replace '/', '\')`"",
+                    "/i", "`"$msiPath`"",
                     "/quiet",
                     "/norestart",
-                    "/l*v", "`"$($OutputDir -replace '/', '\')\ReportMate-Install.log`""
+                    "/l*v", "`"$installLogPath`""
                 )
                 
                 & msiexec.exe @installArgs
                 
                 if ($LASTEXITCODE -eq 0) {
                     Write-Success "MSI installation completed successfully"
-                    Write-Info "Installation log: $OutputDir\ReportMate-Install.log"
+                    Write-Info "Installation log: $installLogPath"
                 } else {
                     Write-Error "MSI installation failed with exit code: $LASTEXITCODE"
-                    Write-Info "Check installation log: $OutputDir\ReportMate-Install.log"
+                    Write-Info "Check installation log: $installLogPath"
                 }
             }
         } catch {
@@ -1329,8 +1359,8 @@ Write-Output ""
 # Clean up duplicate osquery files after package creation  
 Write-Step "Cleaning up duplicate osquery files..."
 $osqueryPayloadDirs = @(
-    "$ProgramDataPayloadDir/osquery",
-    "$ProgramFilesPayloadDir/osquery"
+    (Join-Path $ProgramDataPayloadDir "osquery"),
+    (Join-Path $ProgramFilesPayloadDir "osquery")
 )
 
 foreach ($dir in $osqueryPayloadDirs) {
