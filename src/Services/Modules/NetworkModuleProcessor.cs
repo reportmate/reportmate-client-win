@@ -45,7 +45,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             var interfaceNames = GetInterfaceNamesAsync(osqueryResults);
             
             // Process network interfaces with enhanced information
-            ProcessNetworkInterfacesAsync(data, osqueryResults, interfaceNames);
+            await ProcessNetworkInterfacesAsync(data, osqueryResults, interfaceNames);
             
             // Process routing information FIRST so it's available for active connection
             ProcessRoutingInfo(data, osqueryResults);
@@ -58,6 +58,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             // Collect VPN information
             await CollectVpnInformationAsync(data, osqueryResults);
+            
+            // Collect hostname and domain information
+            CollectHostnameInformation(data, osqueryResults);
 
             // Set primary interface based on active connection
             if (!string.IsNullOrEmpty(data.ActiveConnection.InterfaceName))
@@ -100,7 +103,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// <summary>
         /// Process network interfaces with enhanced active connection detection
         /// </summary>
-        private void ProcessNetworkInterfacesAsync(NetworkData data, Dictionary<string, List<Dictionary<string, object>>> osqueryResults, Dictionary<string, string> interfaceNames)
+        private async Task ProcessNetworkInterfacesAsync(NetworkData data, Dictionary<string, List<Dictionary<string, object>>> osqueryResults, Dictionary<string, string> interfaceNames)
         {
             var interfaceMap = new Dictionary<string, NetworkInterface>();
             var activeInterfaces = new HashSet<string>();
@@ -136,7 +139,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Type = MapInterfaceType(rawType),
                         MacAddress = macAddress,
                         Status = isActive ? "Up" : (isEnabled ? "Enabled" : "Down"),
-                        IsActive = isActive
+                        IsActive = isActive,
+                        Mtu = GetIntValue(iface, "mtu") // Will be enhanced below
                     };
 
                     interfaceMap[interfaceName] = networkInterface;
@@ -158,6 +162,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
             }
+
+            // Enhance MTU and LinkSpeed information using PowerShell (osquery MTU often returns 0 on Windows)
+            await EnhanceNetworkAdapterInformationAsync(data);
         }
 
         /// <summary>
@@ -1533,6 +1540,338 @@ try {
                 _logger.LogWarning(ex, "Failed to normalize Unicode string: {Input}", input);
                 return input;
             }
+        }
+
+        /// <summary>
+        /// Enhance MTU information using PowerShell (osquery often returns 0 on Windows)
+        /// </summary>
+        private async Task EnhanceNetworkAdapterInformationAsync(NetworkData data)
+        {
+            try
+            {
+                _logger.LogDebug("Enhancing network adapter information for {Count} interfaces", data.Interfaces.Count);
+
+                var adapterCommand = @"Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -or $_.Status -eq 'Disabled' } | ForEach-Object { 
+    $adapter = $_
+    $wirelessMode = ''
+    $preferredBand = ''
+    
+    # Get wireless properties for WiFi adapters
+    if ($adapter.MediaType -like '*802.11*') {
+        try {
+            $advProps = Get-NetAdapterAdvancedProperty -Name $adapter.Name -ErrorAction SilentlyContinue
+            $wirelessMode = ($advProps | Where-Object { $_.DisplayName -like '*Wireless Mode*' }).DisplayValue
+            $preferredBand = ($advProps | Where-Object { $_.DisplayName -like '*Preferred Band*' }).DisplayValue
+        } catch { }
+    }
+    
+    [PSCustomObject]@{ 
+        Name = $adapter.Name
+        MacAddress = $adapter.MacAddress
+        MTU = $adapter.MtuSize
+        LinkSpeed = $adapter.LinkSpeed
+        WirelessMode = $wirelessMode
+        PreferredBand = $preferredBand
+        MediaType = $adapter.MediaType
+    } 
+} | ConvertTo-Json -Depth 2";
+
+                var adapterOutput = await _wmiHelperService.ExecutePowerShellCommandAsync(adapterCommand);
+                _logger.LogDebug("Network adapter PowerShell output: {Output}", adapterOutput);
+                
+                if (!string.IsNullOrEmpty(adapterOutput) && adapterOutput.Trim() != "[]")
+                {
+                    var adapterData = System.Text.Json.JsonSerializer.Deserialize(
+                        adapterOutput, 
+                        ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.ListDictionaryStringObject);
+
+                    if (adapterData != null)
+                    {
+                        foreach (var adapterInfo in adapterData)
+                        {
+                            var macAddress = GetStringValue(adapterInfo, "MacAddress");
+                            var mtu = GetIntValue(adapterInfo, "MTU");
+                            var linkSpeed = GetStringValue(adapterInfo, "LinkSpeed");
+                            var wirelessMode = GetStringValue(adapterInfo, "WirelessMode");
+                            var preferredBand = GetStringValue(adapterInfo, "PreferredBand");
+                            var mediaType = GetStringValue(adapterInfo, "MediaType");
+                            var adapterName = GetStringValue(adapterInfo, "Name");
+                            
+                            _logger.LogDebug("Processing adapter data - Name: {Name}, MAC: {MAC}, MTU: {MTU}, LinkSpeed: {LinkSpeed}, WirelessMode: {WirelessMode}, PreferredBand: {PreferredBand}", 
+                                adapterName, macAddress, mtu, linkSpeed, wirelessMode, preferredBand);
+                            
+                            if (!string.IsNullOrEmpty(macAddress))
+                            {
+                                // Normalize MAC address formats for comparison (handle : vs - differences)
+                                var normalizedMacFromPowerShell = macAddress.Replace("-", ":").ToLowerInvariant();
+                                
+                                // Find matching interface by MAC address
+                                var matchingInterface = data.Interfaces.FirstOrDefault(i => 
+                                    !string.IsNullOrEmpty(i.MacAddress) && 
+                                    i.MacAddress.Replace("-", ":").ToLowerInvariant() == normalizedMacFromPowerShell);
+                                    
+                                if (matchingInterface != null)
+                                {
+                                    if (mtu > 0)
+                                    {
+                                        matchingInterface.Mtu = mtu;
+                                    }
+                                    if (!string.IsNullOrEmpty(linkSpeed))
+                                    {
+                                        matchingInterface.LinkSpeed = linkSpeed;
+                                    }
+                                    
+                                    // Add wireless information for WiFi adapters
+                                    if (!string.IsNullOrEmpty(wirelessMode))
+                                    {
+                                        matchingInterface.WirelessProtocol = MapWirelessMode(wirelessMode);
+                                    }
+                                    if (!string.IsNullOrEmpty(preferredBand))
+                                    {
+                                        matchingInterface.WirelessBand = MapWirelessBand(preferredBand);
+                                    }
+                                    
+                                    _logger.LogInformation("Enhanced adapter info for interface {Interface} ({MAC}): MTU={MTU}, LinkSpeed={LinkSpeed}, Protocol={Protocol}, Band={Band}", 
+                                        matchingInterface.Name, matchingInterface.MacAddress, mtu, linkSpeed, matchingInterface.WirelessProtocol, matchingInterface.WirelessBand);
+                                }
+                                else
+                                {
+                                    // Try to find by adapter name if MAC doesn't match
+                                    var nameMatch = data.Interfaces.FirstOrDefault(i => 
+                                        i.FriendlyName?.Contains(adapterName, StringComparison.OrdinalIgnoreCase) == true ||
+                                        i.Name?.Contains(adapterName, StringComparison.OrdinalIgnoreCase) == true);
+                                        
+                                    if (nameMatch != null)
+                                    {
+                                        if (mtu > 0)
+                                        {
+                                            nameMatch.Mtu = mtu;
+                                        }
+                                        if (!string.IsNullOrEmpty(linkSpeed))
+                                        {
+                                            nameMatch.LinkSpeed = linkSpeed;
+                                        }
+                                        if (!string.IsNullOrEmpty(wirelessMode))
+                                        {
+                                            nameMatch.WirelessProtocol = MapWirelessMode(wirelessMode);
+                                        }
+                                        if (!string.IsNullOrEmpty(preferredBand))
+                                        {
+                                            nameMatch.WirelessBand = MapWirelessBand(preferredBand);
+                                        }
+                                        
+                                        _logger.LogInformation("Enhanced adapter info for interface {Interface} by name match: MTU={MTU}, LinkSpeed={LinkSpeed}, Protocol={Protocol}, Band={Band}", 
+                                            nameMatch.Name, mtu, linkSpeed, nameMatch.WirelessProtocol, nameMatch.WirelessBand);
+                                    }
+                                    else
+                                    {
+                                        _logger.LogDebug("No matching interface found for adapter data - Name: {Name}, MAC: {MAC} (normalized: {NormalizedMAC})", 
+                                            adapterName, macAddress, normalizedMacFromPowerShell);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                var enhancedMtuCount = data.Interfaces.Count(i => i.Mtu > 0);
+                var enhancedLinkSpeedCount = data.Interfaces.Count(i => !string.IsNullOrEmpty(i.LinkSpeed));
+                _logger.LogInformation("Network adapter enhancement completed: {EnhancedMTU}/{Total} interfaces have MTU values, {EnhancedLinkSpeed}/{Total} have LinkSpeed", 
+                    enhancedMtuCount, data.Interfaces.Count, enhancedLinkSpeedCount, data.Interfaces.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to enhance network adapter information");
+            }
+        }
+
+        /// <summary>
+        /// Collect hostname and domain information from system data
+        /// </summary>
+        private void CollectHostnameInformation(NetworkData data, Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting hostname and domain information");
+
+                // Try to get hostname from system_info first (most reliable)
+                if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
+                {
+                    var hostname = GetStringValue(systemInfo[0], "hostname");
+                    if (!string.IsNullOrEmpty(hostname))
+                    {
+                        data.Hostname = hostname;
+                        _logger.LogDebug("Found hostname from system_info: {Hostname}", hostname);
+                    }
+                }
+
+                // Fallback: Try to get COMPUTERNAME from environment variables
+                if (string.IsNullOrEmpty(data.Hostname) && 
+                    osqueryResults.TryGetValue("environment_variables", out var envVars))
+                {
+                    var computerNameVar = envVars.FirstOrDefault(env => 
+                        GetStringValue(env, "name")?.Equals("COMPUTERNAME", StringComparison.OrdinalIgnoreCase) == true);
+                    
+                    if (computerNameVar != null)
+                    {
+                        var computerName = GetStringValue(computerNameVar, "value");
+                        if (!string.IsNullOrEmpty(computerName))
+                        {
+                            data.Hostname = computerName;
+                            _logger.LogDebug("Found hostname from COMPUTERNAME environment variable: {Hostname}", computerName);
+                        }
+                    }
+                }
+
+                // Try to get domain from USERDOMAIN environment variable
+                if (osqueryResults.TryGetValue("environment_variables", out var envVarsForDomain))
+                {
+                    var domainVar = envVarsForDomain.FirstOrDefault(env => 
+                        GetStringValue(env, "name")?.Equals("USERDOMAIN", StringComparison.OrdinalIgnoreCase) == true);
+                    
+                    if (domainVar != null)
+                    {
+                        var domain = GetStringValue(domainVar, "value");
+                        if (!string.IsNullOrEmpty(domain) && !domain.Equals(data.Hostname, StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Domain = domain;
+                            data.Dns.Domain = domain;
+                            _logger.LogDebug("Found domain from USERDOMAIN environment variable: {Domain}", domain);
+                        }
+                    }
+                }
+
+                // Final fallback: Try PowerShell to get computer info
+                if (string.IsNullOrEmpty(data.Hostname))
+                {
+                    try
+                    {
+                        var computerInfoCommand = @"
+try {
+    $computerInfo = Get-ComputerInfo -ErrorAction SilentlyContinue
+    if ($computerInfo) {
+        [PSCustomObject]@{
+            Hostname = $computerInfo.CsName
+            Domain = $computerInfo.CsDomain
+            WorkGroup = $computerInfo.CsWorkgroup
+        } | ConvertTo-Json
+    } else {
+        $env:COMPUTERNAME | ConvertTo-Json
+    }
+} catch {
+    $env:COMPUTERNAME | ConvertTo-Json
+}";
+
+                        var computerInfoOutput = _wmiHelperService.ExecutePowerShellCommandAsync(computerInfoCommand).Result;
+                        if (!string.IsNullOrEmpty(computerInfoOutput))
+                        {
+                            try
+                            {
+                                var computerInfo = System.Text.Json.JsonSerializer.Deserialize(
+                                    computerInfoOutput, 
+                                    ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.DictionaryStringObject);
+                                    
+                                if (computerInfo != null)
+                                {
+                                    var hostname = GetStringValue(computerInfo, "Hostname");
+                                    var domain = GetStringValue(computerInfo, "Domain");
+                                    var workgroup = GetStringValue(computerInfo, "WorkGroup");
+                                    
+                                    if (!string.IsNullOrEmpty(hostname))
+                                    {
+                                        data.Hostname = hostname;
+                                        _logger.LogDebug("Found hostname via PowerShell Get-ComputerInfo: {Hostname}", hostname);
+                                    }
+                                    
+                                    if (!string.IsNullOrEmpty(domain) && !domain.Equals(hostname, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        data.Domain = domain;
+                                        data.Dns.Domain = domain;
+                                        _logger.LogDebug("Found domain via PowerShell Get-ComputerInfo: {Domain}", domain);
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // If it's just a simple string (from fallback), use it as hostname
+                                var simpleHostname = computerInfoOutput.Trim('"');
+                                if (!string.IsNullOrEmpty(simpleHostname) && simpleHostname != "null")
+                                {
+                                    data.Hostname = simpleHostname;
+                                    _logger.LogDebug("Found hostname via PowerShell environment variable: {Hostname}", simpleHostname);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to get hostname via PowerShell");
+                    }
+                }
+
+                _logger.LogInformation("Hostname collection completed: Hostname={Hostname}, Domain={Domain}", 
+                    data.Hostname ?? "N/A", data.Domain ?? "N/A");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect hostname information");
+            }
+        }
+        
+        /// <summary>
+        /// Map Windows wireless mode to readable protocol name
+        /// </summary>
+        private string MapWirelessMode(string wirelessMode)
+        {
+            if (string.IsNullOrEmpty(wirelessMode))
+                return string.Empty;
+                
+            // Handle Windows wireless mode format: "00 - 11a/b/g/n/ac/ax/be (default)"
+            if (wirelessMode.Contains("ax") || wirelessMode.Contains("be"))
+            {
+                if (wirelessMode.Contains("be"))
+                    return "WiFi 7"; // 802.11be
+                else
+                    return "WiFi 6"; // 802.11ax
+            }
+            else if (wirelessMode.Contains("ac"))
+            {
+                return "WiFi 5"; // 802.11ac
+            }
+            else if (wirelessMode.Contains("n"))
+            {
+                return "WiFi 4"; // 802.11n
+            }
+            else if (wirelessMode.Contains("g"))
+            {
+                return "802.11g";
+            }
+            else if (wirelessMode.Contains("a"))
+            {
+                return "802.11a";
+            }
+            else if (wirelessMode.Contains("b"))
+            {
+                return "802.11b";
+            }
+            
+            return wirelessMode; // Return original if no mapping found
+        }
+        
+        /// <summary>
+        /// Map Windows preferred band setting to readable band name
+        /// </summary>
+        private string MapWirelessBand(string preferredBand)
+        {
+            if (string.IsNullOrEmpty(preferredBand))
+                return string.Empty;
+                
+            // For now, return the preferred band setting
+            // In the future, we could try to detect the actual current band being used
+            if (preferredBand.Contains("No Preference") || preferredBand.Contains("default"))
+                return "Auto"; // Indicates adapter will choose automatically
+            
+            return preferredBand;
         }
 
         public override async Task<bool> ValidateModuleDataAsync(NetworkData data)
