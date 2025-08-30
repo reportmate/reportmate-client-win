@@ -17,6 +17,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<NetworkRoute> Routes { get; set; } = new();
         public string PrimaryInterface { get; set; } = string.Empty;
         public ActiveConnectionInfo ActiveConnection { get; set; } = new();
+        public string Hostname { get; set; } = string.Empty;
+        public string Domain { get; set; } = string.Empty;
     }
 
     public class ActiveConnectionInfo
@@ -46,6 +48,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public long BytesSent { get; set; }
         public long BytesReceived { get; set; }
         public int Mtu { get; set; }
+        public string LinkSpeed { get; set; } = string.Empty;
+        public string WirelessProtocol { get; set; } = string.Empty; // WiFi 5, 6, 6E, 7
+        public string WirelessBand { get; set; } = string.Empty; // 2.4GHz, 5GHz, 6GHz
     }
 
     public class WifiNetwork
