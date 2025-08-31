@@ -77,7 +77,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     _ => "Pending" // Default unknown to Pending
                 };
-            }        public override Task<InstallsData> ProcessModuleAsync(
+            }        public override async Task<InstallsData> ProcessModuleAsync(
             Dictionary<string, List<Dictionary<string, object>>> osqueryResults, 
             string deviceId)
         {
@@ -92,7 +92,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             };
 
             // Process Cimian information
-            data.Cimian = ProcessCimianInfo(osqueryResults);
+            data.Cimian = await ProcessCimianInfo(osqueryResults);
             
             // Process Cimian configuration (config.yaml)
             ProcessCimianConfiguration(osqueryResults, data);
@@ -107,7 +107,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             // GenerateCimianSnapshot(data, currentSessionId);
             
             // Process Cimian data transformation for clean reporting
-            var cimianProcessingSuccessful = false; // ProcessCimianData(data, currentSessionId);
+            // var cimianProcessingSuccessful = ProcessCimianData(data, currentSessionId);
             
             // Always use legacy processing for now until JSON serialization is fixed
             // (removing else clause since we always take this path now)
@@ -135,10 +135,10 @@ namespace ReportMate.WindowsClient.Services.Modules
             _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Sessions: {SessionCount}, Events: {EventCount}", 
                 deviceId, data.Cimian?.IsInstalled ?? false, data.RecentSessions.Count, data.RecentEvents.Count);
 
-            return Task.FromResult(data);
+            return data;
         }
 
-        private CimianInfo ProcessCimianInfo(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        private async Task<CimianInfo> ProcessCimianInfo(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
         {
             var cimianInfo = new CimianInfo();
 
@@ -158,6 +158,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
             }
+
+            // Check for Cimian scheduled tasks
+            await CheckCimianScheduledTasks(cimianInfo);
 
             // Check active Cimian processes
             if (osqueryResults.TryGetValue("cimian_active_processes", out var processes))
@@ -223,7 +226,34 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var cimianSoftware = managedSoft.FirstOrDefault();
                 if (cimianSoftware != null)
                 {
-                    cimianInfo.Version = GetStringValue(cimianSoftware, "version");
+                    var registryVersion = GetStringValue(cimianSoftware, "version");
+                    
+                    // Instead of using registry version directly, try to get full version from executable
+                    var cimianExePath = @"C:\Program Files\Cimian\managedsoftwareupdate.exe";
+                    if (File.Exists(cimianExePath))
+                    {
+                        var versionFromExecution = await ExecuteManagedsoftwareupdateVersionAsync(cimianExePath);
+                        if (!string.IsNullOrEmpty(versionFromExecution))
+                        {
+                            cimianInfo.Version = versionFromExecution;
+                            _logger.LogDebug("Set Cimian version from --version command: {Version}", versionFromExecution);
+                        }
+                        else if (!string.IsNullOrEmpty(registryVersion))
+                        {
+                            // Transform registry version to full format (add 20 prefix if missing)
+                            var fullVersion = registryVersion.StartsWith("20") ? registryVersion : "20" + registryVersion;
+                            cimianInfo.Version = fullVersion;
+                            _logger.LogDebug("Set Cimian version from registry (transformed): {RegistryVersion} -> {FullVersion}", registryVersion, fullVersion);
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(registryVersion))
+                    {
+                        // Transform registry version to full format (add 20 prefix if missing)
+                        var fullVersion = registryVersion.StartsWith("20") ? registryVersion : "20" + registryVersion;
+                        cimianInfo.Version = fullVersion;
+                        _logger.LogDebug("Set Cimian version from registry (exe not found, transformed): {RegistryVersion} -> {FullVersion}", registryVersion, fullVersion);
+                    }
+                    
                     var installDateStr = GetStringValue(cimianSoftware, "install_date");
                     if (DateTime.TryParse(installDateStr, out var installDate))
                     {
@@ -248,7 +278,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Fallback: Try to get version directly from the executable file if osquery version is empty
+            // Fallback: Try to get version directly from executing the executable with --version flag
             if (string.IsNullOrEmpty(cimianInfo.Version))
             {
                 try
@@ -256,22 +286,35 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var cimianExePath = @"C:\Program Files\Cimian\managedsoftwareupdate.exe";
                     if (File.Exists(cimianExePath))
                     {
-                        var versionInfo = FileVersionInfo.GetVersionInfo(cimianExePath);
-                        if (!string.IsNullOrEmpty(versionInfo.FileVersion))
+                        // First try to execute with --version flag to get the full version string
+                        var versionFromExecution = await ExecuteManagedsoftwareupdateVersionAsync(cimianExePath);
+                        if (!string.IsNullOrEmpty(versionFromExecution))
                         {
-                            cimianInfo.Version = versionInfo.FileVersion;
+                            cimianInfo.Version = versionFromExecution;
                             cimianInfo.IsInstalled = true;
-                            _logger.LogDebug("Found Cimian executable version via direct file access: {Version}", versionInfo.FileVersion);
+                            _logger.LogDebug("Found Cimian executable version via --version command: {Version}", versionFromExecution);
+                        }
+                        else
+                        {
+                            // Fallback to FileVersionInfo if command execution fails
+                            var versionInfo = FileVersionInfo.GetVersionInfo(cimianExePath);
+                            if (!string.IsNullOrEmpty(versionInfo.FileVersion))
+                            {
+                                cimianInfo.Version = versionInfo.FileVersion;
+                                cimianInfo.IsInstalled = true;
+                                _logger.LogDebug("Found Cimian executable version via FileVersionInfo fallback: {Version}", versionInfo.FileVersion);
+                            }
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning("Failed to get Cimian executable version directly: {Error}", ex.Message);
+                    _logger.LogWarning("Failed to get Cimian executable version: {Error}", ex.Message);
                 }
             }
 
-            // Final fallback: Check Windows registry for Cimian in installed programs
+            // Final fallback: Check Windows registry for Cimian in installed programs, 
+            // but if found, try to get the full version from the executable instead
             if (string.IsNullOrEmpty(cimianInfo.Version))
             {
                 try
@@ -286,14 +329,36 @@ namespace ReportMate.WindowsClient.Services.Modules
                             {
                                 var displayName = subKey.GetValue("DisplayName")?.ToString();
                                 var displayVersion = subKey.GetValue("DisplayVersion")?.ToString();
-                                
+
                                 if (!string.IsNullOrEmpty(displayName) && displayName.Contains("Cimian", StringComparison.OrdinalIgnoreCase))
                                 {
                                     if (!string.IsNullOrEmpty(displayVersion))
                                     {
-                                        cimianInfo.Version = displayVersion;
+                                        // Try to get the full version from the executable instead of using registry version
+                                        var cimianExePath = @"C:\Program Files\Cimian\managedsoftwareupdate.exe";
+                                        if (File.Exists(cimianExePath))
+                                        {
+                                            var versionFromExecution = await ExecuteManagedsoftwareupdateVersionAsync(cimianExePath);
+                                            if (!string.IsNullOrEmpty(versionFromExecution))
+                                            {
+                                                cimianInfo.Version = versionFromExecution;
+                                                _logger.LogDebug("Found Cimian version via --version command (registry fallback): {Version}", versionFromExecution);
+                                            }
+                                            else
+                                            {
+                                                // Use registry version as final fallback
+                                                cimianInfo.Version = displayVersion;
+                                                _logger.LogDebug("Found Cimian version in Windows registry (command failed): {Version}", displayVersion);
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // Use registry version if executable not found
+                                            cimianInfo.Version = displayVersion;
+                                            _logger.LogDebug("Found Cimian version in Windows registry (exe not found): {Version}", displayVersion);
+                                        }
+                                        
                                         cimianInfo.IsInstalled = true;
-                                        _logger.LogDebug("Found Cimian version in Windows registry: {Version}", displayVersion);
                                         break;
                                     }
                                 }
@@ -305,9 +370,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 {
                     _logger.LogWarning("Failed to get Cimian version from Windows registry: {Error}", ex.Message);
                 }
-            }
-
-            // Check reports and configuration data
+            }            // Check reports and configuration data
             if (osqueryResults.TryGetValue("cimian_managed_items", out var reports))
             {
                 foreach (var report in reports)
@@ -2993,6 +3056,202 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Error parsing manifest file: {ManifestPath}", manifestPath);
+            }
+        }
+
+        /// <summary>
+        /// Execute managedsoftwareupdate.exe --version to get the full version string
+        /// </summary>
+        /// <summary>
+        /// Execute managedsoftwareupdate.exe --version to get the full version string
+        /// Falls back to version transformation if command execution fails
+        /// </summary>
+        private async Task<string?> ExecuteManagedsoftwareupdateVersionAsync(string executablePath)
+        {
+            try
+            {
+                var processInfo = new ProcessStartInfo
+                {
+                    FileName = executablePath,
+                    Arguments = "--version",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                using var process = new Process { StartInfo = processInfo };
+                process.Start();
+
+                var output = await process.StandardOutput.ReadToEndAsync();
+                var error = await process.StandardError.ReadToEndAsync();
+
+                // Give the process up to 5 seconds to complete
+                var completed = await Task.Run(() => process.WaitForExit(5000));
+                
+                if (!completed)
+                {
+                    try
+                    {
+                        process.Kill(true);
+                    }
+                    catch
+                    {
+                        // Ignore kill errors
+                    }
+                    _logger.LogDebug("managedsoftwareupdate.exe --version command timed out");
+                    return null;
+                }
+
+                if (process.ExitCode == 0)
+                {
+                    var version = output?.Trim();
+                    if (!string.IsNullOrEmpty(version))
+                    {
+                        _logger.LogDebug("Successfully retrieved version from managedsoftwareupdate.exe: {Version}", version);
+                        return version;
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("managedsoftwareupdate.exe --version failed with exit code {ExitCode}: {Error}", process.ExitCode, error?.Trim());
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error executing managedsoftwareupdate.exe --version: {Error}", ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Check for Cimian scheduled tasks by looking in the task scheduler registry
+        /// </summary>
+        private async Task CheckCimianScheduledTasks(CimianInfo cimianInfo)
+        {
+            try
+            {
+                _logger.LogDebug("Checking for Cimian scheduled tasks");
+
+                // First try schtasks approach
+                await TryScheduledTasksCommand(cimianInfo);
+                
+                // Also try registry approach as fallback
+                await TryScheduledTasksRegistry(cimianInfo);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error checking Cimian scheduled tasks: {Error}", ex.Message);
+            }
+        }
+
+        private async Task TryScheduledTasksCommand(CimianInfo cimianInfo)
+        {
+            try
+            {
+                var processInfo = new ProcessStartInfo
+                {
+                    FileName = "schtasks.exe",
+                    Arguments = "/query /tn \"Cimian Managed Software Update Hourly\" /fo list",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+
+                using var process = new Process { StartInfo = processInfo };
+                process.Start();
+
+                var output = await process.StandardOutput.ReadToEndAsync();
+                var error = await process.StandardError.ReadToEndAsync();
+
+                var completed = await Task.Run(() => process.WaitForExit(5000));
+
+                if (!completed)
+                {
+                    try
+                    {
+                        process.Kill(true);
+                    }
+                    catch
+                    {
+                        // Ignore kill errors
+                    }
+                    _logger.LogDebug("schtasks command timed out");
+                    return;
+                }
+
+                if (process.ExitCode == 0 && !string.IsNullOrEmpty(output))
+                {
+                    var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    string? status = null;
+
+                    foreach (var line in lines)
+                    {
+                        var trimmedLine = line.Trim();
+                        if (trimmedLine.StartsWith("Status:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            status = trimmedLine.Substring(7).Trim();
+                            break;
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(status))
+                    {
+                        cimianInfo.Services.Add($"CimianHourlyRunTask: {status.ToUpperInvariant()}");
+                        _logger.LogDebug("Found Cimian scheduled task with status: {Status}", status);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("schtasks query for specific task failed with exit code {ExitCode}", process.ExitCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error checking scheduled task via schtasks: {Error}", ex.Message);
+            }
+        }
+
+        private Task TryScheduledTasksRegistry(CimianInfo cimianInfo)
+        {
+            try
+            {
+                // Check if Cimian task is registered in the task scheduler registry
+                var taskPaths = new[]
+                {
+                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Cimian Managed Software Update Hourly",
+                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\Microsoft\Windows\Cimian Managed Software Update Hourly"
+                };
+
+                foreach (var taskPath in taskPaths)
+                {
+                    try
+                    {
+                        using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(taskPath);
+                        if (key != null)
+                        {
+                            // Task exists in registry
+                            cimianInfo.Services.Add("CimianHourlyRunTask: REGISTERED");
+                            _logger.LogDebug("Found Cimian scheduled task in registry: {Path}", taskPath);
+                            return Task.CompletedTask;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug("Could not check registry path {Path}: {Error}", taskPath, ex.Message);
+                    }
+                }
+
+                _logger.LogDebug("Cimian scheduled task not found in registry");
+                return Task.CompletedTask;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error checking scheduled task via registry: {Error}", ex.Message);
+                return Task.CompletedTask;
             }
         }
     }
