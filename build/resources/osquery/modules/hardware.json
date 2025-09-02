@@ -76,7 +76,10 @@
     "battery": {
       "query": "SELECT percent_remaining, charging, current_capacity, max_capacity, cycle_count, state, chemistry FROM battery;",
       "interval": 3600,
-      "description": "Battery information for laptops"
+      "description": "Battery information for laptops",
+      "optional": true,
+      "platform_specific": true,
+      "error_expected": "Desktops don't have a battery table"
     },
     "cpu_architecture_registry": {
       "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\\PROCESSOR_ARCHITECTURE';",
