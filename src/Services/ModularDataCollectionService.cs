@@ -483,7 +483,7 @@ namespace ReportMate.WindowsClient.Services
                         {
                             AssignModuleDataToPayload(payload, moduleData);
                             payload.Metadata.DeviceId = moduleData.DeviceId;
-                            payload.Metadata.ClientVersion = moduleData.Version;
+                            // Don't override ClientVersion - it's already set correctly in the payload initialization
                             
                             // Use the collection time from the cached data if it's more recent
                             if (moduleData.CollectedAt > payload.Metadata.CollectedAt || payload.Metadata.CollectedAt == DateTime.MinValue)
@@ -622,7 +622,19 @@ namespace ReportMate.WindowsClient.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error executing query: {QueryName}", kvp.Key);
+                        // Check if this is a known optional query that might fail
+                        var isOptionalQuery = kvp.Key.Equals("battery", StringComparison.OrdinalIgnoreCase);
+                        var isTableNotFoundError = ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase);
+                        
+                        if (isOptionalQuery && isTableNotFoundError)
+                        {
+                            _logger.LogDebug("Optional query {QueryName} failed as expected on this platform: {Error}", kvp.Key, ex.Message);
+                        }
+                        else
+                        {
+                            _logger.LogError(ex, "Error executing query: {QueryName}", kvp.Key);
+                        }
+                        
                         results[kvp.Key] = new List<Dictionary<string, object>>();
                     }
                 }
@@ -642,6 +654,7 @@ namespace ReportMate.WindowsClient.Services
         /// </summary>
         private string ExtractDeviceUuid(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
         {
+            // Method 1: Try osquery system_info UUID
             if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
             {
                 var firstResult = systemInfo[0];
@@ -650,13 +663,136 @@ namespace ReportMate.WindowsClient.Services
                     var uuidStr = uuid.ToString();
                     if (!string.IsNullOrEmpty(uuidStr) && uuidStr != "00000000-0000-0000-0000-000000000000")
                     {
+                        _logger.LogInformation("Device UUID extracted from osquery system_info: {UUID}", uuidStr);
                         return uuidStr;
                     }
                 }
             }
 
-            // Fallback to machine name if no valid UUID found
-            return Environment.MachineName;
+            // Method 2: Try Registry MachineGuid (skip WMI due to reliability issues)
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography"))
+                {
+                    if (key != null)
+                    {
+                        var machineGuid = key.GetValue("MachineGuid")?.ToString();
+                        if (!string.IsNullOrEmpty(machineGuid))
+                        {
+                            _logger.LogInformation("Device UUID extracted from Registry MachineGuid: {UUID}", machineGuid);
+                            return machineGuid;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to extract UUID from Registry MachineGuid");
+            }
+
+            // Method 4: Generate a new UUID based on hardware characteristics
+            try
+            {
+                var hardwareFingerprint = GenerateHardwareBasedUuid();
+                if (!string.IsNullOrEmpty(hardwareFingerprint))
+                {
+                    _logger.LogInformation("Device UUID generated from hardware fingerprint: {UUID}", hardwareFingerprint);
+                    return hardwareFingerprint;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to generate hardware-based UUID");
+            }
+
+            _logger.LogError("Unable to extract device UUID from any method - no fallback available");
+            throw new InvalidOperationException("Failed to extract device UUID from osquery, BIOS serial, or motherboard serial");
+        }
+
+        /// <summary>
+        /// Generate a deterministic UUID based on hardware characteristics
+        /// This ensures the same machine gets the same UUID even if other methods fail
+        /// </summary>
+        private string GenerateHardwareBasedUuid()
+        {
+            try
+            {
+                var hardwareInfo = new List<string>();
+
+                // Get CPU info
+                try
+                {
+                    using (var searcher = new System.Management.ManagementObjectSearcher("SELECT ProcessorId FROM Win32_Processor"))
+                    {
+                        foreach (System.Management.ManagementObject obj in searcher.Get())
+                        {
+                            var processorId = obj["ProcessorId"]?.ToString();
+                            if (!string.IsNullOrEmpty(processorId))
+                            {
+                                hardwareInfo.Add($"CPU:{processorId}");
+                                break; // Only need first CPU
+                            }
+                        }
+                    }
+                }
+                catch { /* Continue with other methods */ }
+
+                // Get motherboard serial
+                try
+                {
+                    using (var searcher = new System.Management.ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
+                    {
+                        foreach (System.Management.ManagementObject obj in searcher.Get())
+                        {
+                            var serialNumber = obj["SerialNumber"]?.ToString();
+                            if (!string.IsNullOrEmpty(serialNumber) && serialNumber.Trim() != "." && !serialNumber.Contains("To be filled"))
+                            {
+                                hardwareInfo.Add($"MB:{serialNumber}");
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { /* Continue with other methods */ }
+
+                // Get BIOS serial
+                try
+                {
+                    using (var searcher = new System.Management.ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BIOS"))
+                    {
+                        foreach (System.Management.ManagementObject obj in searcher.Get())
+                        {
+                            var biosSerial = obj["SerialNumber"]?.ToString();
+                            if (!string.IsNullOrEmpty(biosSerial) && !biosSerial.Contains("To be filled"))
+                            {
+                                hardwareInfo.Add($"BIOS:{biosSerial}");
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { /* Continue with other methods */ }
+
+                if (hardwareInfo.Count > 0)
+                {
+                    // Create deterministic UUID from hardware fingerprint
+                    var fingerprint = string.Join("|", hardwareInfo);
+                    var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(fingerprint));
+                    
+                    // Convert hash to UUID format
+                    var guidBytes = new byte[16];
+                    Array.Copy(hash, 0, guidBytes, 0, 16);
+                    var hardwareUuid = new Guid(guidBytes);
+                    
+                    return hardwareUuid.ToString().ToUpper();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to generate hardware-based UUID");
+            }
+
+            return string.Empty;
         }
 
         /// <summary>
@@ -725,8 +861,8 @@ namespace ReportMate.WindowsClient.Services
                 var version = assembly.GetName().Version;
                 if (version != null)
                 {
-                    // Format as YYYY.MM.DD instead of the default 4-part version
-                    return $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}";
+                    // Format as YYYY.MM.DD.HHMM (full 4-part version)
+                    return $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}.{version.Revision:D4}";
                 }
                 return "1.0.0";
             }

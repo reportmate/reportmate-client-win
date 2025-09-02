@@ -2372,15 +2372,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                     ["duration_seconds"] = latestSession.DurationSeconds
                 } : new Dictionary<string, object>();
                 
-                // Generate events based on priority: Error > Warning > Success
+                // Generate separate events for each status type that has items (not mutually exclusive)
+                
+                // ERROR: Generate error event if any ERROR level events exist
                 if (errorEvents.Any())
                 {
-                    // ERROR: Generate error event for any ERROR level events
                     var sampleErrors = errorEvents.Take(3).ToList();
                     var firstError = sampleErrors.FirstOrDefault();
                     var errorMessage = errorEvents.Count == 1 
-                        ? $"Installation error: {firstError?.Package} - {firstError?.Message}"
-                        : $"Multiple installation errors ({errorEvents.Count} packages affected)";
+                        ? $"{errorEvents.Count} failed install"
+                        : $"{errorEvents.Count} failed installs";
                     
                     var errorDetails = new Dictionary<string, object>(sessionInfo)
                     {
@@ -2399,14 +2400,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                     events.Add(CreateEvent("error", errorMessage, errorDetails, DateTime.UtcNow));
                     _logger.LogInformation("Generated ERROR event for {ErrorCount} Cimian errors", errorEvents.Count);
                 }
-                else if (warningEvents.Any())
+                
+                // WARNING: Generate warning event if any WARN level events exist
+                if (warningEvents.Any())
                 {
-                    // WARNING: Generate warning event for any WARN level events
                     var sampleWarnings = warningEvents.Take(3).ToList();
                     var firstWarning = sampleWarnings.FirstOrDefault();
                     var warningMessage = warningEvents.Count == 1 
-                        ? $"Installation warning: {firstWarning?.Package} - {firstWarning?.Message}"
-                        : $"Multiple installation warnings ({warningEvents.Count} packages affected)";
+                        ? $"{warningEvents.Count} install warning"
+                        : $"{warningEvents.Count} install warnings";
                     
                     var warningDetails = new Dictionary<string, object>(sessionInfo)
                     {
@@ -2425,16 +2427,31 @@ namespace ReportMate.WindowsClient.Services.Modules
                     events.Add(CreateEvent("warning", warningMessage, warningDetails, DateTime.UtcNow));
                     _logger.LogInformation("Generated WARNING event for {WarningCount} Cimian warnings", warningEvents.Count);
                 }
-                else if (infoEvents.Any() || (latestSession?.Successes > 0))
+                
+                // SUCCESS: Generate success event if there are successful operations or only info events
+                if (infoEvents.Any() || (latestSession?.Successes > 0))
                 {
-                    // SUCCESS: Generate success event when only INFO events or successful operations
-                    var successMessage = latestSession?.Successes > 0 
-                        ? $"Installs completed successfully ({latestSession.Successes} packages processed)"
-                        : $"Installs module data reported";
+                    // Build compound message showing overall status
+                    var messageParts = new List<string>();
+                    
+                    if (errorEvents.Any())
+                        messageParts.Add($"{errorEvents.Count} failed install{(errorEvents.Count == 1 ? "" : "s")}");
+                    
+                    if (warningEvents.Any())
+                        messageParts.Add($"{warningEvents.Count} warning{(warningEvents.Count == 1 ? "" : "s")}");
+                    
+                    var successCount = latestSession?.Successes ?? 0;
+                    if (successCount > 0)
+                        messageParts.Add($"{successCount} items installs successful");
+                    else
+                        messageParts.Add("Installs system operational");
+                    
+                    var successMessage = string.Join(", ", messageParts);
                     
                     var successDetails = new Dictionary<string, object>(sessionInfo)
                     {
                         ["info_count"] = infoEvents.Count,
+                        ["packages_processed"] = latestSession?.Successes ?? 0,
                         ["sample_info"] = infoEvents.Take(3).Select(e => new Dictionary<string, object>
                         {
                             ["package"] = e.Package ?? "unknown",
@@ -2448,24 +2465,28 @@ namespace ReportMate.WindowsClient.Services.Modules
                     events.Add(CreateEvent("success", successMessage, successDetails, DateTime.UtcNow));
                     _logger.LogInformation("Generated SUCCESS event for {InfoCount} Cimian info events", infoEvents.Count);
                 }
+                
+                // NO RECENT ACTIVITY: Generate success event if Cimian is installed but has no recent activity
                 else if (data.Cimian?.IsInstalled == true)
                 {
-                    // Cimian is installed but no recent activity - info event
-                    events.Add(CreateEvent("info", "Cimian is installed but no recent activity detected", 
+                    events.Add(CreateEvent("success", "Installs system operational", 
                         new Dictionary<string, object> 
                         {
                             ["cimian_version"] = data.Cimian.Version ?? "unknown",
-                            ["status"] = data.Cimian.Status ?? "unknown"
+                            ["status"] = data.Cimian.Status ?? "unknown",
+                            ["module_status"] = "success"
                         }));
-                    _logger.LogInformation("Generated INFO event - Cimian installed but no recent activity");
+                    _logger.LogInformation("Generated SUCCESS event - Cimian installed but no recent activity");
                 }
-                else
+                
+                // CIMIAN NOT AVAILABLE: Generate warning if Cimian is not installed or no data
+                if (data.Cimian?.IsInstalled != true)
                 {
-                    // Cimian not installed or no data - warning event
-                    events.Add(CreateEvent("warning", "Cimian managed software system not detected", 
+                    events.Add(CreateEvent("warning", "Installs system not available", 
                         new Dictionary<string, object> 
                         {
-                            ["recommendation"] = "Install Cimian for managed software deployment"
+                            ["recommendation"] = "Install Cimian for managed software deployment",
+                            ["module_status"] = "warning"
                         }));
                     _logger.LogInformation("Generated WARNING event - Cimian not detected");
                 }
@@ -2477,13 +2498,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (actualSuccessRate < 50 && !events.Any(e => e.EventType == "error"))
                     {
                         events.Add(CreateEvent("error", 
-                            $"Critical session failure rate: {100 - actualSuccessRate:F1}% of packages failed", 
+                            $"Critical install session failure - {100 - actualSuccessRate:F0}% failed", 
                             new Dictionary<string, object> 
                             { 
                                 ["success_rate"] = actualSuccessRate,
                                 ["failed_packages"] = latestSession.Failures,
                                 ["successful_packages"] = latestSession.Successes,
-                                ["category"] = "session_performance"
+                                ["category"] = "session_performance",
+                                ["module_status"] = "error"
                             }));
                         _logger.LogInformation("Generated additional ERROR event for poor session performance");
                     }
@@ -2497,8 +2519,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogError(ex, "Error generating events from Cimian data");
                 
                 // Add error event for the generation failure itself
-                events.Add(CreateEvent("error", "Failed to process Cimian events for dashboard display", 
-                    new Dictionary<string, object> { ["error"] = ex.Message }));
+                events.Add(CreateEvent("error", "Installs monitoring error", 
+                    new Dictionary<string, object> { 
+                        ["error"] = ex.Message,
+                        ["module_status"] = "error"
+                    }));
             }
 
             return Task.FromResult(events);

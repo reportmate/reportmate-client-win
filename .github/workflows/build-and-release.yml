@@ -5,13 +5,13 @@ on:
     branches: [ main, develop ]
     tags:
       - 'v*'
-      - '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*'  # YYYY.MM.DD format
+      - '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9][0-9][0-9][0-9]*'  # YYYY.MM.DD.HHMM format
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to build (e.g. 2024.06.27 or 1.0.0)'
+        description: 'Version to build (e.g. 2024.06.27.1430 or 1.0.0)'
         required: false
         default: ''
       create_release:
@@ -19,7 +19,7 @@ on:
         type: boolean
         default: true
       create_tag:
-        description: 'Create and push date-based tag (YYYY.MM.DD)'
+        description: 'Create and push date-based tag (YYYY.MM.DD.HHMM)'
         type: boolean
         default: false
   schedule:
@@ -80,11 +80,11 @@ jobs:
           $isTaggedRelease = $false
         } elseif ($env:GITHUB_EVENT_NAME -eq "schedule") {
           # Daily build
-          $version = Get-Date -Format "yyyy.MM.dd"
+          $version = Get-Date -Format "yyyy.MM.dd.HHmm"
           $isTaggedRelease = $false
         } else {
           # PR or push to branch
-          $version = "$(Get-Date -Format 'yyyy.MM.dd')-dev.$($env:GITHUB_RUN_NUMBER)"
+          $version = "$(Get-Date -Format 'yyyy.MM.dd.HHmm')-dev.$($env:GITHUB_RUN_NUMBER)"
           $isTaggedRelease = $false
         }
         
@@ -99,10 +99,10 @@ jobs:
       shell: pwsh
       run: |
         $version = "${{ steps.version.outputs.VERSION }}"
-        $dateTag = Get-Date -Format "yyyy.MM.dd"
+        $dateTag = Get-Date -Format "yyyy.MM.dd.HHmm"
         
         # Only create tag if it doesn't exist and version matches date format
-        if ($version -match '^\d{4}\.\d{2}\.\d{2}$') {
+        if ($version -match '^\d{4}\.\d{2}\.\d{2}\.\d{4}$') {
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
@@ -128,7 +128,7 @@ jobs:
         $shouldRelease = $false
         
         # Create release for:
-        # 1. Tagged releases (v* or YYYY.MM.DD)
+        # 1. Tagged releases (v* or YYYY.MM.DD.HHMM)
         # 2. Manual workflow dispatch with create_release=true
         # 3. Daily scheduled builds on main branch
         if ("${{ steps.version.outputs.IS_TAGGED_RELEASE }}" -eq "true") {

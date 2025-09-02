@@ -96,6 +96,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// </summary>
         private string ExtractDeviceUuid(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
         {
+            // Method 1: Try osquery system_info UUID
             if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
             {
                 var firstResult = systemInfo[0];
@@ -109,8 +110,97 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Fallback to machine name if no valid UUID found
-            return Environment.MachineName;
+            // Method 2: Try Registry MachineGuid (skip WMI due to reliability issues)
+            try
+            {
+                using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography"))
+                {
+                    if (key != null)
+                    {
+                        var machineGuid = key.GetValue("MachineGuid")?.ToString();
+                        if (!string.IsNullOrEmpty(machineGuid))
+                        {
+                            return machineGuid;
+                        }
+                    }
+                }
+            }
+            catch { /* Continue with other methods */ }
+
+            // Method 4: Generate a new UUID based on hardware characteristics
+            try
+            {
+                var hardwareFingerprint = GenerateHardwareBasedUuid();
+                if (!string.IsNullOrEmpty(hardwareFingerprint))
+                {
+                    return hardwareFingerprint;
+                }
+            }
+            catch { /* Continue with other methods */ }
+
+            throw new InvalidOperationException("Failed to extract device UUID from osquery, BIOS serial, or motherboard serial");
+        }
+
+        /// <summary>
+        /// Generate a deterministic UUID based on hardware characteristics
+        /// </summary>
+        private string GenerateHardwareBasedUuid()
+        {
+            try
+            {
+                var hardwareInfo = new List<string>();
+
+                // Get CPU info
+                try
+                {
+                    using (var searcher = new System.Management.ManagementObjectSearcher("SELECT ProcessorId FROM Win32_Processor"))
+                    {
+                        foreach (System.Management.ManagementObject obj in searcher.Get())
+                        {
+                            var processorId = obj["ProcessorId"]?.ToString();
+                            if (!string.IsNullOrEmpty(processorId))
+                            {
+                                hardwareInfo.Add($"CPU:{processorId}");
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { /* Continue with other methods */ }
+
+                // Get motherboard serial
+                try
+                {
+                    using (var searcher = new System.Management.ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
+                    {
+                        foreach (System.Management.ManagementObject obj in searcher.Get())
+                        {
+                            var serialNumber = obj["SerialNumber"]?.ToString();
+                            if (!string.IsNullOrEmpty(serialNumber) && serialNumber.Trim() != "." && !serialNumber.Contains("To be filled"))
+                            {
+                                hardwareInfo.Add($"MB:{serialNumber}");
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { /* Continue with other methods */ }
+
+                if (hardwareInfo.Count > 0)
+                {
+                    var fingerprint = string.Join("|", hardwareInfo);
+                    var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(fingerprint));
+                    
+                    var guidBytes = new byte[16];
+                    Array.Copy(hash, 0, guidBytes, 0, 16);
+                    var hardwareUuid = new Guid(guidBytes);
+                    
+                    return hardwareUuid.ToString().ToUpper();
+                }
+            }
+            catch { /* Continue with fallback */ }
+
+            return string.Empty;
         }
 
         /// <summary>
