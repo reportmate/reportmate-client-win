@@ -20,6 +20,7 @@
       <ComponentGroupRef Id="ProductComponents" />
       <ComponentGroupRef Id="OSQueryModuleFiles" />
       <ComponentGroupRef Id="CimianComponents" />
+      <ComponentRef Id="DataConfigFiles" />
     </Feature>
     
     <!-- Upgrade Logic -->
@@ -39,7 +40,11 @@
     </StandardDirectory>
     
     <StandardDirectory Id="CommonAppDataFolder">
-      <Directory Id="DATADIR" Name="ManagedReports" />
+      <Directory Id="DATADIR" Name="ManagedReports">
+        <Directory Id="DATADIRQUERY" Name="osquery">
+          <Directory Id="DATADIRQUERYMODULES" Name="modules" />
+        </Directory>
+      </Directory>
     </StandardDirectory>
     
     <!-- Components -->
@@ -58,6 +63,12 @@
         <File Id="ModuleSchedulesJson" Source="$(var.SourceDir)\module-schedules.json" />
       </Component>
       
+      <!-- Data Directory Configuration -->
+      <Component Id="DataConfigFiles" Guid="*" Directory="DATADIR">
+        <File Id="DataAppSettingsYaml" Source="$(var.SourceDir)\appsettings.yaml" />
+        <CreateFolder />
+      </Component>
+      
       <!-- OSQuery Modules -->
       <Component Id="OSQueryModules" Guid="*">
         <File Id="EnabledModulesJson" Source="$(var.ResourceDir)\osquery\enabled-modules.json" />
@@ -72,7 +83,7 @@
     </ComponentGroup>
     
     <!-- OSQuery Module Files -->
-    <ComponentGroup Id="OSQueryModuleFiles" Directory="OSQUERYMODULESFOLDER">
+    <ComponentGroup Id="OSQueryModuleFiles" Directory="DATADIRQUERYMODULES">
       <Component Id="OSQueryApplicationsModule" Guid="*">
         <File Id="ApplicationsJson" Source="$(var.ResourceDir)\osquery\modules\applications.json" />
       </Component>
@@ -130,6 +141,14 @@
                   ExeCommand="powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -Command &quot;try { &amp; '.\uninstall-tasks.ps1' -ErrorAction Stop } catch { }&quot;" 
                   Return="ignore" />
     
+    <!-- Custom Actions for OSQuery Dependency -->
+    <CustomAction Id="CheckAndInstallOSQuery" 
+                  Execute="deferred" 
+                  Impersonate="no" 
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -Command &quot;try { if (!(Test-Path 'C:\Program Files\osquery\osqueryi.exe')) { Write-Host 'OSQuery not found, attempting to install via Chocolatey...'; if (!(Get-Command choco -ErrorAction SilentlyContinue)) { Write-Host 'Installing Chocolatey package manager...'; Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1')) }; choco install osquery -y --no-progress | Out-Host; if (Test-Path 'C:\Program Files\osquery\osqueryi.exe') { Write-Host 'OSQuery successfully installed' } else { Write-Host 'Warning: OSQuery installation may have failed. ReportMate requires OSQuery to function properly.' } } else { Write-Host 'OSQuery already installed' } } catch { Write-Host 'Error during OSQuery dependency check: ' + $_.Exception.Message }&quot;" 
+                  Return="ignore" />
+
     <!-- Custom Actions for Configuration -->
     <CustomAction Id="SetApiConfiguration" 
                   Execute="immediate"
@@ -145,9 +164,11 @@
     
     <!-- Install Sequence - BULLETPROOF FULL AUTOMATION -->
     <InstallExecuteSequence>
+      <!-- OSQuery Dependency Check - CRITICAL FOR REPORTMATE FUNCTIONALITY -->
+      <Custom Action="CheckAndInstallOSQuery" After="InstallFiles" Condition="NOT Installed" />
       <!-- API Configuration -->
       <Custom Action="SetApiConfiguration" After="CostFinalize" Condition="NOT Installed" />
-      <Custom Action="RunApiConfiguration" After="InstallFiles" Condition="NOT Installed" />
+      <Custom Action="RunApiConfiguration" After="CheckAndInstallOSQuery" Condition="NOT Installed" />
       <!-- FULLY AUTOMATED SCHEDULED TASK INSTALLATION - ZERO MANUAL STEPS -->
       <Custom Action="InstallScheduledTasks" After="RunApiConfiguration" Condition="NOT Installed" />
       <Custom Action="UninstallScheduledTasks" Before="RemoveFiles" Condition="Installed AND NOT REINSTALL" />

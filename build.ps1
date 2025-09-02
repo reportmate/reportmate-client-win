@@ -11,7 +11,7 @@
     Supports creating tags and releases when run with appropriate parameters.
     
 .PARAMETER Version
-    Version to build (default: auto-generated from date in YYYY.MM.DD format)
+    Version to build (default: auto-generated from date in YYYY.MM.DD.HHMM format)
     
 .PARAMETER Configuration
     Build configuration (Release or Debug)
@@ -35,7 +35,7 @@
     Default API URL to configure in the installer
     
 .PARAMETER CreateTag
-    Create and push a date-based git tag (YYYY.MM.DD format)
+    Create and push a date-based git tag (YYYY.MM.DD.HHMM format)
     
 .PARAMETER CreateRelease
     Create a GitHub release (requires gh CLI)
@@ -57,7 +57,7 @@
     
 .EXAMPLE
     .\build.ps1
-    Build with auto-generated version (YYYY.MM.DD format)
+    Build with auto-generated version (YYYY.MM.DD.HHMM format)
     
 .EXAMPLE
     .\build.ps1 -Version "2024.06.27" -ApiUrl "https://api.reportmate.com"
@@ -249,9 +249,9 @@ function signPackage {
     throw "signtool failed with all timestamp authorities."
 }
 
-# Generate version if not provided (YYYY.MM.DD format)
+# Generate version if not provided (YYYY.MM.DD.HHMM format)
 if (-not $Version) {
-    $Version = Get-Date -Format "yyyy.MM.dd"
+    $Version = Get-Date -Format "yyyy.MM.dd.HHmm"
     Write-Info "Auto-generated version: $Version"
 }
 
@@ -356,7 +356,8 @@ $cleanupPaths = @(
     (Join-Path $OutputDir "*.nupkg"),
     (Join-Path $OutputDir "*.zip"), 
     (Join-Path $OutputDir "*.msi"),
-    (Join-Path $OutputDir "*.exe")
+    (Join-Path $OutputDir "*.exe"),
+    (Join-Path $OutputDir "*.wixpdb")
 )
 
 foreach ($pattern in $cleanupPaths) {
@@ -499,7 +500,7 @@ if (-not $SkipBuild) {
     
     # Build
     Write-Verbose "Building in $Configuration configuration..."
-    dotnet build $csprojPath --configuration $Configuration --no-restore --verbosity quiet
+    dotnet build $csprojPath --configuration $Configuration --no-restore --verbosity quiet -p:VersionPrefix=$Version
     
     # Publish self-contained executable
     Write-Verbose "Publishing self-contained executable..."
@@ -511,6 +512,7 @@ if (-not $SkipBuild) {
         -p:PublishSingleFile=true `
         -p:PublishTrimmed=true `
         -p:IncludeNativeLibrariesForSelfExtract=true `
+        -p:VersionPrefix=$Version `
         --verbosity quiet
     
     if ($LASTEXITCODE -eq 0) {
@@ -567,19 +569,6 @@ $osqueryTargetProgramDir = Join-Path $ProgramFilesPayloadDir "osquery"
 
 # Copy shared resources from build/resources
 $sharedResourcesDir = Join-Path $BuildDir "resources"
-# Copy module schedules and task scripts from shared resources
-if (Test-Path (Join-Path $sharedResourcesDir "module-schedules.json")) {
-    Copy-Item (Join-Path $sharedResourcesDir "module-schedules.json") $ProgramFilesPayloadDir -Force
-    Write-Verbose "Copied module-schedules.json from shared resources"
-}
-if (Test-Path (Join-Path $sharedResourcesDir "install-tasks.ps1")) {
-    Copy-Item (Join-Path $sharedResourcesDir "install-tasks.ps1") $ProgramFilesPayloadDir -Force
-    Write-Verbose "Copied install-tasks.ps1 from shared resources"
-}
-if (Test-Path (Join-Path $sharedResourcesDir "uninstall-tasks.ps1")) {
-    Copy-Item (Join-Path $sharedResourcesDir "uninstall-tasks.ps1") $ProgramFilesPayloadDir -Force
-    Write-Verbose "Copied uninstall-tasks.ps1 from shared resources"
-}
 
 # Always ensure target directories are clean first
 if (Test-Path $osqueryTargetDataDir) {
@@ -592,11 +581,10 @@ if (Test-Path $osqueryTargetProgramDir) {
 }
 
 if (Test-Path $osquerySourceDir) {
-    Write-Step "📋 Copying modular osquery configuration from src..."
-    # Copy to both locations - application directory (where code looks) and data directory (for backup/reference)
+    Write-Step "📋 Copying modular osquery configuration..."
+    # Only copy to ProgramData payload - will be handled by postinstall script
     Copy-Item $osquerySourceDir $ProgramDataPayloadDir -Recurse -Force
-    Copy-Item $osquerySourceDir $ProgramFilesPayloadDir -Recurse -Force
-    Write-Success "Modular osquery configuration copied to both application and data directories"
+    Write-Success "Modular osquery configuration copied to data payload directory"
 } else {
     Write-Warning "Modular osquery directory not found at: $osquerySourceDir"
     # Fallback to unified file if modular not available
@@ -609,11 +597,10 @@ if (Test-Path $osquerySourceDir) {
 Copy-Item (Join-Path $SrcDir "appsettings.yaml") (Join-Path $ProgramDataPayloadDir "appsettings.template.yaml") -Force
 Write-Verbose "Copied configuration files to data payload directory"
 
-# Copy additional shared resources to Program Files payload
-$sharedResourcesDir = "$BuildDir/resources"
+# Copy shared resources from build/resources - only to Program Files payload
+$sharedResourcesDir = Join-Path $BuildDir "resources"
 $sharedFiles = @(
     "module-schedules.json",
-    "install-tasks.ps1", 
     "uninstall-tasks.ps1"
 )
 
@@ -627,12 +614,8 @@ foreach ($file in $sharedFiles) {
     }
 }
 
-# Copy install scripts directory if it exists
-$installScriptsDir = Join-Path $sharedResourcesDir "install-scripts"
-if (Test-Path $installScriptsDir) {
-    Copy-Item $installScriptsDir $ProgramFilesPayloadDir -Recurse -Force
-    Write-Verbose "Copied install-scripts directory from shared resources"
-}
+# Don't copy install-scripts directory to avoid confusion with install-tasks.ps1
+# The Configure-ReportMate.ps1 functionality should be integrated into postinstall.ps1
 
 # Copy Cimian postflight script from shared resources
 $cimianPostflightSource = Join-Path $sharedResourcesDir "cimian-postflight.ps1"
@@ -643,122 +626,72 @@ if (Test-Path $cimianPostflightSource) {
     Write-Warning "Cimian postflight script not found in shared resources: $cimianPostflightSource"
 }
 
-# Create chocolatey install script for Cimian package
-$chocolateyInstallPath = Join-Path $NupkgDir "tools\chocolateyInstall.ps1"
-$chocolateyToolsDir = Join-Path $NupkgDir "tools"
-if (-not (Test-Path $chocolateyToolsDir)) {
-    New-Item -ItemType Directory -Path $chocolateyToolsDir -Force | Out-Null
-}
+# Create comprehensive postinstall.ps1 for NUPKG (inline scheduled tasks installation)
+Write-Step "Creating comprehensive postinstall.ps1 for NUPKG..."
 
-$chocolateyInstallContent = @'
-$ErrorActionPreference = 'Stop'
+# Use a clean template to avoid accumulation issues
+$postinstallTemplatePath = Join-Path $NupkgDir "scripts\postinstall.ps1"
+$postinstallCleanPath = Join-Path $NupkgDir "scripts\postinstall.clean.ps1"
 
-# Installation paths
-$programFilesLocation = 'C:\Program Files\ReportMate\'
-$programDataLocation = 'C:\ProgramData\ManagedReports\'
-$managedInstallsLocation = 'C:\ProgramData\ManagedInstalls\'
-
-# Create directories if they don't exist
-if ($programFilesLocation) { 
-    New-Item -ItemType Directory -Force -Path $programFilesLocation | Out-Null 
-}
-if ($programDataLocation) { 
-    New-Item -ItemType Directory -Force -Path $programDataLocation | Out-Null 
-}
-if ($managedInstallsLocation) { 
-    New-Item -ItemType Directory -Force -Path $managedInstallsLocation | Out-Null 
-}
-
-$payloadRoot = Join-Path $PSScriptRoot '..\payload'
-$payloadRoot = [System.IO.Path]::GetFullPath($payloadRoot)
-
-Write-Host "Installing ReportMate from payload: $payloadRoot"
-
-# Copy executable and version files to Program Files
-$programFilesFiles = @('runner.exe', 'version.txt', 'module-schedules.json', 'install-tasks.ps1', 'uninstall-tasks.ps1')
-foreach ($file in $programFilesFiles) {
-    $sourcePath = Join-Path $payloadRoot $file
-    if (Test-Path $sourcePath) {
-        $destPath = Join-Path $programFilesLocation $file
-        Copy-Item -LiteralPath $sourcePath -Destination $destPath -Force
-        Write-Host "Copied $file to Program Files"
-        
-        if (-not (Test-Path -LiteralPath $destPath)) {
-            Write-Error "Failed to copy $file to Program Files"
-            exit 1
-        }
-    }
-}
-
-# Copy data directory contents to ProgramData
-$dataPayloadPath = Join-Path $payloadRoot 'data'
-if (Test-Path $dataPayloadPath) {
-    Write-Host "Copying data files to ProgramData..."
-    Get-ChildItem -Path $dataPayloadPath -Recurse | ForEach-Object {
-        $fullName = $_.FullName
-        $fullName = [Management.Automation.WildcardPattern]::Escape($fullName)
-        $relative = $fullName.Substring($dataPayloadPath.Length).TrimStart('\','/')
-        $dest = Join-Path $programDataLocation $relative
-        
-        if ($_.PSIsContainer) {
-            New-Item -ItemType Directory -Force -Path $dest | Out-Null
-        } else {
-            Copy-Item -LiteralPath $fullName -Destination $dest -Force
-            if (-not (Test-Path -LiteralPath $dest)) {
-                Write-Error "Failed to copy data file $fullName"
-                exit 1
-            }
-        }
-    }
-    Write-Host "Data files copied successfully"
+# Always start fresh from the clean template
+if (Test-Path $postinstallCleanPath) {
+    Copy-Item $postinstallCleanPath $postinstallTemplatePath -Force
+    Write-Verbose "Restored from clean template"
 } else {
-    Write-Warning "No data payload directory found at: $dataPayloadPath"
+    Write-Warning "Clean template not found at: $postinstallCleanPath"
 }
 
-# Copy Cimian integration files to C:\Program Files\Cimian\
-$cimianPayloadPath = Join-Path $payloadRoot 'cimian'
-if (Test-Path $cimianPayloadPath) {
-    $cimianDestPath = 'C:\Program Files\Cimian\'
-    Write-Host "Copying Cimian integration files..."
+$basePostinstallContent = Get-Content $postinstallTemplatePath -Raw
+
+# Read the install-tasks.ps1 content to inline
+$installTasksPath = Join-Path $BuildDir "resources\install-tasks.ps1"
+if (Test-Path $installTasksPath) {
+    $installTasksContent = Get-Content $installTasksPath -Raw
     
-    # Create Cimian directory if it doesn't exist
-    if (-not (Test-Path $cimianDestPath)) {
-        New-Item -ItemType Directory -Force -Path $cimianDestPath | Out-Null
-        Write-Host "Created directory: $cimianDestPath"
-    }
-    
-    # Copy all files from cimian payload
-    Get-ChildItem -Path $cimianPayloadPath -File | ForEach-Object {
-        $destFile = Join-Path $cimianDestPath $_.Name
-        Copy-Item -LiteralPath $_.FullName -Destination $destFile -Force
-        Write-Host "Copied $($_.Name) to Cimian directory"
+    # Extract the core task installation logic from install-tasks.ps1
+    # Get everything between the first try block and the last catch block
+    if ($installTasksContent -match '(?s)(\s*# First, remove any existing ReportMate tasks.*?)catch \{[^}]*\}') {
+        $coreTaskLogic = $matches[1].Trim()
         
-        if (-not (Test-Path -LiteralPath $destFile)) {
-            Write-Error "Failed to copy Cimian file $($_.Name)"
-            exit 1
-        }
+        # Build the comprehensive scheduled tasks installation content
+        $scheduledTasksContent = @"
+# Install ReportMate scheduled tasks
+Write-Host "Installing ReportMate scheduled tasks..."
+
+try {
+    `$InstallPath = "C:\Program Files\ReportMate"
+    
+$coreTaskLogic
+    
+    Write-Host "✅ Scheduled tasks installed successfully"
+    
+} catch {
+    Write-Warning "Failed to create scheduled tasks: `$_"
+}
+"@
+        
+        # Replace the placeholder with the comprehensive logic
+        $enhancedPostinstallContent = $basePostinstallContent -replace 'INLINE_SCHEDULED_TASKS_PLACEHOLDER', $scheduledTasksContent
+        
+        # Write the enhanced postinstall.ps1
+        Set-Content $postinstallTemplatePath $enhancedPostinstallContent -Encoding UTF8
+        Write-Success "Enhanced postinstall.ps1 with inline scheduled tasks installation"
+    } else {
+        Write-Warning "Could not extract task installation logic from install-tasks.ps1"
     }
-    Write-Host "Cimian integration files copied successfully"
 } else {
-    Write-Warning "No Cimian payload directory found at: $cimianPayloadPath"
+    Write-Warning "install-tasks.ps1 not found at: $installTasksPath - using existing postinstall.ps1"
 }
 
-Write-Host "ReportMate chocolatey installation completed successfully"
-
-# Clean up executable from payload after installation
-$exePayloadPath = Join-Path $payloadRoot 'runner.exe'
-if (Test-Path $exePayloadPath) {
-    try {
-        Remove-Item $exePayloadPath -Force
-        Write-Host "Cleaned up runner.exe from payload"
-    } catch {
-        Write-Verbose "Could not remove runner.exe from payload: $_"
-    }
+# Remove install-tasks.ps1 from Program Files payload since it's now inline in postinstall.ps1
+$installTasksInPayload = Join-Path $ProgramFilesPayloadDir "install-tasks.ps1"
+if (Test-Path $installTasksInPayload) {
+    Remove-Item $installTasksInPayload -Force
+    Write-Verbose "Removed install-tasks.ps1 from payload (now inline in postinstall.ps1)"
 }
 
-'@
-
-$chocolateyInstallContent | Out-File $chocolateyInstallPath -Encoding UTF8
+# cimian-pkg will generate the chocolatey install script automatically
+# The enhanced postinstall.ps1 in scripts/ directory will be appended to it
 
 # Update package build-info.yaml
 $buildInfoPath = Join-Path $NupkgDir "build-info.yaml"
@@ -999,8 +932,8 @@ Commit: $env:GITHUB_SHA
             Write-Verbose "Building MSI with WiX..."
             
             # Convert date version to MSI-compatible format
-            # 2025.08.03 -> 25.8.3 (MSI versions need parts < 256)
-            $msiVersion = $Version -replace '^20(\d{2})\.0?(\d+)\.0?(\d+)$', '$1.$2.$3'
+            # 2025.08.03.1430 -> 25.8.3.1430 (MSI versions need major.minor.build.revision format)
+            $msiVersion = $Version -replace '^20(\d{2})\.0?(\d+)\.0?(\d+)\.(\d{4})$', '$1.$2.$3.$4'
             Write-Verbose "Converting version $Version to MSI-compatible: $msiVersion"
             
             $wxsPath = Join-Path $BuildDir "msi\ReportMate.wxs"
@@ -1094,8 +1027,8 @@ if ($CreateTag -and $gitFound) {
     Write-Step "Creating git tag..."
     
     try {
-        # Only create date-based tags for YYYY.MM.DD format versions
-        if ($Version -match '^\d{4}\.\d{2}\.\d{2}$') {
+        # Only create date-based tags for YYYY.MM.DD.HHMM format versions
+        if ($Version -match '^\d{4}\.\d{2}\.\d{2}\.\d{4}$') {
             # Check if tag already exists
             $existingTag = git tag -l $Version 2>$null
             if ($existingTag) {
@@ -1125,8 +1058,8 @@ if ($CreateTag -and $gitFound) {
                 }
             }
         } else {
-            Write-Warning "Version $Version does not match YYYY.MM.DD format, skipping tag creation"
-            Write-Info "Use YYYY.MM.DD format for automatic tagging (e.g., 2024.06.27)"
+            Write-Warning "Version $Version does not match YYYY.MM.DD.HHMM format, skipping tag creation"
+            Write-Info "Use YYYY.MM.DD.HHMM format for automatic tagging (e.g., 2024.06.27.1430)"
         }
     } catch {
         Write-Error "Failed to create git tag: $_"
@@ -1358,16 +1291,12 @@ Write-Output ""
 
 # Clean up duplicate osquery files after package creation  
 Write-Step "Cleaning up duplicate osquery files..."
-$osqueryPayloadDirs = @(
-    (Join-Path $ProgramDataPayloadDir "osquery"),
-    (Join-Path $ProgramFilesPayloadDir "osquery")
-)
+# Only remove from ProgramFiles payload since we want to keep the data payload osquery files
+$osqueryProgramFilesDir = Join-Path $ProgramFilesPayloadDir "osquery"
 
-foreach ($dir in $osqueryPayloadDirs) {
-    if (Test-Path $dir) {
-        Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Verbose "Removed duplicate osquery directory: $dir"
-    }
+if (Test-Path $osqueryProgramFilesDir) {
+    Remove-Item $osqueryProgramFilesDir -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Verbose "Removed duplicate osquery directory from Program Files payload"
 }
 Write-Success "Duplicate osquery files cleaned up"
 

@@ -623,8 +623,11 @@ public class Program
                 }
             }
             
-            _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", 
-                System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
+            // Get properly formatted version string
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            var versionString = version != null ? $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}.{version.Revision:D4}" : "1.0.0";
+            
+            _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", versionString);
             
             // Handle single module data collection if specified
             if (!string.IsNullOrEmpty(runModule))
@@ -744,7 +747,7 @@ public class Program
             
             Console.WriteLine("=== ReportMate Information ===");
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-            var versionString = version != null ? $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}" : "1.0.0";
+            var versionString = version != null ? $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}.{version.Revision:D4}" : "1.0.0";
             Console.WriteLine($"Version: {versionString}");
             Console.WriteLine($"");
             Console.WriteLine("=== Device Information ===");

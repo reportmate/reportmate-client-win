@@ -30,15 +30,17 @@ namespace ReportMate.WindowsClient.Services
             {
                 var combinedQueries = new Dictionary<string, object>();
                 
-                // Find the modular osquery directory
-                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                var osqueryDir = Path.Combine(baseDir, "osquery");
+                // Find the modular osquery directory in working data directory (ProgramData)
+                var workingDataDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "ManagedReports");
+                var osqueryDir = Path.Combine(workingDataDir, "osquery");
                 var modulesDir = Path.Combine(osqueryDir, "modules");
                 var enabledModulesFile = Path.Combine(osqueryDir, "enabled-modules.json");
 
                 if (!Directory.Exists(modulesDir))
                 {
-                    _logger.LogWarning("Modular osquery directory not found, falling back to unified query file");
+                    _logger.LogWarning("Modular osquery directory not found at {Path}, falling back to unified query file", modulesDir);
                     return LoadUnifiedQueries();
                 }
 
@@ -137,14 +139,16 @@ namespace ReportMate.WindowsClient.Services
             {
                 var moduleQueries = new Dictionary<string, object>();
                 
-                // Find the modular osquery directory
-                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                var osqueryDir = Path.Combine(baseDir, "osquery");
+                // Find the modular osquery directory in working data directory (ProgramData)
+                var workingDataDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "ManagedReports");
+                var osqueryDir = Path.Combine(workingDataDir, "osquery");
                 var modulesDir = Path.Combine(osqueryDir, "modules");
 
                 if (!Directory.Exists(modulesDir))
                 {
-                    _logger.LogWarning("Modular osquery directory not found for module {ModuleId}", moduleId);
+                    _logger.LogWarning("Modular osquery directory not found for module {ModuleId} at {Path}", moduleId, modulesDir);
                     return new Dictionary<string, object>();
                 }
 

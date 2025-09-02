@@ -19,11 +19,11 @@ This repository contains a unified PowerShell 7 build script that replicates the
 ### Basic Build
 
 ```powershell
-# Build all packages with auto-generated version (YYYY.MM.DD)
+# Build all packages with auto-generated version (YYYY.MM.DD.HHMM)
 .\build.ps1 -Sign
 
 # Build with specific version
-.\build.ps1 -Version "2024.06.27" -Sign
+.\build.ps1 -Version "2024.06.27.1430" -Sign
 
 # Clean build (remove previous artifacts)
 .\build.ps1 -Clean -Sign
@@ -62,14 +62,14 @@ This repository contains a unified PowerShell 7 build script that replicates the
 .\build.ps1 -CreateTag -CreateRelease -Sign
 
 # Full production build with API URL
-.\build.ps1 -Version "2024.06.27" -CreateTag -CreateRelease -ApiUrl "https://api.reportmate.com" -Sign
+.\build.ps1 -Version "2024.06.27.1430" -CreateTag -CreateRelease -ApiUrl "https://api.reportmate.com" -Sign
 ```
 
 ## Script Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `Version` | String | Auto-generated (YYYY.MM.DD) | Version to build |
+| `Version` | String | Auto-generated (YYYY.MM.DD.HHMM) | Version to build |
 | `Configuration` | String | "Release" | Build configuration (Release/Debug) |
 | `SkipBuild` | Switch | False | Skip the .NET build step |
 | `SkipNUPKG` | Switch | False | Skip NUPKG creation |
@@ -102,7 +102,7 @@ This repository contains a unified PowerShell 7 build script that replicates the
 .\build.ps1 -Sign
 
 # Build specific version
-.\build.ps1 -Version "2024.06.27" -Sign
+.\build.ps1 -Version "2024.06.27.1430" -Sign
 
 # Clean build
 .\build.ps1 -Clean -Sign

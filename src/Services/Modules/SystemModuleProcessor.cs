@@ -616,17 +616,17 @@ namespace ReportMate.WindowsClient.Services.Modules
                     ["version"] = data.OperatingSystem?.Version ?? "Unknown",
                     ["display_version"] = data.OperatingSystem?.DisplayVersion ?? "Unknown",
                     ["uptime"] = data.UptimeString ?? "Unknown",
-                    ["module_status"] = "success"
+                    ["module_status"] = "info"
                 };
 
-                events.Add(CreateEvent("success", message, details, DateTime.UtcNow));
-                _logger.LogInformation("Generated SUCCESS event for system module");
+                events.Add(CreateEvent("info", message, details, DateTime.UtcNow));
+                _logger.LogInformation("Generated INFO event for system module");
             }
             else
             {
-                events.Add(CreateEvent("warning", "System module data collection incomplete", 
-                    new Dictionary<string, object> { ["module_status"] = "warning" }, DateTime.UtcNow));
-                _logger.LogWarning("Generated WARNING event for incomplete system module data");
+                events.Add(CreateEvent("info", "System module data collection incomplete", 
+                    new Dictionary<string, object> { ["module_status"] = "info" }, DateTime.UtcNow));
+                _logger.LogInformation("Generated INFO event for incomplete system module data");
             }
 
             return Task.FromResult(events);
