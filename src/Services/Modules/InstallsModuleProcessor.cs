@@ -39,41 +39,73 @@ namespace ReportMate.WindowsClient.Services.Modules
             /// <summary>
             /// Maps Cimian's detailed status values to ReportMate's simplified dashboard statuses
             /// Uses only: Installed, Pending, Warning, Error, Removed
+            /// Updated for Cimian v2025.09.03+ enhanced status vocabulary
             /// </summary>
             private static string MapCimianStatusToReportMate(string cimianStatus, bool hasInstallLoop = false)
             {
                 if (string.IsNullOrEmpty(cimianStatus))
                     return "Pending";  // Default unknown to Pending
 
-                // If install loop is detected, override status to "Installed" regardless of current_status
-                if (hasInstallLoop)
-                    return "Installed";
-
+                // Map enhanced Cimian status vocabulary to ReportMate statuses
                 return cimianStatus.ToLowerInvariant() switch
                 {
-                    // Installed - Successfully installed and working
+                    // SUCCESS MAPPINGS - Successfully installed and working
                     "installed" => "Installed",
                     "success" => "Installed",
-                    "install loop" => "Installed", // Install Loop → Installed
                     
-                    // Pending - Needs action or in progress  
-                    "available" => "Pending",
-                    "pending" => "Pending", 
-                    "update available" => "Pending", // Update Available → Pending
-                    "downloading" => "Pending", // Downloading → Pending
-                    "installing" => "Pending", // Installing → Pending
-                    
-                    // Warning - Installed but with issues
-                    "warning" => "Warning",
-                    
-                    // Error - Failed installation or critical issues
-                    "failed" => "Error",  // Failed → Error
-                    "error" => "Error",
+                    // ERROR MAPPINGS - Failed installation or critical issues
+                    "failed" => "Error",
+                    "error" => "Error", 
                     "fail" => "Error",
                     
-                    // Removed - Uninstalled or removed
+                    // WARNING MAPPINGS - Installed but with issues or install loops
+                    "warning" => "Warning",
+                    "install loop" => "Warning",  // Install Loop → Warning (per spec)
+                    "not installed" => "Warning", // Not Installed → Warning (per spec)
+                    
+                    // PENDING MAPPINGS - Needs action or in progress
+                    "pending" => "Pending",
+                    "pending install" => "Pending", // Pending Install → Pending (per spec)
+                    "skipped" => "Pending",         // Skipped → Pending (per spec)
+                    "unknown" => "Pending",         // Unknown → Pending (per spec)
+                    "available" => "Pending",
+                    "update available" => "Pending",
+                    "downloading" => "Pending",
+                    "installing" => "Pending",
+                    
+                    // REMOVED - Uninstalled or removed
                     "removed" => "Removed",
                     "uninstalled" => "Removed",
+                    
+                    _ => "Pending" // Default unknown to Pending
+                };
+            }
+
+            /// <summary>
+            /// Maps Cimian event status values to ReportMate dashboard statuses
+            /// Specifically for events.json status field mapping per Cimian v25.9.3+ specification
+            /// </summary>
+            private static string MapCimianEventStatusToReportMate(string eventStatus)
+            {
+                if (string.IsNullOrEmpty(eventStatus))
+                    return "Pending";  // Default unknown to Pending
+
+                // Map Cimian event status vocabulary to ReportMate statuses
+                return eventStatus.ToLowerInvariant() switch
+                {
+                    // SUCCESS MAPPINGS - Operation completed successfully
+                    "success" => "Installed",  // Success → Installed (per spec)
+                    
+                    // ERROR MAPPINGS - Operation failed with error  
+                    "failed" => "Error",       // Failed → Error (per spec)
+                    
+                    // WARNING MAPPINGS - Operation completed with warnings
+                    "warning" => "Warning",    // Warning → Warning (per spec)
+                    
+                    // PENDING MAPPINGS - Operation waiting/queued/skipped/unknown
+                    "pending" => "Pending",    // Pending → Pending (per spec)
+                    "skipped" => "Pending",    // Skipped → Pending (per spec)
+                    "unknown" => "Pending",    // Unknown → Pending (per spec)
                     
                     _ => "Pending" // Default unknown to Pending
                 };
@@ -801,7 +833,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var installedVersion = GetDictValue(reportItem, "installed_version");
                     
                     // Determine status based on recent attempts
-                    var status = DetermineStatusFromRecentAttempts(reportItem);
+                    var rawStatus = DetermineStatusFromRecentAttempts(reportItem);
+                    var mappedStatus = MapCimianStatusToReportMate(rawStatus);
                     
                     // Create ManagedInstall item
                     var managedInstall = new ManagedInstall
@@ -809,7 +842,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Id = itemId,
                         Name = itemName,
                         DisplayName = displayName,
-                        Status = status,
+                        Status = mappedStatus, // Use mapped status
                         Version = latestVersion,
                         InstalledVersion = installedVersion,
                         LastSeenInSession = currentSessionId,
@@ -827,7 +860,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                             Id = itemId,
                             ItemName = itemName,
                             DisplayName = displayName,
-                            CurrentStatus = status,
+                            CurrentStatus = mappedStatus, // Use mapped status
                             LatestVersion = latestVersion,
                             InstalledVersion = installedVersion,
                             LastSeenInSession = currentSessionId
@@ -1946,7 +1979,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Level = eventElement.GetProperty("level").GetString() ?? "",
                         EventType = eventElement.GetProperty("event_type").GetString() ?? "",
                         Action = eventElement.GetProperty("action").GetString() ?? "",
-                        Status = eventElement.GetProperty("status").GetString() ?? "",
+                        Status = MapCimianEventStatusToReportMate(eventElement.GetProperty("status").GetString() ?? ""), // Apply event status mapping
                         Message = eventElement.GetProperty("message").GetString() ?? "",
                         SourceFile = eventElement.GetProperty("source_file").GetString() ?? "",
                         SourceFunction = eventElement.GetProperty("source_function").GetString() ?? "",
@@ -2073,27 +2106,24 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var latestVersion = GetDictValue(item, "latest_version");
                     var installedVersion = GetDictValue(item, "installed_version"); // FIXED: Cimian uses "installed_version" not "version"
                     
+                    // ENHANCED: Prioritize direct fields over recent_attempts for more reliable version data
                     if (string.IsNullOrEmpty(extractedVersion))
                     {
-                        // Debug logging to see what we're actually getting
-                        var debugItemId = GetDictValue(item, "id");
-                        _logger.LogInformation("DEBUG VERSION EXTRACTION - Item: {ItemId}, latest_version: '{LatestVersion}', installed_version: '{InstalledVersion}'", 
-                            debugItemId, latestVersion, installedVersion);
-                        
-                        if (!string.IsNullOrEmpty(latestVersion))
-                        {
-                            extractedVersion = latestVersion;
-                            _logger.LogInformation("DEBUG VERSION - Using latest_version: {Version} for {ItemId}", latestVersion, debugItemId);
-                        }
-                        else if (!string.IsNullOrEmpty(installedVersion))
+                        // Use installed_version as primary, fall back to latest_version
+                        if (!string.IsNullOrEmpty(installedVersion))
                         {
                             extractedVersion = installedVersion;
-                            _logger.LogInformation("DEBUG VERSION - Using installed_version: {Version} for {ItemId}", installedVersion, debugItemId);
+                            _logger.LogDebug("Using installed_version: {Version} for item {ItemId}", installedVersion, GetDictValue(item, "id"));
+                        }
+                        else if (!string.IsNullOrEmpty(latestVersion))
+                        {
+                            extractedVersion = latestVersion;
+                            _logger.LogDebug("Using latest_version: {Version} for item {ItemId}", latestVersion, GetDictValue(item, "id"));
                         }
                         else
                         {
                             extractedVersion = "Unknown";
-                            _logger.LogInformation("DEBUG VERSION - No version found, using Unknown for {ItemId}", debugItemId);
+                            _logger.LogWarning("No version found for item {ItemId}", GetDictValue(item, "id"));
                         }
                     }
                     
@@ -2158,12 +2188,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                         hasInstallLoop = loopDetected;
                     }
                     
-                    // ENHANCEMENT: If version is "Unknown", override status to "Error" regardless of current_status
+                    // FIXED: Don't force status to Error just because version is unknown
+                    // Trust the actual current_status from Cimian items.json
                     if (extractedVersion == "Unknown" || string.IsNullOrEmpty(extractedVersion))
                     {
-                        cimianStatus = "Error"; // Use uppercase to match existing patterns
-                        _logger.LogInformation("OVERRIDE STATUS - Item {ItemId}: version='{Version}' -> forcing status to 'Error'", 
-                            GetDictValue(item, "id"), extractedVersion);
+                        _logger.LogWarning("Version unknown for item {ItemId}, but preserving actual status: '{Status}'", 
+                            GetDictValue(item, "id"), cimianStatus);
+                        // Keep the determined status from version comparison or current_status fallback
                     }
                     
                     // Map Cimian's detailed status to ReportMate's simplified dashboard status
@@ -2335,6 +2366,54 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Extract package name from Cimian error/warning messages
+        /// </summary>
+        private string? ExtractPackageNameFromMessage(string? message)
+        {
+            if (string.IsNullOrEmpty(message))
+                return null;
+
+            // Common patterns in Cimian error messages:
+            // "Package 'PackageName' install failed"
+            // "Failed to install PackageName"
+            // "Error installing 'PackageName'"
+            // "PackageName.nupkg could not be installed"
+            // "Download failed for PackageName"
+            
+            // Pattern 1: Package 'Name' or Package "Name"
+            var pattern1 = @"Package\s+['""]([^'""]+)['""]";
+            var match1 = System.Text.RegularExpressions.Regex.Match(message, pattern1, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match1.Success)
+                return match1.Groups[1].Value;
+
+            // Pattern 2: installing 'Name' or installing "Name"
+            var pattern2 = @"installing\s+['""]([^'""]+)['""]";
+            var match2 = System.Text.RegularExpressions.Regex.Match(message, pattern2, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match2.Success)
+                return match2.Groups[1].Value;
+
+            // Pattern 3: Name.nupkg
+            var pattern3 = @"([a-zA-Z0-9\.\-_]+)\.nupkg";
+            var match3 = System.Text.RegularExpressions.Regex.Match(message, pattern3, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match3.Success)
+                return match3.Groups[1].Value;
+
+            // Pattern 4: Failed to install PackageName (look for word after "install")
+            var pattern4 = @"(?:failed\s+to\s+install|install\s+failed)\s+([a-zA-Z0-9\.\-_]+)";
+            var match4 = System.Text.RegularExpressions.Regex.Match(message, pattern4, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match4.Success)
+                return match4.Groups[1].Value;
+
+            // Pattern 5: Download failed for PackageName
+            var pattern5 = @"(?:download\s+failed\s+for|failed\s+to\s+download)\s+([a-zA-Z0-9\.\-_]+)";
+            var match5 = System.Text.RegularExpressions.Regex.Match(message, pattern5, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match5.Success)
+                return match5.Groups[1].Value;
+
+            return null;
+        }
+
+        /// <summary>
         /// Generate ReportMate events from processed Cimian data for dashboard display
         /// Now generates accurate Success, Warning, Error events based on the last Cimian run
         /// </summary>
@@ -2388,7 +2467,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         ["error_count"] = errorEvents.Count,
                         ["sample_errors"] = sampleErrors.Select(e => new Dictionary<string, object>
                         {
-                            ["package"] = e.Package ?? "unknown",
+                            ["package"] = ExtractPackageNameFromMessage(e.Message) ?? e.Package ?? "Installation Error",
                             ["message"] = e.Message ?? "unknown",
                             ["event_type"] = e.EventType ?? "unknown",
                             ["timestamp"] = e.Timestamp
@@ -2415,7 +2494,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         ["warning_count"] = warningEvents.Count,
                         ["sample_warnings"] = sampleWarnings.Select(e => new Dictionary<string, object>
                         {
-                            ["package"] = e.Package ?? "unknown",
+                            ["package"] = ExtractPackageNameFromMessage(e.Message) ?? e.Package ?? "Installation Warning",
                             ["message"] = e.Message ?? "unknown", 
                             ["event_type"] = e.EventType ?? "unknown",
                             ["timestamp"] = e.Timestamp
