@@ -765,10 +765,12 @@ if (-not $SkipNUPKG) {
                 }
                 
                 foreach ($file in $nupkgFiles) {
-                    $targetPath = "$OutputDir/$($file.Name)"
+                    # Rename the nupkg file to include the full version format
+                    $newFileName = "ReportMate-$Version.nupkg"
+                    $targetPath = "$OutputDir/$newFileName"
                     Move-Item $file.FullName $targetPath -Force
                     $nupkgSize = (Get-Item $targetPath).Length / 1MB
-                    Write-Success "NUPKG created: $($file.Name) ($([math]::Round($nupkgSize, 2)) MB)"
+                    Write-Success "NUPKG created: $newFileName ($([math]::Round($nupkgSize, 2)) MB)"
                 }
                 
                 # Clean up executable from payload after successful NUPKG creation
