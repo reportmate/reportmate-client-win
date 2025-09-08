@@ -560,11 +560,16 @@ public class Program
         };
         buildCommand.SetHandler(HandleBuildCommand, verboseOption);
 
+        // Version command - display version information
+        var versionCommand = new Command("version", "Display version information");
+        versionCommand.SetHandler(HandleVersionCommand, verboseOption);
+
         rootCommand.AddCommand(runCommand);
         rootCommand.AddCommand(transmitCommand);
         rootCommand.AddCommand(infoCommand);
         rootCommand.AddCommand(installCommand);
         rootCommand.AddCommand(buildCommand);
+        rootCommand.AddCommand(versionCommand);
 
         return rootCommand;
     }
@@ -738,6 +743,12 @@ public class Program
     {
         try
         {
+            // Ensure console is available for output
+            if (GetConsoleWindow() == IntPtr.Zero)
+            {
+                AllocConsole();
+            }
+            
             var deviceInfoService = _serviceProvider!.GetRequiredService<IDeviceInfoService>();
             var configService = _serviceProvider!.GetRequiredService<IConfigurationService>();
             var configuration = _serviceProvider!.GetRequiredService<IConfiguration>();
@@ -841,6 +852,43 @@ public class Program
         catch (Exception ex)
         {
             _logger!.LogError(ex, "Error in build command");
+            return Task.FromResult(1);
+        }
+    }
+
+    private static Task<int> HandleVersionCommand(int verbose)
+    {
+        try
+        {
+            // Get version information
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            var versionString = version != null ? $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}.{version.Revision:D4}" : "1.0.0";
+            
+            var output = $"ReportMate Windows Client v{versionString}";
+            
+            if (verbose > 0)
+            {
+                output += $"\nAssembly: {System.Reflection.Assembly.GetExecutingAssembly().Location}";
+                output += $"\nPlatform: {Environment.OSVersion.VersionString}";
+                output += $"\nRuntime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}";
+            }
+            
+            // Try multiple output methods to ensure visibility
+            Console.WriteLine(output);
+            Console.Out.WriteLine(output);
+            Console.Out.Flush();
+            
+            // Also write to stderr as a fallback
+            Console.Error.WriteLine(output);
+            Console.Error.Flush();
+            
+            return Task.FromResult(0);
+        }
+        catch (Exception ex)
+        {
+            var errorMsg = $"Error retrieving version information: {ex.Message}";
+            Console.WriteLine(errorMsg);
+            Console.Error.WriteLine(errorMsg);
             return Task.FromResult(1);
         }
     }
