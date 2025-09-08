@@ -1,6 +1,6 @@
 product:
   name: "ReportMate"
-  version: "2025.09.05.0025"
+  version: "2025.09.08.0030"
   identifier: "reportmate"
   developer: "Windows Admins Open Source"
   description: "Windows client that integrates with Cimian and collects comprehensive device data using osquery for enterprise device management and security monitoring."

@@ -494,8 +494,8 @@ namespace ReportMate.WindowsClient.DataProcessing
             var version = assembly.GetName().Version;
             if (version != null)
             {
-                // Format as YYYY.MM.DD instead of the default 4-part version
-                return $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}";
+                // Format as YYYY.MM.DD.HHMM (full 4-part version) to match other services
+                return $"{version.Major:D4}.{version.Minor:D2}.{version.Build:D2}.{version.Revision:D4}";
             }
             return "1.0.0";
         }
