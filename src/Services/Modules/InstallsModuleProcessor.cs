@@ -151,8 +151,8 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process cache status
             ProcessCacheStatus(osqueryResults, data);
 
-            // DISABLED: This was overriding the correct status determination from ProcessManagedItemsFromReport
-            // ProcessLiveCimianStatus(osqueryResults, data);
+            // ENABLED: This provides LIVE status directly from items.json and fixes empty collections
+            ProcessLiveCimianStatus(osqueryResults, data);
 
             // Generate enhanced analytics from the processed data
             var analytics = GenerateEnhancedAnalytics(data);
