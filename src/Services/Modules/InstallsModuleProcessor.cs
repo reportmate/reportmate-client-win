@@ -131,41 +131,14 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             // Process Cimian reports data (sessions, items, events)
             ProcessCimianReports(osqueryResults, data);
-            // Generate session ID for snapshot management
-            var currentSessionId = DateTime.UtcNow.ToString("yyyy-MM-dd-HHmmss");
-            
-            // TEMPORARILY DISABLED: Generate Cimian data snapshot for clean reporting integration
-            // TODO: Fix JSON serialization issues with source generator context
-            // GenerateCimianSnapshot(data, currentSessionId);
-            
-            // Process Cimian data transformation for clean reporting
-            // var cimianProcessingSuccessful = ProcessCimianData(data, currentSessionId);
-            
-            // Always use legacy processing for now until JSON serialization is fixed
-            // (removing else clause since we always take this path now)
-            _logger.LogInformation("Using legacy processing (snapshot generation temporarily disabled)");
-            
-            // Process recent installs and deployments
-            ProcessRecentInstalls(osqueryResults, data);
             
             // Process cache status
             ProcessCacheStatus(osqueryResults, data);
 
-            // ENABLED: This provides LIVE status directly from items.json and fixes empty collections
-            ProcessLiveCimianStatus(osqueryResults, data);
-
-            // Generate enhanced analytics from the processed data
-            var analytics = GenerateEnhancedAnalytics(data);
-            var recommendations = GeneratePerformanceRecommendations(analytics);
-            
-            // Store analytics in the data for API consumption
-            data.CacheStatus["enhanced_analytics"] = analytics;
-            data.CacheStatus["performance_recommendations"] = recommendations;
-
             data.LastCheckIn = DateTime.UtcNow;
 
-            _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Sessions: {SessionCount}, Events: {EventCount}", 
-                deviceId, data.Cimian?.IsInstalled ?? false, data.RecentSessions.Count, data.RecentEvents.Count);
+            _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Items: {ItemCount}", 
+                deviceId, data.Cimian?.IsInstalled ?? false, data.Cimian?.Items?.Count ?? 0);
 
             return data;
         }
@@ -604,67 +577,6 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
         }
 
-        private void ProcessRecentInstalls(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
-        {
-            // Check if we have enhanced Cimian reports first
-            const string CIMIAN_REPORTS_PATH = @"C:\ProgramData\ManagedInstalls\reports";
-            var itemsPath = Path.Combine(CIMIAN_REPORTS_PATH, "items.json");
-            var hasEnhancedReports = File.Exists(itemsPath);
-            
-            // Process managed software installs from Cimian
-            if (osqueryResults.TryGetValue("cimian_managed_software", out var recentInstalls) && !hasEnhancedReports)
-            {
-                // Only process basic registry data if enhanced reports are not available
-                foreach (var install in recentInstalls)
-                {
-                    var managedInstall = new ManagedInstall
-                    {
-                        Name = GetStringValue(install, "name"),
-                        Version = GetStringValue(install, "version"),
-                        Status = "Installed",
-                        Source = GetStringValue(install, "publisher"),
-                        InstallLocation = GetStringValue(install, "install_location")
-                    };
-
-                    var installDateStr = GetStringValue(install, "install_date");
-                    if (DateTime.TryParse(installDateStr, out var installDate))
-                    {
-                        managedInstall.InstallDate = installDate;
-                    }
-
-                    data.RecentInstalls.Add(managedInstall);
-                }
-                
-                _logger.LogDebug("Added {Count} managed installs from Windows registry (no enhanced reports available)", recentInstalls.Count);
-            }
-            else if (hasEnhancedReports)
-            {
-                _logger.LogDebug("Skipping basic registry-based installs - enhanced Cimian reports are available");
-            }
-
-            // Process pending packages from cache
-            if (osqueryResults.TryGetValue("cimian_cached_packages", out var deployments))
-            {
-                foreach (var deployment in deployments)
-                {
-                    var pendingInstall = new ManagedInstall
-                    {
-                        Name = GetStringValue(deployment, "package_name"),
-                        Status = "Cached",
-                        Source = "Cimian Cache"
-                    };
-
-                    var mtimeStr = GetStringValue(deployment, "mtime");
-                    if (DateTime.TryParse(mtimeStr, out var mtime))
-                    {
-                        pendingInstall.InstallDate = mtime;
-                    }
-
-                    data.PendingInstalls.Add(pendingInstall);
-                }
-            }
-        }
-
         private void ProcessCimianReports(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
         {
             try
@@ -676,8 +588,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 if (File.Exists(sessionsPath))
                 {
                     var sessions = ReadCimianSessionsReport(sessionsPath);
-                    data.RecentSessions.AddRange(sessions.Take(20)); // Limit to 20 most recent sessions
-                    // Also populate CimianInfo.Sessions collection
+                    // Store sessions in Cimian data structure only
                     if (data.Cimian != null)
                     {
                         data.Cimian.Sessions.AddRange(sessions.Take(20));
@@ -692,8 +603,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         var path = GetStringValue(sessionsFile, "path");
                         var sessions = ReadCimianSessionsReport(path);
-                        data.RecentSessions.AddRange(sessions.Take(20));
-                        // Also populate CimianInfo.Sessions collection
+                        // Store sessions in Cimian data structure only
                         if (data.Cimian != null)
                         {
                             data.Cimian.Sessions.AddRange(sessions.Take(20));
@@ -728,8 +638,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 if (File.Exists(eventsPath))
                 {
                     var events = ReadCimianEventsReport(eventsPath);
-                    data.RecentEvents.AddRange(events.Take(100)); // Limit to 100 most recent events
-                    // Also populate CimianInfo.Events collection
+                    // Store events in Cimian data structure only
                     if (data.Cimian != null)
                     {
                         data.Cimian.Events.AddRange(events.Take(100));
@@ -744,8 +653,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         var path = GetStringValue(eventsFile, "path");
                         var events = ReadCimianEventsReport(path);
-                        data.RecentEvents.AddRange(events.Take(100));
-                        // Also populate CimianInfo.Events collection
+                        // Store events in Cimian data structure only
                         if (data.Cimian != null)
                         {
                             data.Cimian.Events.AddRange(events.Take(100));
@@ -761,10 +669,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
 
                 // Enhanced cache status from most recent session
-                if (data.RecentSessions.Any())
+                if (data.Cimian?.Sessions?.Any() == true)
                 {
-                    var latestSession = data.RecentSessions.First();
-                    if (latestSession.CacheSizeMb > 0)
+                    var latestSession = data.Cimian?.Sessions?.FirstOrDefault();
+                    if (latestSession?.CacheSizeMb > 0)
                     {
                         data.CacheStatus["cache_size_mb"] = latestSession.CacheSizeMb;
                         data.CacheStatus["last_updated"] = latestSession.StartTime.ToString("O");
@@ -772,108 +680,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
 
                 _logger.LogInformation("Enhanced Cimian reports processing completed - Sessions: {Sessions}, Items: {Items}, Events: {Events}", 
-                    data.RecentSessions.Count, data.RecentInstalls.Count, data.RecentEvents.Count);
+                    (data.Cimian?.Sessions?.Count ?? 0), (data.Cimian?.Items?.Count ?? 0), (data.Cimian?.Events?.Count ?? 0));
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Error processing enhanced Cimian reports data");
-            }
-        }
-
-        /// <summary>
-        /// Captures LIVE Cimian status by reading actual Cimian reports data.
-        /// This provides real-time status from the current items.json report file.
-        /// </summary>
-        private void ProcessLiveCimianStatus(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
-        {
-            try
-            {
-                _logger.LogInformation("Capturing LIVE Cimian status from actual reports data...");
-                
-                // Read current items from reports directory
-                const string ITEMS_REPORT_PATH = @"C:\ProgramData\ManagedInstalls\reports\items.json";
-                
-                if (!File.Exists(ITEMS_REPORT_PATH))
-                {
-                    _logger.LogWarning("Items report not found, skipping live status capture: {Path}", ITEMS_REPORT_PATH);
-                    return;
-                }
-
-                var itemsJson = File.ReadAllText(ITEMS_REPORT_PATH);
-                var reportItems = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(itemsJson, JsonOptions);
-                
-                if (reportItems == null || reportItems.Count == 0)
-                {
-                    _logger.LogWarning("No items found in reports, skipping live status capture");
-                    return;
-                }
-
-                // OVERRIDE all existing data with fresh live status
-                data.RecentInstalls.Clear();
-                if (data.Cimian != null)
-                {
-                    data.Cimian.Items.Clear();
-                }
-
-                // Build live items with current timestamp
-                var currentTime = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
-                var currentSessionId = DateTime.UtcNow.ToString("yyyy-MM-dd-HHmmss");
-
-                // TEMPORARILY DISABLED: Generate internal snapshot for caching
-                // TODO: Fix JSON serialization issues with source generator context
-                // GenerateCimianSnapshot(data, currentSessionId);
-
-                // Process each item from the actual reports
-                foreach (var reportItem in reportItems)
-                {
-                    var itemId = GetDictValue(reportItem, "id");
-                    var itemName = GetDictValue(reportItem, "item_name");
-                    var displayName = GetDictValue(reportItem, "display_name");
-                    var latestVersion = GetDictValue(reportItem, "latest_version");
-                    var installedVersion = GetDictValue(reportItem, "installed_version");
-                    
-                    // Determine status based on recent attempts
-                    var rawStatus = DetermineStatusFromRecentAttempts(reportItem);
-                    var mappedStatus = MapCimianStatusToReportMate(rawStatus);
-                    
-                    // Create ManagedInstall item
-                    var managedInstall = new ManagedInstall
-                    {
-                        Id = itemId,
-                        Name = itemName,
-                        DisplayName = displayName,
-                        Status = mappedStatus, // Use mapped status
-                        Version = latestVersion,
-                        InstalledVersion = installedVersion,
-                        LastSeenInSession = currentSessionId,
-                        Source = "Cimian",
-                        Type = "cimian",
-                        ItemType = "unknown"
-                    };
-                    data.RecentInstalls.Add(managedInstall);
-
-                    // Create corresponding CimianItem
-                    if (data.Cimian != null)
-                    {
-                        data.Cimian.Items.Add(new CimianItem
-                        {
-                            Id = itemId,
-                            ItemName = itemName,
-                            DisplayName = displayName,
-                            CurrentStatus = mappedStatus, // Use mapped status
-                            LatestVersion = latestVersion,
-                            InstalledVersion = installedVersion,
-                            LastSeenInSession = currentSessionId
-                        });
-                    }
-                }
-                
-                _logger.LogInformation("LIVE STATUS COMPLETE: Processed {Count} items from actual reports data", 
-                    data.RecentInstalls.Count);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error capturing live Cimian status");
             }
         }
 
@@ -1350,12 +1161,22 @@ namespace ReportMate.WindowsClient.Services.Modules
                         LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session")
                     };
 
-                    // Clean status mapping for Cimian
+                    // Clean status mapping for Cimian - PRIORITIZE FAILURE STATES
                     var cimianStatus = "Unknown";
-                    if (item.CurrentStatus == "Error" || HasFailedAttempts(itemDict))
+                    
+                    // CRITICAL: Check failure states FIRST before version matching
+                    if (item.CurrentStatus?.Equals("Error", StringComparison.OrdinalIgnoreCase) == true ||
+                        item.CurrentStatus?.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) == true ||
+                        item.CurrentStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true ||
+                        HasFailedAttempts(itemDict))
                     {
-                        cimianStatus = "Error";
+                        cimianStatus = "Failed";  // Map Install Loop and failures to Failed
                         errorsCount++;
+                    }
+                    else if (item.CurrentStatus?.Equals("Pending", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        cimianStatus = "Pending";
+                        updatesCount++;
                     }
                     else if (!string.IsNullOrEmpty(item.InstalledVersion) && !string.IsNullOrEmpty(item.LatestVersion))
                     {
@@ -1377,6 +1198,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         cimianStatus = "Pending";
                     }
+
+                    // Log the status determination for debugging
+                    _logger.LogInformation("ITEM STATUS MAPPING - Item [{id}]: raw_status='{rawStatus}', failure_count={failureCount}, mapped_status='{mappedStatus}'", 
+                        GetDictValue(itemDict, "id"), 
+                        item.CurrentStatus ?? "null", 
+                        GetDictValue(itemDict, "failure_count") ?? "0",
+                        cimianStatus);
 
                     // Check for warnings
                     if (HasWarningAttempts(itemDict) && cimianStatus != "Error")
@@ -1970,6 +1798,20 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var json = File.ReadAllText(filePath);
                 using var document = JsonDocument.Parse(json);
                 
+                // Handle null or empty JSON
+                if (document.RootElement.ValueKind == JsonValueKind.Null)
+                {
+                    _logger.LogDebug("Cimian events report contains null - no events to process");
+                    return events;
+                }
+                
+                // Handle non-array JSON
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    _logger.LogDebug("Cimian events report is not an array - no events to process");
+                    return events;
+                }
+                
                 foreach (var eventElement in document.RootElement.EnumerateArray())
                 {
                     var cimianEvent = new CimianEvent
@@ -2127,9 +1969,20 @@ namespace ReportMate.WindowsClient.Services.Modules
                         }
                     }
                     
-                    // CRITICAL FIX: Determine status based on semantic version comparison
+                    // CRITICAL FIX: Determine status based on failure states FIRST, then version comparison
                     string determinedStatus;
-                    if (!string.IsNullOrEmpty(latestVersion) && !string.IsNullOrEmpty(installedVersion))
+                    var currentStatus = GetDictValue(item, "current_status");
+                    
+                    // PRIORITY 1: Check for failure states BEFORE version matching
+                    if (currentStatus?.Equals("Error", StringComparison.OrdinalIgnoreCase) == true ||
+                        currentStatus?.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) == true ||
+                        currentStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        determinedStatus = "Failed";
+                        _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: current_status='{CurrentStatus}' -> 'Failed' (prioritizing failure state over version comparison)", 
+                            GetDictValue(item, "id"), currentStatus);
+                    }
+                    else if (!string.IsNullOrEmpty(latestVersion) && !string.IsNullOrEmpty(installedVersion))
                     {
                         try
                         {
@@ -2340,11 +2193,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (managedInstall.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
                         managedInstall.Status.Equals("Install Loop", StringComparison.OrdinalIgnoreCase))
                     {
-                        data.RecentInstalls.Add(managedInstall); // Failed items go to RecentInstalls for visibility
+                        // Removed deprecated RecentInstalls usage
                     }
                     else
                     {
-                        data.RecentInstalls.Add(managedInstall); // All items for now
+                        // Removed deprecated RecentInstalls usage
                     }
 
                     _logger.LogDebug("Processed managed item: {Name} (Status: {Status}, Version: {Version}, Install Method: {Method})", 
@@ -2415,7 +2268,8 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         /// <summary>
         /// Generate ReportMate events from processed Cimian data for dashboard display
-        /// Now generates accurate Success, Warning, Error events based on the last Cimian run
+        /// Creates a single consolidated event per device reporting based on the latest Cimian run
+        /// Priority: Error > Warning > Success (only generate one event per device)
         /// </summary>
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(InstallsData data)
         {
@@ -2423,10 +2277,10 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             try
             {
-                _logger.LogInformation("Starting event generation with {EventCount} recent events", data.RecentEvents?.Count ?? 0);
+                _logger.LogInformation("Starting consolidated event generation for device {DeviceId}", data.DeviceId);
                 
-                // Count ALL recent events from the latest Cimian run (regardless of session filtering issues)
-                var allRecentEvents = data.RecentEvents ?? new List<CimianEvent>();
+                // Count ALL recent events from the latest Cimian run
+                var allRecentEvents = data.Cimian?.Events ?? new List<CimianEvent>();
                 var errorEvents = allRecentEvents.Where(e => e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase)).ToList();
                 
                 // Filter out expected/non-actionable warnings (like architecture mismatches on ARM64 systems)
@@ -2437,165 +2291,114 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                 var infoEvents = allRecentEvents.Where(e => e.Level.Equals("INFO", StringComparison.OrdinalIgnoreCase)).ToList();
                 
-                _logger.LogInformation("Event counts - Errors: {ErrorCount}, Warnings: {WarningCount}, Info: {InfoCount}", 
-                    errorEvents.Count, warningEvents.Count, infoEvents.Count);
-                
                 // Get latest session info if available
-                var latestSession = data.RecentSessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
-                var sessionInfo = latestSession != null ? new Dictionary<string, object>
+                var latestSession = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
+                var successCount = latestSession?.Successes ?? 0;
+                
+                _logger.LogInformation("Event analysis - Errors: {ErrorCount}, Warnings: {WarningCount}, Successes: {SuccessCount}", 
+                    errorEvents.Count, warningEvents.Count, successCount);
+                
+                // Build consolidated message and determine event type
+                string eventType;
+                string message;
+                var details = new Dictionary<string, object>();
+                
+                // Add session info to details
+                if (latestSession != null)
                 {
-                    ["session_id"] = latestSession.SessionId ?? "unknown",
-                    ["run_type"] = latestSession.RunType ?? "unknown",
-                    ["successes"] = latestSession.Successes,
-                    ["failures"] = latestSession.Failures,
-                    ["duration_seconds"] = latestSession.DurationSeconds
-                } : new Dictionary<string, object>();
+                    details["session_id"] = latestSession.SessionId ?? "unknown";
+                    details["run_type"] = latestSession.RunType ?? "unknown";
+                    details["duration_seconds"] = latestSession.DurationSeconds;
+                }
                 
-                // Generate separate events for each status type that has items (not mutually exclusive)
-                
-                // ERROR: Generate error event if any ERROR level events exist
+                // PRIORITY 1: ERROR - If there are any errors, this is an error event
                 if (errorEvents.Any())
                 {
-                    var sampleErrors = errorEvents.Take(3).ToList();
-                    var firstError = sampleErrors.FirstOrDefault();
-                    var errorMessage = errorEvents.Count == 1 
-                        ? $"{errorEvents.Count} failed install"
-                        : $"{errorEvents.Count} failed installs";
-                    
-                    var errorDetails = new Dictionary<string, object>(sessionInfo)
-                    {
-                        ["error_count"] = errorEvents.Count,
-                        ["sample_errors"] = sampleErrors.Select(e => new Dictionary<string, object>
-                        {
-                            ["package"] = ExtractPackageNameFromMessage(e.Message) ?? e.Package ?? "Installation Error",
-                            ["message"] = e.Message ?? "unknown",
-                            ["event_type"] = e.EventType ?? "unknown",
-                            ["timestamp"] = e.Timestamp
-                        }).ToList(),
-                        ["total_events"] = allRecentEvents.Count,
-                        ["module_status"] = "error"
-                    };
-                    
-                    events.Add(CreateEvent("error", errorMessage, errorDetails, DateTime.UtcNow));
-                    _logger.LogInformation("Generated ERROR event for {ErrorCount} Cimian errors", errorEvents.Count);
-                }
-                
-                // WARNING: Generate warning event if any WARN level events exist
-                if (warningEvents.Any())
-                {
-                    var sampleWarnings = warningEvents.Take(3).ToList();
-                    var firstWarning = sampleWarnings.FirstOrDefault();
-                    var warningMessage = warningEvents.Count == 1 
-                        ? $"{warningEvents.Count} install warning"
-                        : $"{warningEvents.Count} install warnings";
-                    
-                    var warningDetails = new Dictionary<string, object>(sessionInfo)
-                    {
-                        ["warning_count"] = warningEvents.Count,
-                        ["sample_warnings"] = sampleWarnings.Select(e => new Dictionary<string, object>
-                        {
-                            ["package"] = ExtractPackageNameFromMessage(e.Message) ?? e.Package ?? "Installation Warning",
-                            ["message"] = e.Message ?? "unknown", 
-                            ["event_type"] = e.EventType ?? "unknown",
-                            ["timestamp"] = e.Timestamp
-                        }).ToList(),
-                        ["total_events"] = allRecentEvents.Count,
-                        ["module_status"] = "warning"
-                    };
-                    
-                    events.Add(CreateEvent("warning", warningMessage, warningDetails, DateTime.UtcNow));
-                    _logger.LogInformation("Generated WARNING event for {WarningCount} Cimian warnings", warningEvents.Count);
-                }
-                
-                // SUCCESS: Generate success event if there are successful operations or only info events
-                if (infoEvents.Any() || (latestSession?.Successes > 0))
-                {
-                    // Build compound message showing overall status
+                    eventType = "error";
                     var messageParts = new List<string>();
                     
-                    if (errorEvents.Any())
-                        messageParts.Add($"{errorEvents.Count} failed install{(errorEvents.Count == 1 ? "" : "s")}");
+                    // Always mention failed installs first
+                    messageParts.Add($"{errorEvents.Count} failed install{(errorEvents.Count == 1 ? "" : "s")}");
                     
+                    // Add warnings if any
                     if (warningEvents.Any())
                         messageParts.Add($"{warningEvents.Count} warning{(warningEvents.Count == 1 ? "" : "s")}");
                     
-                    var successCount = latestSession?.Successes ?? 0;
+                    // Add successes if any
                     if (successCount > 0)
-                        messageParts.Add($"{successCount} items installs successful");
+                        messageParts.Add($"{successCount} successful install{(successCount == 1 ? "" : "s")}");
+                    
+                    message = string.Join(", ", messageParts);
+                    
+                    details["error_count"] = errorEvents.Count;
+                    details["warning_count"] = warningEvents.Count;
+                    details["success_count"] = successCount;
+                    details["module_status"] = "error";
+                    
+                    _logger.LogInformation("Generated single ERROR event: {Message}", message);
+                }
+                // PRIORITY 2: WARNING - If there are warnings but no errors, this is a warning event
+                else if (warningEvents.Any())
+                {
+                    eventType = "warning";
+                    var messageParts = new List<string>();
+                    
+                    // Always mention warnings first
+                    messageParts.Add($"{warningEvents.Count} warning{(warningEvents.Count == 1 ? "" : "s")}");
+                    
+                    // Add successes if any
+                    if (successCount > 0)
+                        messageParts.Add($"{successCount} successful install{(successCount == 1 ? "" : "s")}");
+                    
+                    message = string.Join(", ", messageParts);
+                    
+                    details["warning_count"] = warningEvents.Count;
+                    details["success_count"] = successCount;
+                    details["module_status"] = "warning";
+                    
+                    _logger.LogInformation("Generated single WARNING event: {Message}", message);
+                }
+                // PRIORITY 3: SUCCESS - Only if there are actual successful operations
+                else if (successCount > 0)
+                {
+                    eventType = "success";
+                    message = $"{successCount} successful install{(successCount == 1 ? "" : "s")}";
+                    
+                    details["success_count"] = successCount;
+                    details["module_status"] = "success";
+                    
+                    _logger.LogInformation("Generated single SUCCESS event: {Message}", message);
+                }
+                // NO ACTION TAKEN: Don't generate "operational" events if no installs occurred
+                else
+                {
+                    // Only generate an event if Cimian is not installed (warning case)
+                    if (data.Cimian?.IsInstalled != true)
+                    {
+                        eventType = "warning";
+                        message = "Installs system not available";
+                        details["recommendation"] = "Install Cimian for managed software deployment";
+                        details["module_status"] = "warning";
+                        
+                        _logger.LogInformation("Generated single WARNING event - Cimian not detected");
+                    }
                     else
-                        messageParts.Add("Installs system operational");
-                    
-                    var successMessage = string.Join(", ", messageParts);
-                    
-                    var successDetails = new Dictionary<string, object>(sessionInfo)
                     {
-                        ["info_count"] = infoEvents.Count,
-                        ["packages_processed"] = latestSession?.Successes ?? 0,
-                        ["sample_info"] = infoEvents.Take(3).Select(e => new Dictionary<string, object>
-                        {
-                            ["package"] = e.Package ?? "unknown",
-                            ["message"] = e.Message ?? "unknown",
-                            ["event_type"] = e.EventType ?? "unknown"
-                        }).ToList(),
-                        ["total_events"] = allRecentEvents.Count,
-                        ["module_status"] = "success"
-                    };
-                    
-                    events.Add(CreateEvent("success", successMessage, successDetails, DateTime.UtcNow));
-                    _logger.LogInformation("Generated SUCCESS event for {InfoCount} Cimian info events", infoEvents.Count);
-                }
-                
-                // NO RECENT ACTIVITY: Generate success event if Cimian is installed but has no recent activity
-                else if (data.Cimian?.IsInstalled == true)
-                {
-                    events.Add(CreateEvent("success", "Installs system operational", 
-                        new Dictionary<string, object> 
-                        {
-                            ["cimian_version"] = data.Cimian.Version ?? "unknown",
-                            ["status"] = data.Cimian.Status ?? "unknown",
-                            ["module_status"] = "success"
-                        }));
-                    _logger.LogInformation("Generated SUCCESS event - Cimian installed but no recent activity");
-                }
-                
-                // CIMIAN NOT AVAILABLE: Generate warning if Cimian is not installed or no data
-                if (data.Cimian?.IsInstalled != true)
-                {
-                    events.Add(CreateEvent("warning", "Installs system not available", 
-                        new Dictionary<string, object> 
-                        {
-                            ["recommendation"] = "Install Cimian for managed software deployment",
-                            ["module_status"] = "warning"
-                        }));
-                    _logger.LogInformation("Generated WARNING event - Cimian not detected");
-                }
-
-                // Only add critical performance events if they're related to real session failures
-                if (latestSession?.Failures > 0 && latestSession.Successes + latestSession.Failures > 0)
-                {
-                    var actualSuccessRate = (double)latestSession.Successes / (latestSession.Successes + latestSession.Failures) * 100;
-                    if (actualSuccessRate < 50 && !events.Any(e => e.EventType == "error"))
-                    {
-                        events.Add(CreateEvent("error", 
-                            $"Critical install session failure - {100 - actualSuccessRate:F0}% failed", 
-                            new Dictionary<string, object> 
-                            { 
-                                ["success_rate"] = actualSuccessRate,
-                                ["failed_packages"] = latestSession.Failures,
-                                ["successful_packages"] = latestSession.Successes,
-                                ["category"] = "session_performance",
-                                ["module_status"] = "error"
-                            }));
-                        _logger.LogInformation("Generated additional ERROR event for poor session performance");
+                        // Cimian is installed but no activity - don't generate any event
+                        _logger.LogInformation("No installs activity detected - no event generated (avoiding noise)");
+                        return Task.FromResult(events); // Return empty list
                     }
                 }
-
-                _logger.LogInformation("Generated {EventCount} total ReportMate events from Cimian data with types: {EventTypes}", 
-                    events.Count, string.Join(", ", events.Select(e => e.EventType)));
+                
+                // Create the single consolidated event
+                events.Add(CreateEvent(eventType, message, details, DateTime.UtcNow));
+                
+                _logger.LogInformation("Generated 1 consolidated event of type '{EventType}' for device {DeviceId}", 
+                    eventType, data.DeviceId);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error generating events from Cimian data");
+                _logger.LogError(ex, "Error generating consolidated event from Cimian data");
                 
                 // Add error event for the generation failure itself
                 events.Add(CreateEvent("error", "Installs monitoring error", 
@@ -2743,9 +2546,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             try
             {
                 // Performance analytics
-                if (data.RecentSessions?.Any() == true)
+                if (data.Cimian?.Sessions?.Any() == true)
                 {
-                    var sessions = data.RecentSessions;
+                    var sessions = data.Cimian?.Sessions ?? new List<CimianSession>();
                     analytics["performance"] = new PerformanceAnalytics
                     {
                         AvgSessionDuration = sessions.Average(s => s.DurationSeconds),
@@ -2812,9 +2615,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
 
                 // Event-level analytics
-                if (data.RecentEvents?.Any() == true)
+                if (data.Cimian?.Events?.Any() == true)
                 {
-                    var events = data.RecentEvents;
+                    var events = data.Cimian?.Events ?? new List<CimianEvent>();
                     
                     analytics["events"] = new EventAnalytics
                     {
