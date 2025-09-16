@@ -13,6 +13,7 @@ namespace ReportMate.WindowsClient.Services
 {
     /// <summary>
     /// Service for advanced Cimian integration and structured logging support
+    /// Enhanced for Cimian Technical Specification v1.0 - September 11, 2025
     /// </summary>
     public interface ICimianIntegrationService
     {
@@ -22,6 +23,11 @@ namespace ReportMate.WindowsClient.Services
         Task<List<CimianEvent>> GetRecentEventsAsync(int limitHours = 24);
         Task<Dictionary<string, object>> GetCimianReportsDataAsync();
         Task<bool> ExportReportMateDataForCimianAsync(string outputPath);
+        
+        // Enhanced methods for technical specification support
+        Task<CimianSessionData?> GetLatestSessionDataAsync();
+        Task<List<CimianPackageItem>> GetPackageItemsAsync();
+        Task<List<CimianEventData>> GetEventStreamAsync(int limitEvents = 100);
     }
 
     public class CimianIntegrationService : ICimianIntegrationService
@@ -452,6 +458,110 @@ namespace ReportMate.WindowsClient.Services
                 _logger.LogDebug("Failed to read events from session {SessionId}: {Error}", sessionId, ex.Message);
             }
 
+            return events;
+        }
+
+        /// <summary>
+        /// Get latest session data from sessions.json according to technical specification
+        /// </summary>
+        public async Task<CimianSessionData?> GetLatestSessionDataAsync()
+        {
+            try
+            {
+                var sessionsPath = Path.Combine(CIMIAN_REPORTS_PATH, "sessions.json");
+                if (!File.Exists(sessionsPath))
+                {
+                    _logger.LogDebug("Sessions.json not found: {Path}", sessionsPath);
+                    return null;
+                }
+
+                var jsonContent = await File.ReadAllTextAsync(sessionsPath);
+                var sessionData = JsonSerializer.Deserialize<CimianSessionData>(jsonContent);
+                
+                _logger.LogDebug("Loaded session data: {SessionId}", sessionData?.SessionId ?? "unknown");
+                return sessionData;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error reading latest session data from sessions.json");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Get package items from items.json according to technical specification
+        /// </summary>
+        public async Task<List<CimianPackageItem>> GetPackageItemsAsync()
+        {
+            try
+            {
+                var itemsPath = Path.Combine(CIMIAN_REPORTS_PATH, "items.json");
+                if (!File.Exists(itemsPath))
+                {
+                    _logger.LogDebug("Items.json not found: {Path}", itemsPath);
+                    return new List<CimianPackageItem>();
+                }
+
+                var jsonContent = await File.ReadAllTextAsync(itemsPath);
+                var items = JsonSerializer.Deserialize<List<CimianPackageItem>>(jsonContent);
+                
+                _logger.LogDebug("Loaded {Count} package items from items.json", items?.Count ?? 0);
+                return items ?? new List<CimianPackageItem>();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error reading package items from items.json");
+                return new List<CimianPackageItem>();
+            }
+        }
+
+        /// <summary>
+        /// Get event stream from events.jsonl according to technical specification (JSON Lines format)
+        /// </summary>
+        public async Task<List<CimianEventData>> GetEventStreamAsync(int limitEvents = 100)
+        {
+            var events = new List<CimianEventData>();
+            
+            try
+            {
+                var eventsPath = Path.Combine(CIMIAN_REPORTS_PATH, "events.jsonl");
+                if (!File.Exists(eventsPath))
+                {
+                    _logger.LogDebug("Events.jsonl not found: {Path}", eventsPath);
+                    return events;
+                }
+
+                var lines = await File.ReadAllLinesAsync(eventsPath);
+                foreach (var line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    
+                    try
+                    {
+                        var eventData = JsonSerializer.Deserialize<CimianEventData>(line);
+                        if (eventData != null)
+                        {
+                            events.Add(eventData);
+                        }
+                    }
+                    catch (JsonException ex)
+                    {
+                        _logger.LogDebug("Skipping invalid JSON line in events.jsonl: {Error}", ex.Message);
+                    }
+                }
+                
+                // Sort by timestamp descending (most recent first) and limit
+                events = events.OrderByDescending(e => DateTime.TryParse(e.Timestamp, out var ts) ? ts : DateTime.MinValue)
+                              .Take(limitEvents)
+                              .ToList();
+                
+                _logger.LogDebug("Loaded {Count} events from events.jsonl (limited to {Limit})", events.Count, limitEvents);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error reading event stream from events.jsonl");
+            }
+            
             return events;
         }
     }
