@@ -343,7 +343,7 @@ namespace ReportMate.WindowsClient.Services
                 {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+                    TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
 
@@ -370,7 +370,7 @@ namespace ReportMate.WindowsClient.Services
                 {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+                    TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
 
@@ -930,7 +930,7 @@ namespace ReportMate.WindowsClient.Services
                 {
                     WriteIndented = true,
                     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+                    TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
 

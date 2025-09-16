@@ -56,6 +56,12 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(InventoryData))]
 [JsonSerializable(typeof(InstallsData))]
 [JsonSerializable(typeof(CimianReportFileInfo))]
+// Cimian Technical Specification v1.0 models
+[JsonSerializable(typeof(Modules.CimianSessionData))]
+[JsonSerializable(typeof(Modules.CimianPackageItem))]
+[JsonSerializable(typeof(Modules.CimianEventData))]
+[JsonSerializable(typeof(List<Modules.CimianPackageItem>))]
+[JsonSerializable(typeof(List<Modules.CimianEventData>))]
 [JsonSerializable(typeof(ManagementData), TypeInfoPropertyName = "ModularManagementData")]
 [JsonSerializable(typeof(NetworkData), TypeInfoPropertyName = "ModularNetworkData")]
 [JsonSerializable(typeof(PeripheralsModuleData))]
@@ -92,6 +98,14 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Dictionary<string, Modules.BlockingApplicationInfo>))]
 [JsonSerializable(typeof(Dictionary<string, Modules.PackageAnalytics>))]
 [JsonSerializable(typeof(Dictionary<string, int>))]
+// Storage Management types for hardware module
+[JsonSerializable(typeof(Modules.StorageDevice))]
+[JsonSerializable(typeof(Modules.DirectoryInformation))]
+[JsonSerializable(typeof(Modules.FileInformation))]
+[JsonSerializable(typeof(List<Modules.StorageDevice>))]
+[JsonSerializable(typeof(List<Modules.DirectoryInformation>))]
+[JsonSerializable(typeof(List<Modules.FileInformation>))]
+[JsonSerializable(typeof(Modules.DirectoryCategory))]
 // Anonymous types used in data transmission
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(object))]

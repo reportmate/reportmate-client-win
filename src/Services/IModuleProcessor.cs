@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using ReportMate.WindowsClient.Models.Modules;
 
@@ -88,6 +89,20 @@ namespace ReportMate.WindowsClient.Services
         {
             if (dict.TryGetValue(key, out var value))
             {
+                // Handle JsonElement types (from JSON parsing)
+                if (value is JsonElement jsonElement)
+                {
+                    // Try to get string value regardless of ValueKind, as osquery returns strings
+                    try 
+                    {
+                        var stringValue = jsonElement.GetString();
+                        return stringValue ?? string.Empty;
+                    }
+                    catch
+                    {
+                        return string.Empty;
+                    }
+                }
                 return value?.ToString() ?? string.Empty;
             }
             return string.Empty;
@@ -115,7 +130,19 @@ namespace ReportMate.WindowsClient.Services
         {
             if (dict.TryGetValue(key, out var value))
             {
-                if (long.TryParse(value?.ToString(), out var longValue))
+                // Handle JsonElement types (from JSON parsing)
+                if (value is JsonElement jsonElement)
+                {
+                    if (jsonElement.ValueKind == JsonValueKind.String && long.TryParse(jsonElement.GetString(), out var longFromString))
+                    {
+                        return longFromString;
+                    }
+                    else if (jsonElement.ValueKind == JsonValueKind.Number && jsonElement.TryGetInt64(out var longFromNumber))
+                    {
+                        return longFromNumber;
+                    }
+                }
+                else if (long.TryParse(value?.ToString(), out var longValue))
                 {
                     return longValue;
                 }
