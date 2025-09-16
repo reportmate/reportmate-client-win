@@ -52,6 +52,16 @@
       "query": "SELECT variable as name, value FROM default_environment WHERE variable IN ('COMPUTERNAME', 'USERDOMAIN', 'USERDNSDOMAIN');",
       "interval": 3600,
       "description": "Computer name and domain information from environment variables"
+    },
+    "dns_settings": {
+      "query": "SELECT path, key, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters' AND key IN ('Domain', 'DhcpDomain', 'SearchList', 'DhcpDNS', 'NameServer');",
+      "interval": 600,
+      "description": "DNS configuration from registry including search domains"
+    },
+    "netbios_settings": {
+      "query": "SELECT path, key, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\NetBT\\Parameters' AND key IN ('EnableLMHosts', 'NodeType', 'ScopeID');",
+      "interval": 600,
+      "description": "NETBIOS configuration settings from registry"
     }
   }
 }

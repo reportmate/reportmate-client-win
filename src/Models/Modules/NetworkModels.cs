@@ -14,6 +14,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<WifiNetwork> WifiNetworks { get; set; } = new();
         public List<VpnConnection> VpnConnections { get; set; } = new();
         public DnsConfiguration Dns { get; set; } = new();
+        public NetbiosConfiguration Netbios { get; set; } = new();
         public List<NetworkRoute> Routes { get; set; } = new();
         public string PrimaryInterface { get; set; } = string.Empty;
         public ActiveConnectionInfo ActiveConnection { get; set; } = new();
@@ -67,6 +68,28 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<string> Servers { get; set; } = new();
         public string Domain { get; set; } = string.Empty;
         public List<string> SearchDomains { get; set; } = new();
+        public string DhcpDomain { get; set; } = string.Empty;
+        public List<string> DhcpDnsServers { get; set; } = new();
+        public string NameServer { get; set; } = string.Empty;
+    }
+
+    public class NetbiosConfiguration
+    {
+        public string NodeType { get; set; } = string.Empty;
+        public bool EnableLMHosts { get; set; }
+        public string ScopeID { get; set; } = string.Empty;
+        public List<NetbiosName> LocalNames { get; set; } = new();
+        public List<NetbiosName> NameCache { get; set; } = new();
+    }
+
+    public class NetbiosName
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string IpAddress { get; set; } = string.Empty;
+        public string Interface { get; set; } = string.Empty;
+        public int? Ttl { get; set; }
     }
 
     public class NetworkRoute

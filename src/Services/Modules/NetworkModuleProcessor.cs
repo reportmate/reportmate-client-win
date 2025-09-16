@@ -62,6 +62,12 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Collect hostname and domain information
             CollectHostnameInformation(data, osqueryResults);
 
+            // Collect enhanced DNS configuration
+            await CollectEnhancedDnsConfiguration(data, osqueryResults);
+
+            // Collect NETBIOS information
+            CollectNetbiosInformation(data, osqueryResults);
+
             // Set primary interface based on active connection
             if (!string.IsNullOrEmpty(data.ActiveConnection.InterfaceName))
             {
@@ -2087,6 +2093,428 @@ try {
                 _logger.LogDebug("UpdateWirelessBandWithChannelInfo: activeInterface={Active}, channel={Channel}", 
                     activeInterface?.Name ?? "null", data.ActiveConnection.ActiveWifiChannel ?? "null");
             }
+        }
+
+        /// <summary>
+        /// Collect enhanced DNS configuration including search domains and DHCP settings
+        /// </summary>
+        private async Task CollectEnhancedDnsConfiguration(NetworkData data, Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting enhanced DNS configuration");
+
+                if (osqueryResults.TryGetValue("dns_settings", out var dnsSettings))
+                {
+                    foreach (var setting in dnsSettings)
+                    {
+                        var key = GetStringValue(setting, "key");
+                        var value = GetStringValue(setting, "data");
+
+                        switch (key?.ToLowerInvariant())
+                        {
+                            case "domain":
+                                if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(data.Dns.Domain))
+                                    data.Dns.Domain = value;
+                                break;
+                            case "dhcpdomain":
+                                data.Dns.DhcpDomain = value ?? string.Empty;
+                                break;
+                            case "searchlist":
+                                if (!string.IsNullOrEmpty(value))
+                                {
+                                    var domains = value.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                                    data.Dns.SearchDomains.AddRange(domains);
+                                }
+                                break;
+                            case "dhcpdns":
+                                if (!string.IsNullOrEmpty(value))
+                                {
+                                    var servers = value.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                                    data.Dns.DhcpDnsServers.AddRange(servers);
+                                }
+                                break;
+                            case "nameserver":
+                                data.Dns.NameServer = value ?? string.Empty;
+                                break;
+                        }
+                    }
+                }
+
+                // Get additional DNS configuration via PowerShell
+                var dnsCommand = @"
+try {
+    $dnsConfig = @{}
+    
+    # Get DNS client global settings
+    $globalSettings = Get-DnsClientGlobalSetting -ErrorAction SilentlyContinue
+    if ($globalSettings) {
+        $dnsConfig.SuffixSearchList = $globalSettings.SuffixSearchList
+        $dnsConfig.UseSuffixSearchList = $globalSettings.UseSuffixSearchList
+    }
+    
+    # Get active network adapters and their DNS settings
+    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+    $dnsServers = @()
+    foreach ($adapter in $adapters) {
+        $dnsServerAddresses = Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ErrorAction SilentlyContinue
+        if ($dnsServerAddresses -and $dnsServerAddresses.ServerAddresses) {
+            $dnsServers += $dnsServerAddresses.ServerAddresses
+        }
+    }
+    $dnsConfig.ActiveDnsServers = $dnsServers | Sort-Object -Unique
+    
+    $dnsConfig | ConvertTo-Json -Depth 2
+} catch {
+    @{} | ConvertTo-Json
+}";
+
+                var dnsOutput = await _wmiHelperService.ExecutePowerShellCommandAsync(dnsCommand);
+                if (!string.IsNullOrEmpty(dnsOutput) && dnsOutput.Trim() != "{}")
+                {
+                    try
+                    {
+                        var dnsConfig = System.Text.Json.JsonSerializer.Deserialize(
+                            dnsOutput,
+                            ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.DictionaryStringObject);
+
+                        if (dnsConfig != null)
+                        {
+                            // Add suffix search list
+                            if (dnsConfig.TryGetValue("SuffixSearchList", out var suffixListObj) && suffixListObj != null)
+                            {
+                                var suffixList = System.Text.Json.JsonSerializer.Deserialize(
+                                    suffixListObj.ToString() ?? "[]",
+                                    ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.ListString);
+                                if (suffixList != null && suffixList.Any())
+                                {
+                                    foreach (var suffix in suffixList)
+                                    {
+                                        if (!data.Dns.SearchDomains.Contains(suffix))
+                                            data.Dns.SearchDomains.Add(suffix);
+                                    }
+                                }
+                            }
+
+                            // Merge active DNS servers
+                            if (dnsConfig.TryGetValue("ActiveDnsServers", out var activeServersObj) && activeServersObj != null)
+                            {
+                                var activeServers = System.Text.Json.JsonSerializer.Deserialize(
+                                    activeServersObj.ToString() ?? "[]",
+                                    ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.ListString);
+                                if (activeServers != null)
+                                {
+                                    foreach (var server in activeServers)
+                                    {
+                                        if (!data.Dns.Servers.Contains(server))
+                                            data.Dns.Servers.Add(server);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse enhanced DNS configuration");
+                    }
+                }
+
+                _logger.LogInformation("Enhanced DNS configuration collected - Servers: {ServerCount}, Search Domains: {DomainCount}, Primary Domain: {Domain}",
+                    data.Dns.Servers.Count, data.Dns.SearchDomains.Count, data.Dns.Domain);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect enhanced DNS configuration");
+            }
+        }
+
+        /// <summary>
+        /// Collect NETBIOS name resolution information
+        /// </summary>
+        private void CollectNetbiosInformation(NetworkData data, Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting NETBIOS information");
+
+                // Get NETBIOS settings from registry
+                if (osqueryResults.TryGetValue("netbios_settings", out var netbiosSettings))
+                {
+                    foreach (var setting in netbiosSettings)
+                    {
+                        var key = GetStringValue(setting, "key");
+                        var value = GetStringValue(setting, "data");
+
+                        switch (key?.ToLowerInvariant())
+                        {
+                            case "nodetype":
+                                data.Netbios.NodeType = MapNetbiosNodeType(value);
+                                break;
+                            case "enablelmhosts":
+                                data.Netbios.EnableLMHosts = value == "1";
+                                break;
+                            case "scopeid":
+                                data.Netbios.ScopeID = value ?? string.Empty;
+                                break;
+                        }
+                    }
+                }
+
+                // Get NETBIOS local names using nbtstat -n
+                CollectNetbiosLocalNames(data);
+
+                // Get NETBIOS name cache using nbtstat -c
+                CollectNetbiosNameCache(data);
+
+                _logger.LogInformation("NETBIOS information collected - Node Type: {NodeType}, LMHosts: {LMHosts}, Local Names: {LocalCount}, Cache: {CacheCount}",
+                    data.Netbios.NodeType, data.Netbios.EnableLMHosts, data.Netbios.LocalNames.Count, data.Netbios.NameCache.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect NETBIOS information");
+            }
+        }
+
+        /// <summary>
+        /// Collect NETBIOS local names using nbtstat -n
+        /// </summary>
+        private void CollectNetbiosLocalNames(NetworkData data)
+        {
+            try
+            {
+                var nbtstatOutput = ExecuteCommand("nbtstat", "-n");
+                if (!string.IsNullOrEmpty(nbtstatOutput))
+                {
+                    var lines = nbtstatOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    bool inNameTable = false;
+                    string currentInterface = "";
+
+                    foreach (var line in lines)
+                    {
+                        var trimmedLine = line.Trim();
+                        
+                        // Detect interface section (ends with colon, like "Wi-Fi:")
+                        if (trimmedLine.EndsWith(":") && !trimmedLine.Contains("Node IpAddress"))
+                        {
+                            currentInterface = trimmedLine.TrimEnd(':');
+                            inNameTable = false;
+                        }
+                        // Look for NetBIOS Local Name Table header
+                        else if (trimmedLine.Contains("NetBIOS Local Name Table"))
+                        {
+                            inNameTable = true;
+                        }
+                        // Skip column headers
+                        else if (trimmedLine.StartsWith("Name") && trimmedLine.Contains("Type") && trimmedLine.Contains("Status"))
+                        {
+                            continue;
+                        }
+                        // Skip separator lines
+                        else if (trimmedLine.StartsWith("---"))
+                        {
+                            continue;
+                        }
+                        // Parse name entries when in a name table
+                        else if (inNameTable && !string.IsNullOrWhiteSpace(trimmedLine) && trimmedLine.Contains("<"))
+                        {
+                            var netbiosName = ParseNetbiosNameEntry(trimmedLine);
+                            if (netbiosName != null)
+                            {
+                                netbiosName.Interface = currentInterface;
+                                data.Netbios.LocalNames.Add(netbiosName);
+                            }
+                        }
+                        // Reset when we hit "No names in cache" or empty sections
+                        else if (trimmedLine.Contains("No names in cache"))
+                        {
+                            inNameTable = false;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect NETBIOS local names");
+            }
+        }
+
+        /// <summary>
+        /// Collect NETBIOS name cache using nbtstat -c
+        /// </summary>
+        private void CollectNetbiosNameCache(NetworkData data)
+        {
+            try
+            {
+                var nbtstatOutput = ExecuteCommand("nbtstat", "-c");
+                if (!string.IsNullOrEmpty(nbtstatOutput))
+                {
+                    var lines = nbtstatOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    bool inNameTable = false;
+                    string currentInterface = "";
+
+                    foreach (var line in lines)
+                    {
+                        var trimmedLine = line.Trim();
+                        
+                        // Detect interface section (ends with colon, like "Wi-Fi:")
+                        if (trimmedLine.EndsWith(":") && !trimmedLine.Contains("Node IpAddress"))
+                        {
+                            currentInterface = trimmedLine.TrimEnd(':');
+                            inNameTable = false;
+                        }
+                        // Look for Remote Cache Name Table header (for cache entries)
+                        else if (trimmedLine.Contains("Remote Cache Name Table"))
+                        {
+                            inNameTable = true;
+                        }
+                        // Skip column headers
+                        else if (trimmedLine.StartsWith("Name") && trimmedLine.Contains("Type") && trimmedLine.Contains("Host Address"))
+                        {
+                            continue;
+                        }
+                        // Skip separator lines
+                        else if (trimmedLine.StartsWith("---"))
+                        {
+                            continue;
+                        }
+                        // Parse cache entries when in a name table
+                        else if (inNameTable && !string.IsNullOrWhiteSpace(trimmedLine) && trimmedLine.Contains("<"))
+                        {
+                            var cacheEntry = ParseNetbiosCacheEntry(trimmedLine);
+                            if (cacheEntry != null)
+                            {
+                                cacheEntry.Interface = currentInterface;
+                                data.Netbios.NameCache.Add(cacheEntry);
+                            }
+                        }
+                        // Reset when we hit "No names in cache" or empty sections
+                        else if (trimmedLine.Contains("No names in cache"))
+                        {
+                            inNameTable = false;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect NETBIOS name cache");
+            }
+        }
+
+        /// <summary>
+        /// Parse NETBIOS name entry from nbtstat -n output
+        /// </summary>
+        private NetbiosName? ParseNetbiosNameEntry(string line)
+        {
+            try
+            {
+                // Expected format: "RODCHRISTIANSEN<20>  UNIQUE      Registered"
+                var trimmedLine = line.Trim();
+                
+                // Use regex to parse the structured format
+                var match = Regex.Match(trimmedLine, @"^(\S+)<(\w+)>\s+(\S+)\s+(\S+)");
+                if (match.Success)
+                {
+                    var name = match.Groups[1].Value;
+                    var type = match.Groups[2].Value;
+                    var nameType = match.Groups[3].Value; // UNIQUE/GROUP
+                    var status = match.Groups[4].Value; // Registered/etc
+                    
+                    return new NetbiosName
+                    {
+                        Name = name,
+                        Type = MapNetbiosNameType(type),
+                        Status = $"{nameType} - {status}"
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to parse NETBIOS name entry: {Line}", line);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Parse NETBIOS cache entry from nbtstat -c output
+        /// </summary>
+        private NetbiosName? ParseNetbiosCacheEntry(string line)
+        {
+            try
+            {
+                // Expected format: "COMPUTER-NAME    <00>  UNIQUE      192.168.1.100     300"
+                var parts = line.Split(new char[0], StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 4)
+                {
+                    var name = parts[0];
+                    var typeMatch = Regex.Match(line, @"<(\w+)>");
+                    var type = typeMatch.Success ? typeMatch.Groups[1].Value : "00";
+                    var ipAddress = parts[parts.Length - 2];
+                    var ttl = parts.Length > 4 && int.TryParse(parts[parts.Length - 1], out var ttlValue) ? ttlValue : (int?)null;
+
+                    return new NetbiosName
+                    {
+                        Name = name,
+                        Type = MapNetbiosNameType(type),
+                        IpAddress = ipAddress,
+                        Ttl = ttl,
+                        Status = "Cached"
+                    };
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to parse NETBIOS cache entry: {Line}", line);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Map NETBIOS node type codes to descriptive names
+        /// </summary>
+        private string MapNetbiosNodeType(string? nodeType)
+        {
+            return nodeType switch
+            {
+                "1" => "B-node (Broadcast)",
+                "2" => "P-node (Peer-to-peer)",
+                "4" => "M-node (Mixed)",
+                "8" => "H-node (Hybrid)",
+                _ => nodeType ?? "Unknown"
+            };
+        }
+
+        /// <summary>
+        /// Map NETBIOS name type codes to descriptive names
+        /// </summary>
+        private string MapNetbiosNameType(string type)
+        {
+            return type switch
+            {
+                "00" => "Workstation Service",
+                "01" => "Messenger Service",
+                "03" => "Messenger Service",
+                "06" => "RAS Server Service",
+                "1F" => "NetDDE Service",
+                "20" => "File Server Service",
+                "21" => "RAS Client Service",
+                "22" => "Microsoft Exchange Interchange",
+                "23" => "Microsoft Exchange Store",
+                "24" => "Microsoft Exchange Directory",
+                "30" => "Modem Sharing Server Service",
+                "31" => "Modem Sharing Client Service",
+                "43" => "SMS Clients Remote Control",
+                "44" => "SMS Administrators Remote Control Tool",
+                "45" => "SMS Clients Remote Chat",
+                "46" => "SMS Clients Remote Transfer",
+                "4C" => "DEC Pathworks TCPIP service on Windows NT",
+                "52" => "DEC Pathworks TCPIP service on Windows NT",
+                "87" => "Microsoft Exchange MTA",
+                "6A" => "Microsoft Exchange IMC",
+                "BE" => "Network Monitor Agent",
+                "BF" => "Network Monitor Application",
+                _ => $"Type {type}"
+            };
         }
 
         public override async Task<bool> ValidateModuleDataAsync(NetworkData data)
