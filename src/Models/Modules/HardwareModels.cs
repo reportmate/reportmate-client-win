@@ -60,6 +60,53 @@ namespace ReportMate.WindowsClient.Models.Modules
         public long FreeSpace { get; set; } // bytes
         public string Interface { get; set; } = string.Empty; // SATA, PCIe, etc.
         public string Health { get; set; } = string.Empty;
+        
+        // Storage Management - Directory-level analysis
+        public List<DirectoryInformation> RootDirectories { get; set; } = new();
+        public DateTime? LastAnalyzed { get; set; }
+        public bool StorageAnalysisEnabled { get; set; } = true;
+    }
+
+    public class DirectoryInformation
+    {
+        public string Path { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public long Size { get; set; } // bytes
+        public long FileCount { get; set; }
+        public long SubdirectoryCount { get; set; }
+        public int Depth { get; set; }
+        public DateTime LastModified { get; set; }
+        public List<DirectoryInformation> Subdirectories { get; set; } = new();
+        public List<FileInformation> LargeFiles { get; set; } = new(); // Files > 100MB
+        public string DriveRoot { get; set; } = string.Empty; // C:, D:, etc.
+        
+        // Summary statistics
+        public double PercentageOfDrive { get; set; }
+        public string FormattedSize { get; set; } = string.Empty;
+        public DirectoryCategory Category { get; set; } = DirectoryCategory.Other;
+    }
+
+    public class FileInformation
+    {
+        public string Path { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public long Size { get; set; } // bytes
+        public string Extension { get; set; } = string.Empty;
+        public DateTime LastModified { get; set; }
+        public string FormattedSize { get; set; } = string.Empty;
+    }
+
+    public enum DirectoryCategory
+    {
+        System,          // Windows, System32, etc.
+        ProgramFiles,    // Program Files, Program Files (x86)
+        ProgramData,     // ProgramData
+        Users,           // Users folder and subdirectories
+        Applications,    // Installed applications
+        Cache,           // Temporary files, cache directories
+        Documents,       // User documents, downloads, etc.
+        Media,           // Pictures, Videos, Music
+        Other            // Everything else
     }
 
     public class GraphicsInfo

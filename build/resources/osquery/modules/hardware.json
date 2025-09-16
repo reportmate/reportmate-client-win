@@ -195,6 +195,51 @@
       "query": "SELECT path, name, type, data FROM registry WHERE (path LIKE '%TOPS%' OR path LIKE '%Neural%' OR path LIKE '%NPU%' OR path LIKE '%AI%') AND (data LIKE '%45%' OR data LIKE '%TOPS%' OR data LIKE '%Neural%' OR data LIKE '%45 TOPS%' OR data LIKE '%45TOPS%' OR data LIKE '%Tera%' OR data LIKE '%Operations%');",
       "interval": 3600,
       "description": "Registry entries containing TOPS specifications for NPU devices"
+    },
+    "storage_program_files_analysis": {
+      "query": "SELECT 'C:\\Program Files' as path, 'Program Files' as filename, (SELECT SUM(size) FROM file WHERE path LIKE 'C:\\Program Files\\%' AND type = 'regular') as size, 'directory' as type, 'C:\\' as directory, 2 as depth UNION ALL SELECT path, filename, (SELECT SUM(size) FROM file f2 WHERE f2.path LIKE file.path || '\\%' AND f2.type = 'regular') as size, type, directory, (LENGTH(path) - LENGTH(REPLACE(path, '\\', ''))) as depth FROM file WHERE directory = 'C:\\Program Files' AND type = 'directory' ORDER BY size DESC LIMIT 50;",
+      "interval": 7200,
+      "description": "Program Files directory analysis with accurate recursive size calculation"
+    },
+    "storage_program_files_x86_analysis": {
+      "query": "SELECT 'C:\\Program Files (x86)' as path, 'Program Files (x86)' as filename, (SELECT SUM(size) FROM file WHERE path LIKE 'C:\\Program Files (x86)\\%' AND type = 'regular') as size, 'directory' as type, 'C:\\' as directory, 2 as depth UNION ALL SELECT path, filename, (SELECT SUM(size) FROM file f2 WHERE f2.path LIKE file.path || '\\%' AND f2.type = 'regular') as size, type, directory, (LENGTH(path) - LENGTH(REPLACE(path, '\\', ''))) as depth FROM file WHERE directory = 'C:\\Program Files (x86)' AND type = 'directory' ORDER BY size DESC LIMIT 50;",
+      "interval": 7200,
+      "description": "Program Files (x86) directory analysis with accurate recursive size calculation"
+    },
+    "storage_programdata_analysis": {
+      "query": "SELECT path, filename, size, type, directory, (LENGTH(path) - LENGTH(REPLACE(path, '\\', ''))) as depth FROM file WHERE directory = 'C:\\ProgramData' AND type = 'directory' ORDER BY size DESC LIMIT 50;",
+      "interval": 14400,
+      "description": "ProgramData directory analysis - simplified query to get subdirectories (sizes will be calculated by PowerShell fallback)"
+    },
+    "storage_users_analysis": {
+      "query": "SELECT 'C:\\Users' as path, 'Users' as filename, (SELECT SUM(size) FROM file WHERE path LIKE 'C:\\Users\\%' AND type = 'regular') as size, 'directory' as type, 'C:\\' as directory, 2 as depth UNION ALL SELECT path, filename, (SELECT SUM(size) FROM file f2 WHERE f2.path LIKE file.path || '\\%' AND f2.type = 'regular') as size, type, directory, (LENGTH(path) - LENGTH(REPLACE(path, '\\', ''))) as depth FROM file WHERE directory = 'C:\\Users' AND type = 'directory' ORDER BY size DESC LIMIT 50;",
+      "interval": 14400,
+      "description": "Users directory analysis with accurate recursive size calculation"
+    },
+    "storage_windows_analysis": {
+      "query": "SELECT 'C:\\Windows' as path, 'Windows' as filename, (SELECT SUM(size) FROM file WHERE path LIKE 'C:\\Windows\\%' AND type = 'regular') as size, 'directory' as type, 'C:\\' as directory, 2 as depth UNION ALL SELECT path, filename, (SELECT SUM(size) FROM file f2 WHERE f2.path LIKE file.path || '\\%' AND f2.type = 'regular') as size, type, directory, (LENGTH(path) - LENGTH(REPLACE(path, '\\', ''))) as depth FROM file WHERE directory = 'C:\\Windows' AND type = 'directory' AND (SELECT SUM(size) FROM file f2 WHERE f2.path LIKE file.path || '\\%' AND f2.type = 'regular') > 1048576 ORDER BY size DESC LIMIT 50;",
+      "interval": 14400,
+      "description": "Windows directory analysis with accurate recursive size calculation (dirs > 1MB)"
+    },
+    "storage_other_directories_analysis": {
+      "query": "SELECT 'C:\\Autodesk' as path, 'Autodesk' as filename, 12540000000 as size, 'directory' as type, 'C:\\' as directory, 1 as depth;",
+      "interval": 14400,
+      "description": "Other directories test - single hardcoded Autodesk directory"
+    },
+    "storage_large_files": {
+      "query": "SELECT path, filename, size, directory, mtime as last_modified FROM file WHERE path LIKE 'C:\\%' AND type = 'regular' AND size > 1073741824 AND path NOT LIKE '%hiberfil.sys%' AND path NOT LIKE '%pagefile.sys%' AND path NOT LIKE '%swapfile.sys%' ORDER BY size DESC LIMIT 50;",
+      "interval": 14400,
+      "description": "Large files analysis for storage usage (files > 1GB)"
+    },
+    "storage_cache_directories": {
+      "query": "SELECT path, filename, size FROM file WHERE path LIKE 'C:\\%' AND (path LIKE '%cache%' OR path LIKE '%Cache%' OR path LIKE '%temp%' OR path LIKE '%Temp%') AND type = 'directory' ORDER BY size DESC LIMIT 30;",
+      "interval": 14400,
+      "description": "Cache and temporary directories analysis for storage cleanup opportunities"
+    },
+    "storage_drive_summary": {
+      "query": "SELECT SUBSTR(path, 1, 3) as drive_root, COUNT(*) as total_files FROM file WHERE path LIKE 'C:\\%' AND type = 'regular' GROUP BY SUBSTR(path, 1, 3);",
+      "interval": 7200,
+      "description": "Drive-level summary for storage analysis"
     }
   }
 }

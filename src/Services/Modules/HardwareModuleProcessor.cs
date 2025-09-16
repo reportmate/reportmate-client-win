@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -944,6 +945,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process NPU information
             await ProcessNpuInformation(osqueryResults, data);
 
+            // Process hierarchical directory storage analysis
+            await ProcessStorageAnalysis(osqueryResults, data);
+
             _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}", 
                 data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None");
 
@@ -995,6 +999,27 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return $"{closestSize} GB";
+        }
+        
+        /// <summary>
+        /// Format storage size for directories with exact sizes (not rounded to common sizes)
+        /// </summary>
+        private string FormatDirectorySize(long bytes)
+        {
+            if (bytes <= 0) return "0 B";
+
+            string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+            double len = bytes;
+            int order = 0;
+            
+            while (len >= 1024 && order < sizes.Length - 1)
+            {
+                order++;
+                len = len / 1024;
+            }
+
+            // Format with appropriate precision
+            return $"{len:0.##} {sizes[order]}";
         }
 
         /// <summary>
@@ -2062,6 +2087,498 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Process hierarchical directory storage analysis from osquery results
+        /// </summary>
+        private async Task ProcessStorageAnalysis(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            _logger.LogInformation("Starting hierarchical directory storage analysis...");
+
+            // Find the primary C: drive storage device to add directory analysis to
+            var primaryStorage = data.Storage.FirstOrDefault(s => s.Name.Contains("C:") || s.Interface == "Logical Drive");
+            if (primaryStorage == null)
+            {
+                _logger.LogWarning("No primary storage device found for directory analysis");
+                return;
+            }
+
+            _logger.LogInformation("[*] Processing storage directories...");
+
+            // Process each storage analysis query
+            _logger.LogInformation("   [>] [1/6] Analyzing Program Files directory...");
+            await ProcessDirectoryGroup(osqueryResults, "storage_program_files_analysis", "Program Files", DirectoryCategory.ProgramFiles, primaryStorage);
+            
+            _logger.LogInformation("   [>] [2/6] Analyzing Program Files (x86) directory...");
+            await ProcessDirectoryGroup(osqueryResults, "storage_program_files_x86_analysis", "Program Files (x86)", DirectoryCategory.ProgramFiles, primaryStorage);
+            
+            _logger.LogInformation("   [>] [3/6] Analyzing Users directory...");
+            await ProcessDirectoryGroup(osqueryResults, "storage_users_analysis", "Users", DirectoryCategory.Users, primaryStorage);
+            
+            _logger.LogInformation("   [>] [4/6] Analyzing Windows directory...");
+            await ProcessDirectoryGroup(osqueryResults, "storage_windows_analysis", "Windows", DirectoryCategory.System, primaryStorage);
+            
+            _logger.LogInformation("   [>] [5/6] Analyzing ProgramData directory...");
+            await ProcessDirectoryGroup(osqueryResults, "storage_programdata_analysis", "ProgramData", DirectoryCategory.ProgramData, primaryStorage);
+            
+            _logger.LogInformation("   [>] [6/6] Analyzing Other Directories...");
+            await ProcessDirectoryGroup(osqueryResults, "storage_other_directories_analysis", "Other Directories", DirectoryCategory.Other, primaryStorage);
+
+            // If osquery didn't find Other Directories, manually discover them with PowerShell
+            var otherDirectoriesCategory = primaryStorage.RootDirectories.FirstOrDefault(r => r.Category == DirectoryCategory.Other);
+            if (otherDirectoriesCategory == null || otherDirectoriesCategory.Subdirectories.Count == 0)
+            {
+                _logger.LogInformation("No Other Directories found by osquery, discovering manually with PowerShell...");
+                ProcessOtherDirectoriesManually(primaryStorage);
+            }
+            else
+            {
+                _logger.LogInformation("[x] Other Directories category already exists with {Count} subdirectories, skipping manual discovery", otherDirectoriesCategory.Subdirectories.Count);
+            }
+
+            _logger.LogInformation("Processing large files and cache directories...");
+            // Process large files and cache directories
+            ProcessLargeFiles(osqueryResults, primaryStorage);
+            ProcessCacheDirectories(osqueryResults, primaryStorage);
+
+            // Set analysis timestamp
+            primaryStorage.LastAnalyzed = DateTime.UtcNow;
+
+            _logger.LogInformation("[x] Hierarchical directory analysis completed for {DirectoryCount} root directories", primaryStorage.RootDirectories.Count);
+        }
+
+        /// <summary>
+        /// Process a specific directory group from osquery results
+        /// Note: Windows shows two different sizes:
+        /// - "Size": Actual file content size (what we calculate)
+        /// - "Size on disk": Space allocated on disk (includes compression, cluster size overhead, and sparse files)
+        /// Our calculation matches "Size" which represents the true data usage
+        /// </summary>
+        private async Task ProcessDirectoryGroup(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, string queryKey, string rootDirectoryName, DirectoryCategory category, StorageDevice storage)
+        {
+            // Special handling for ProgramData: Always use PowerShell to get detailed subdirectory breakdown
+            if (queryKey == "storage_programdata_analysis")
+            {
+                _logger.LogInformation("Using PowerShell analysis for ProgramData subdirectory breakdown...");
+                await ProcessProgramDataWithPowerShellFallback(storage);
+                return;
+            }
+            
+            if (!osqueryResults.TryGetValue(queryKey, out var queryResults) || queryResults.Count == 0)
+            {
+                _logger.LogDebug("No results found for query: {QueryKey}", queryKey);
+                return;
+            }
+
+            _logger.LogDebug("Processing {Count} directory entries for {RootDirectory}", queryResults.Count, rootDirectoryName);
+
+            var rootDirectory = new DirectoryInformation
+            {
+                Name = rootDirectoryName,
+                Path = queryKey == "storage_other_directories_analysis" ? "C:\\" : $"C:\\{rootDirectoryName}",
+                Category = category,
+                DriveRoot = "C:",
+                Depth = queryKey == "storage_other_directories_analysis" ? 1 : 2,
+                Subdirectories = new List<DirectoryInformation>()
+            };
+
+            long totalSize = 0;
+            int processedDirectories = 0;
+
+            foreach (var result in queryResults)
+            {
+                var directoryInfo = CreateDirectoryInfoFromResult(result);
+                if (directoryInfo != null)
+                {
+                    // For "Other Directories", we collect multiple root-level directories
+                    if (queryKey == "storage_other_directories_analysis")
+                    {
+                        directoryInfo.Category = DirectoryCategory.Other;
+                        directoryInfo.FormattedSize = FormatDirectorySize(directoryInfo.Size);
+                        if (storage.Capacity > 0)
+                        {
+                            directoryInfo.PercentageOfDrive = (double)directoryInfo.Size / storage.Capacity * 100;
+                        }
+                        
+                        // Add each directory as a separate subdirectory under "Other"
+                        rootDirectory.Subdirectories.Add(directoryInfo);
+                        totalSize += directoryInfo.Size;
+                        processedDirectories++;
+                    }
+                    else
+                    {
+                        // Normal processing for specific directories
+                        // If this is the root directory entry (depth 2), use its size for the root
+                        if (directoryInfo.Path.Equals(rootDirectory.Path, StringComparison.OrdinalIgnoreCase))
+                        {
+                            rootDirectory.Size = directoryInfo.Size;
+                            rootDirectory.FileCount = directoryInfo.FileCount;
+                            rootDirectory.SubdirectoryCount = directoryInfo.SubdirectoryCount;
+                            totalSize = directoryInfo.Size;
+                        }
+                        else
+                        {
+                            // This is a subdirectory
+                            rootDirectory.Subdirectories.Add(directoryInfo);
+                        }
+                        processedDirectories++;
+                    }
+                }
+            }
+
+            // Handle size calculation based on directory type
+            if (queryKey == "storage_other_directories_analysis")
+            {
+                // For "Other Directories", the total size is the sum of all subdirectories
+                rootDirectory.Size = totalSize;
+                rootDirectory.FileCount = rootDirectory.Subdirectories.Sum(d => d.FileCount);
+                rootDirectory.SubdirectoryCount = rootDirectory.Subdirectories.Count;
+            }
+            else if (rootDirectory.Size == 0 && rootDirectory.Subdirectories.Count > 0)
+            {
+                // If we didn't get a root directory size, calculate it with PowerShell
+                var powerShellSize = CalculateDirectorySizeWithPowerShell(rootDirectory.Path);
+                if (powerShellSize > 0)
+                {
+                    rootDirectory.Size = powerShellSize;
+                    totalSize = powerShellSize;
+                    _logger.LogDebug("Used PowerShell for missing directory size {Directory}: {Size} bytes", rootDirectory.Path, powerShellSize);
+                }
+                else
+                {
+                    _logger.LogWarning("Could not calculate size for {Directory} - PowerShell also failed", rootDirectory.Path);
+                }
+            }
+            
+            // Always use PowerShell for accurate sizing of major directories if osquery returned unrealistic small values or no results
+            // Skip for "Other Directories" as it's a collection, not a single directory
+            if (queryKey != "storage_other_directories_analysis" && (rootDirectory.Size == 0 || rootDirectory.Size < 1000000000)) // Less than 1GB indicates likely inaccurate or missing osquery result for major system directories
+            {
+                var logMessage = rootDirectory.Size == 0 ? 
+                    "No osquery results for {Directory}, using PowerShell for calculation" : 
+                    "Directory size {Size} bytes seems too small for major directory {Directory}, using PowerShell for accurate calculation";
+                    
+                if (rootDirectory.Size == 0)
+                    _logger.LogInformation(logMessage, rootDirectory.Path);
+                else
+                    _logger.LogInformation(logMessage, rootDirectory.Size, rootDirectory.Path);
+                    
+                var powerShellSize = CalculateDirectorySizeWithPowerShell(rootDirectory.Path);
+                if (powerShellSize > 0)
+                {
+                    var oldSize = rootDirectory.Size;
+                    rootDirectory.Size = powerShellSize;
+                    totalSize = powerShellSize;
+                    _logger.LogInformation("PowerShell calculated accurate size for {Directory}: {Size} bytes (was {OldSize} bytes)", rootDirectory.Path, powerShellSize, oldSize);
+                }
+            }
+
+            // Format the size and calculate drive percentage
+            rootDirectory.FormattedSize = FormatStorageSize(totalSize);
+            if (storage.Capacity > 0)
+            {
+                rootDirectory.PercentageOfDrive = (double)totalSize / storage.Capacity * 100;
+            }
+
+            // Sort subdirectories by size (descending)
+            rootDirectory.Subdirectories = rootDirectory.Subdirectories.OrderByDescending(d => d.Size).ToList();
+
+            // Format subdirectory sizes
+            foreach (var subdir in rootDirectory.Subdirectories)
+            {
+                // For major system directories, use PowerShell for accurate subdirectory sizes if osquery returned unrealistic values
+                if ((queryKey == "storage_users_analysis" || queryKey == "storage_windows_analysis" || 
+                     queryKey == "storage_program_files_analysis" || queryKey == "storage_program_files_x86_analysis") &&
+                    subdir.Size < 10000000) // Less than 10MB indicates likely inaccurate osquery result for major directory subdirs
+                {
+                    _logger.LogDebug("Subdirectory {SubDir} size {Size} bytes seems too small, using PowerShell for accurate calculation", subdir.Path, subdir.Size);
+                    var powerShellSize = CalculateDirectorySizeWithPowerShell(subdir.Path);
+                    if (powerShellSize > 0)
+                    {
+                        var oldSize = subdir.Size;
+                        subdir.Size = powerShellSize;
+                        _logger.LogDebug("PowerShell calculated accurate size for subdirectory {SubDir}: {Size} bytes (was {OldSize} bytes)", subdir.Path, powerShellSize, oldSize);
+                    }
+                }
+                
+                subdir.FormattedSize = FormatDirectorySize(subdir.Size);
+                if (storage.Capacity > 0)
+                {
+                    subdir.PercentageOfDrive = (double)subdir.Size / storage.Capacity * 100;
+                }
+            }
+
+            // Only add the root directory if it has meaningful content
+            if (queryKey == "storage_other_directories_analysis")
+            {
+                // Only add "Other Directories" if we found some directories
+                if (rootDirectory.Subdirectories.Count > 0)
+                {
+                    storage.RootDirectories.Add(rootDirectory);
+                    _logger.LogDebug("Added {Count} miscellaneous directories under 'Other': {TotalSize} ({FormattedSize})", 
+                        rootDirectory.Subdirectories.Count, totalSize, rootDirectory.FormattedSize);
+                }
+            }
+            else
+            {
+                storage.RootDirectories.Add(rootDirectory);
+                _logger.LogDebug("Added root directory {Directory}: {Size} ({FormattedSize}) with {SubdirCount} subdirectories", 
+                    rootDirectory.Name, totalSize, rootDirectory.FormattedSize, rootDirectory.Subdirectories.Count);
+            }
+        }
+
+        /// <summary>
+        /// Create DirectoryInformation from osquery result
+        /// </summary>
+        private DirectoryInformation? CreateDirectoryInfoFromResult(Dictionary<string, object> result)
+        {
+            var path = GetStringValue(result, "path") ?? GetStringValue(result, "full_path");
+            var filename = GetStringValue(result, "filename") ?? GetStringValue(result, "dir_name");
+            var size = GetLongValue(result, "size");
+            if (size == 0)
+            {
+                size = GetLongValue(result, "total_size");
+            }
+            
+            var type = GetStringValue(result, "type");
+            var depth = GetIntValue(result, "depth");
+            var fileCount = GetLongValue(result, "file_count");
+            var subdirCount = GetLongValue(result, "subdir_count");
+
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(filename))
+            {
+                return null;
+            }
+
+            // Skip non-directory entries
+            if (type != "directory")
+            {
+                return null;
+            }
+
+            var directoryInfo = new DirectoryInformation
+            {
+                Path = path,
+                Name = filename,
+                Size = size,
+                FileCount = fileCount,
+                SubdirectoryCount = subdirCount,
+                Depth = depth,
+                DriveRoot = "C:",
+                Category = DetermineCategoryFromPath(path),
+                LastModified = DateTime.UtcNow,
+                Subdirectories = new List<DirectoryInformation>(),
+                LargeFiles = new List<FileInformation>()
+            };
+
+            return directoryInfo;
+        }
+
+        /// <summary>
+        /// Calculate directory size using PowerShell as a fallback when osquery fails
+        /// </summary>
+        private long CalculateDirectorySizeWithPowerShell(string directoryPath)
+        {
+            try
+            {
+                // _logger.LogInformation("   Calculating directory size: {Directory} (this may take a few minutes for large directories)", directoryPath);
+
+                // Users directory needs -Force flag to include hidden user profile files
+                var useForceFlag = directoryPath.Equals(@"C:\Users", StringComparison.OrdinalIgnoreCase);
+                var forceParameter = useForceFlag ? "-Force " : "";
+
+                var script = $@"
+                    try {{
+                        $path = '{directoryPath.Replace("'", "''")}'
+                        if (Test-Path $path) {{
+                            $size = (Get-ChildItem -Path $path -Recurse -File {forceParameter}-ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                            if ($size -eq $null) {{ $size = 0 }}
+                            Write-Output $size
+                        }} else {{
+                            Write-Output 0
+                        }}
+                    }} catch {{
+                        Write-Output 0
+                    }}";
+
+                using var process = new System.Diagnostics.Process();
+                process.StartInfo.FileName = "powershell.exe";
+                process.StartInfo.Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"";
+                process.StartInfo.UseShellExecute = false;
+                process.StartInfo.RedirectStandardOutput = true;
+                process.StartInfo.RedirectStandardError = true;
+                process.StartInfo.CreateNoWindow = true;
+
+                process.Start();
+
+                // Give adequate time for large directories - these can be hundreds of GB
+                var timeoutMs = 300000; // 5 minutes for large directories
+                if (!process.WaitForExit(timeoutMs))
+                {
+                    process.Kill();
+                    _logger.LogWarning("   PowerShell directory size calculation timed out after 5 minutes for {Directory}", directoryPath);
+                    return 0;
+                }
+
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                var error = process.StandardError.ReadToEnd();
+
+                if (!string.IsNullOrEmpty(error))
+                {
+                    _logger.LogDebug("PowerShell size calculation had warnings for {Directory}: {Error}", directoryPath, error);
+                }
+
+                if (long.TryParse(output, out var size))
+                {
+                    var forceInfo = useForceFlag ? " (with -Force for hidden files)" : " (without -Force)";
+                    var sizeGB = size / 1024.0 / 1024.0 / 1024.0;
+                    _logger.LogInformation("   [x] Directory size calculated: {Directory} = {SizeGB:F1} GB ({Size:N0} bytes){ForceInfo}", directoryPath, sizeGB, size, forceInfo);
+                    return size;
+                }
+                else
+                {
+                    _logger.LogWarning("   Failed to parse PowerShell size output for {Directory}: {Output}", directoryPath, output);
+                    return 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "   Failed to calculate directory size with PowerShell for {Directory}", directoryPath);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Get fallback directory size using .NET DirectoryInfo (fast but less accurate for large directories)
+        /// </summary>
+        private long GetFallbackDirectorySize(string directoryPath)
+        {
+            try
+            {
+                if (!Directory.Exists(directoryPath))
+                    return 0;
+
+                var directoryInfo = new DirectoryInfo(directoryPath);
+                return directoryInfo.EnumerateFiles("*", SearchOption.AllDirectories)
+                    .Where(fi => (fi.Attributes & FileAttributes.ReparsePoint) == 0) // Skip symbolic links
+                    .Sum(fi => fi.Length);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to get fallback directory size for {Directory}", directoryPath);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Determine directory category based on path
+        /// </summary>
+        private DirectoryCategory DetermineCategoryFromPath(string path)
+        {
+            var lowerPath = path.ToLowerInvariant();
+
+            if (lowerPath.Contains("program files"))
+                return DirectoryCategory.ProgramFiles;
+            if (lowerPath.Contains("programdata"))
+                return DirectoryCategory.ProgramData;
+            if (lowerPath.Contains("users"))
+                return DirectoryCategory.Users;
+            if (lowerPath.Contains("windows") || lowerPath.Contains("system32"))
+                return DirectoryCategory.System;
+            if (lowerPath.Contains("cache") || lowerPath.Contains("temp"))
+                return DirectoryCategory.Cache;
+            if (lowerPath.Contains("documents") || lowerPath.Contains("downloads"))
+                return DirectoryCategory.Documents;
+            if (lowerPath.Contains("pictures") || lowerPath.Contains("videos") || lowerPath.Contains("music"))
+                return DirectoryCategory.Media;
+
+            return DirectoryCategory.Other;
+        }
+
+        /// <summary>
+        /// Process large files from storage analysis
+        /// </summary>
+        private void ProcessLargeFiles(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, StorageDevice storage)
+        {
+            if (!osqueryResults.TryGetValue("storage_large_files", out var largeFiles) || largeFiles.Count == 0)
+            {
+                return;
+            }
+
+            _logger.LogDebug("Processing {Count} large files", largeFiles.Count);
+
+            var largeFilesList = new List<FileInformation>();
+
+            foreach (var file in largeFiles)
+            {
+                var fileInfo = new FileInformation
+                {
+                    Path = GetStringValue(file, "path") ?? "",
+                    Name = GetStringValue(file, "filename") ?? "",
+                    Size = GetLongValue(file, "size"),
+                    LastModified = GetDateTimeValue(file, "last_modified") ?? DateTime.MinValue,
+                    Extension = Path.GetExtension(GetStringValue(file, "filename") ?? ""),
+                    FormattedSize = FormatStorageSize(GetLongValue(file, "size"))
+                };
+
+                if (!string.IsNullOrEmpty(fileInfo.Path) && fileInfo.Size > 0)
+                {
+                    largeFilesList.Add(fileInfo);
+                }
+            }
+
+            // Add large files to appropriate directories
+            foreach (var rootDir in storage.RootDirectories)
+            {
+                var relevantFiles = largeFilesList.Where(f => f.Path.StartsWith(rootDir.Path, StringComparison.OrdinalIgnoreCase)).ToList();
+                rootDir.LargeFiles.AddRange(relevantFiles);
+            }
+
+            _logger.LogDebug("Added {Count} large files to directory analysis", largeFilesList.Count);
+        }
+
+        /// <summary>
+        /// Process cache directories from storage analysis
+        /// </summary>
+        private void ProcessCacheDirectories(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, StorageDevice storage)
+        {
+            if (!osqueryResults.TryGetValue("storage_cache_directories", out var cacheDirectories) || cacheDirectories.Count == 0)
+            {
+                return;
+            }
+
+            _logger.LogDebug("Processing {Count} cache directories", cacheDirectories.Count);
+
+            foreach (var cacheDir in cacheDirectories)
+            {
+                var directoryInfo = CreateDirectoryInfoFromResult(cacheDir);
+                if (directoryInfo != null)
+                {
+                    directoryInfo.Category = DirectoryCategory.Cache;
+                    directoryInfo.FormattedSize = FormatDirectorySize(directoryInfo.Size);
+
+                    // Try to add to existing root directories or create a new Cache category
+                    var parentFound = false;
+                    foreach (var rootDir in storage.RootDirectories)
+                    {
+                        if (directoryInfo.Path.StartsWith(rootDir.Path, StringComparison.OrdinalIgnoreCase))
+                        {
+                            rootDir.Subdirectories.Add(directoryInfo);
+                            parentFound = true;
+                            break;
+                        }
+                    }
+
+                    // If no parent found, this might be a top-level cache directory
+                    if (!parentFound)
+                    {
+                        storage.RootDirectories.Add(directoryInfo);
+                    }
+                }
+            }
+
+            _logger.LogDebug("Added cache directories to storage analysis");
+        }
+
+        /// <summary>
         /// Execute a PowerShell script and return the result
         /// </summary>
         private async Task<string> ExecutePowerShellScriptAsync(string script)
@@ -2094,6 +2611,280 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogDebug("Failed to execute PowerShell script: {Error}", ex.Message);
                 return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// Manually discover other directories at C:\ root using PowerShell
+        /// This method finds directories that aren't covered by the main categories
+        /// </summary>
+        private void ProcessOtherDirectoriesManually(StorageDevice storage)
+        {
+            try
+            {
+                _logger.LogInformation("Manually discovering additional directories at C:\\ root (this may take 30-60 seconds)...");
+
+                var script = @"
+                    $excludedDirs = @('Program Files', 'Program Files (x86)', 'Users', 'Windows', 'ProgramData')
+                    Get-ChildItem -Path 'C:\' -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin $excludedDirs } | ForEach-Object {
+                        try {
+                            $size = (Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                            if ($size -eq $null) { $size = 0 }
+                            if ($size -gt 10485760) {
+                                Write-Output ($_.Name + '|' + $_.FullName + '|' + $size)
+                            }
+                        } catch {}
+                    }
+                ";
+
+                using var process = new System.Diagnostics.Process();
+                process.StartInfo.FileName = "powershell.exe";
+                process.StartInfo.Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"";
+                process.StartInfo.UseShellExecute = false;
+                process.StartInfo.RedirectStandardOutput = true;
+                process.StartInfo.RedirectStandardError = true;
+                process.StartInfo.CreateNoWindow = true;
+
+                process.Start();
+
+                if (!process.WaitForExit(60000)) // 60 second timeout
+                {
+                    process.Kill();
+                    _logger.LogWarning("   PowerShell other directories discovery timed out after 60 seconds");
+                    return;
+                }
+
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                var error = process.StandardError.ReadToEnd();
+
+                _logger.LogDebug("PowerShell other directories output: {Output}", output);
+                if (!string.IsNullOrEmpty(error))
+                {
+                    _logger.LogWarning("PowerShell other directories stderr: {Error}", error);
+                }
+
+                if (string.IsNullOrEmpty(output))
+                {
+                    _logger.LogInformation("   No additional directories >10MB found at C:\\ root");
+                    return;
+                }
+
+                var otherDirectories = new List<DirectoryInformation>();
+                var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var line in lines)
+                {
+                    var parts = line.Split('|');
+                    if (parts.Length == 3 && long.TryParse(parts[2], out var size))
+                    {
+                        var directoryInfo = new DirectoryInformation
+                        {
+                            Name = parts[0].Trim(),
+                            Path = parts[1].Trim(),
+                            Category = DirectoryCategory.Other,
+                            DriveRoot = "C:",
+                            Depth = 1,
+                            Size = size,
+                            FormattedSize = FormatDirectorySize(size),
+                            FileCount = 0, // Not calculated for performance
+                            SubdirectoryCount = 0, // Not calculated for performance
+                            PercentageOfDrive = storage.Capacity > 0 ? (double)size / storage.Capacity * 100 : 0,
+                            LastModified = DateTime.UtcNow,
+                            Subdirectories = new List<DirectoryInformation>()
+                        };
+
+                        otherDirectories.Add(directoryInfo);
+                        var sizeGB = size / 1024.0 / 1024.0 / 1024.0;
+                        _logger.LogInformation("   [*] Found additional directory: {Name} = {SizeGB:F1} GB", directoryInfo.Name, sizeGB);
+                    }
+                }
+
+                if (otherDirectories.Any())
+                {
+                    var otherRootDirectory = new DirectoryInformation
+                    {
+                        Name = "Other Directories",
+                        Path = "C:\\",
+                        Category = DirectoryCategory.Other,
+                        DriveRoot = "C:",
+                        Depth = 1,
+                        Size = otherDirectories.Sum(d => d.Size),
+                        FileCount = otherDirectories.Sum(d => d.FileCount),
+                        SubdirectoryCount = otherDirectories.Count,
+                        LastModified = DateTime.UtcNow,
+                        Subdirectories = otherDirectories
+                    };
+
+                    otherRootDirectory.FormattedSize = FormatStorageSize(otherRootDirectory.Size);
+                    if (storage.Capacity > 0)
+                    {
+                        otherRootDirectory.PercentageOfDrive = (double)otherRootDirectory.Size / storage.Capacity * 100;
+                    }
+
+                    storage.RootDirectories.Add(otherRootDirectory);
+                    var totalSizeGB = otherRootDirectory.Size / 1024.0 / 1024.0 / 1024.0;
+                    _logger.LogInformation("   [x] Added Other Directories category with {Count} directories totaling {SizeGB:F1} GB", 
+                        otherDirectories.Count, totalSizeGB);
+                }
+                else
+                {
+                    _logger.LogInformation("   No additional directories >10MB found to add to Other Directories");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error discovering other directories manually");
+            }
+        }
+
+        /// <summary>
+        /// PowerShell fallback to collect ProgramData subdirectories when osquery fails
+        /// </summary>
+        private async Task ProcessProgramDataWithPowerShellFallback(StorageDevice storage)
+        {
+            try
+            {
+                _logger.LogDebug("Starting PowerShell-based ProgramData subdirectory analysis...");
+
+                var powershellScript = @"
+                try {
+                    $programDataPath = 'C:\ProgramData'
+                    
+                    # Get subdirectories of ProgramData with size calculation
+                    $directories = Get-ChildItem -Path $programDataPath -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                        try {
+                            # Calculate directory size with timeout
+                            $job = Start-Job -ScriptBlock {
+                                param($path)
+                                $size = (Get-ChildItem -Path $path -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                                if ($size -eq $null) { $size = 0 }
+                                return $size
+                            } -ArgumentList $_.FullName
+                            
+                            # Wait for job with timeout
+                            $completed = Wait-Job -Job $job -Timeout 30
+                            if ($completed) {
+                                $size = Receive-Job -Job $job
+                            } else {
+                                # Job timed out, stop it and set size to 0
+                                Stop-Job -Job $job -Force
+                                $size = 0
+                            }
+                            Remove-Job -Job $job -Force
+                            
+                            # Only include directories larger than 10MB (10485760 bytes)
+                            if ($size -gt 10485760) {
+                                [PSCustomObject]@{
+                                    Name = $_.Name
+                                    Path = $_.FullName
+                                    Size = $size
+                                    LastModified = $_.LastWriteTime
+                                }
+                            }
+                        } catch {
+                            # Skip directories that can't be accessed
+                            Write-Warning ""Could not analyze directory: $($_.Name) - $($_.Exception.Message)""
+                        }
+                    } | Where-Object { $_ -ne $null } | Sort-Object Size -Descending
+                    
+                    # Output results
+                    foreach ($dir in $directories) {
+                        ""$($dir.Name)|$($dir.Path)|$($dir.Size)|$($dir.LastModified.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ'))""
+                    }
+                } catch {
+                    Write-Error ""ProgramData analysis failed: $($_.Exception.Message)""
+                }";
+
+                var powershellOutput = await ExecutePowerShellScriptAsync(powershellScript);
+
+                if (string.IsNullOrWhiteSpace(powershellOutput))
+                {
+                    _logger.LogWarning("PowerShell ProgramData analysis returned no results");
+                    return;
+                }
+
+                var subdirectories = new List<DirectoryInformation>();
+                var lines = powershellOutput.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var line in lines)
+                {
+                    if (line.StartsWith("WARNING:") || line.StartsWith("ERROR:") || string.IsNullOrWhiteSpace(line))
+                        continue;
+
+                    var parts = line.Split('|');
+                    if (parts.Length >= 3)
+                    {
+                        var name = parts[0].Trim();
+                        var path = parts[1].Trim();
+                        if (long.TryParse(parts[2].Trim(), out var size) && size > 0)
+                        {
+                            var lastModified = DateTime.UtcNow;
+                            if (parts.Length >= 4 && DateTime.TryParse(parts[3].Trim(), out var parsedDate))
+                            {
+                                lastModified = parsedDate;
+                            }
+
+                            var subdirectory = new DirectoryInformation
+                            {
+                                Name = name,
+                                Path = path,
+                                Category = DirectoryCategory.ProgramData,
+                                DriveRoot = "C:",
+                                Depth = 3,
+                                Size = size,
+                                FormattedSize = FormatDirectorySize(size),
+                                FileCount = 0, // Not calculated for performance
+                                SubdirectoryCount = 0, // Not calculated for performance
+                                PercentageOfDrive = storage.Capacity > 0 ? (double)size / storage.Capacity * 100 : 0,
+                                LastModified = lastModified,
+                                Subdirectories = new List<DirectoryInformation>()
+                            };
+
+                            subdirectories.Add(subdirectory);
+                            var sizeGB = size / 1024.0 / 1024.0 / 1024.0;
+                            _logger.LogInformation("   [*] Found ProgramData subdirectory: {Name} = {SizeGB:F2} GB", name, sizeGB);
+                        }
+                    }
+                }
+
+                if (subdirectories.Count > 0)
+                {
+                    // Calculate total ProgramData size
+                    var totalProgramDataSize = CalculateDirectorySizeWithPowerShell("C:\\ProgramData");
+                    
+                    var programDataRootDirectory = new DirectoryInformation
+                    {
+                        Name = "ProgramData",
+                        Path = "C:\\ProgramData",
+                        Category = DirectoryCategory.ProgramData,
+                        DriveRoot = "C:",
+                        Depth = 2,
+                        Size = totalProgramDataSize > 0 ? totalProgramDataSize : subdirectories.Sum(d => d.Size),
+                        FileCount = 0,
+                        SubdirectoryCount = subdirectories.Count,
+                        LastModified = DateTime.UtcNow,
+                        Subdirectories = subdirectories.OrderByDescending(d => d.Size).ToList()
+                    };
+
+                    programDataRootDirectory.FormattedSize = FormatDirectorySize(programDataRootDirectory.Size);
+                    if (storage.Capacity > 0)
+                    {
+                        programDataRootDirectory.PercentageOfDrive = (double)programDataRootDirectory.Size / storage.Capacity * 100;
+                    }
+
+                    storage.RootDirectories.Add(programDataRootDirectory);
+                    var totalSizeGB = programDataRootDirectory.Size / 1024.0 / 1024.0 / 1024.0;
+                    _logger.LogInformation("   [x] Added ProgramData with {Count} subdirectories totaling {SizeGB:F1} GB using PowerShell fallback", 
+                        subdirectories.Count, totalSizeGB);
+                }
+                else
+                {
+                    _logger.LogWarning("No ProgramData subdirectories >10MB found using PowerShell fallback");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in PowerShell ProgramData fallback analysis");
             }
         }
     }
