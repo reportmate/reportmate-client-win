@@ -188,8 +188,8 @@ jobs:
         $version = "${{ steps.version.outputs.VERSION }}"
         echo "Building ReportMate version: $version"
         
-        # Run the unified PowerShell 7 build script from repo root with code signing
-        .\build.ps1 -Version $version -Configuration ${{ env.BUILD_CONFIGURATION }} -Clean -Sign
+        # Run the unified PowerShell 7 build script from repo root without code signing (public CI)
+        .\build.ps1 -Version $version -Configuration ${{ env.BUILD_CONFIGURATION }} -Clean
         
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
