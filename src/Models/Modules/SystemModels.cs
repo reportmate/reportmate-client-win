@@ -15,6 +15,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<SystemUpdate> Updates { get; set; } = new();
         public List<SystemService> Services { get; set; } = new();
         public List<EnvironmentVariable> Environment { get; set; } = new();
+        public List<ScheduledTask> ScheduledTasks { get; set; } = new();
         public DateTime? LastBootTime { get; set; }
         public TimeSpan? Uptime { get; set; }
         public string UptimeString { get; set; } = string.Empty;
@@ -105,5 +106,20 @@ namespace ReportMate.WindowsClient.Models.Modules
         public int ProcessCount { get; set; }
         public int ThreadCount { get; set; }
         public int HandleCount { get; set; }
+    }
+
+    public class ScheduledTask
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+        public bool Enabled { get; set; }
+        public string Action { get; set; } = string.Empty;
+        public bool Hidden { get; set; }
+        public string State { get; set; } = string.Empty;
+        public DateTime? LastRunTime { get; set; }
+        public DateTime? NextRunTime { get; set; }
+        public string LastRunCode { get; set; } = string.Empty;
+        public string LastRunMessage { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
     }
 }
