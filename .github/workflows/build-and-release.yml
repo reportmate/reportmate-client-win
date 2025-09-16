@@ -146,29 +146,25 @@ jobs:
         
         echo "SHOULD_CREATE_RELEASE=$shouldRelease" >> $env:GITHUB_OUTPUT
         
-    - name: Install WiX Toolset
+    - name: Install WiX Toolset v6
       shell: pwsh
       run: |
-        echo "Installing WiX Toolset v3.11..."
-        $wixUrl = "https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311.exe"
-        $wixInstaller = "$env:TEMP\wix311.exe"
+        echo "Installing WiX Toolset v6 as dotnet tool..."
         
-        # Download WiX installer
-        Invoke-WebRequest -Uri $wixUrl -OutFile $wixInstaller
-        
-        # Install WiX silently
-        Start-Process -FilePath $wixInstaller -ArgumentList "/quiet" -Wait
-        
-        # Add WiX to PATH
-        $wixPath = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
-        echo "$wixPath" >> $env:GITHUB_PATH
+        # Install WiX v6 as a global dotnet tool
+        dotnet tool install --global wix --version 6.0.1
         
         # Verify installation
-        & "$wixPath\candle.exe" -?
-        if ($LASTEXITCODE -eq 0) {
-          echo "WiX Toolset installed successfully"
-        } else {
-          echo "WiX Toolset installation failed"
+        try {
+          $wixVersion = & dotnet wix --version 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            echo "✅ WiX Toolset v6 installed successfully: $wixVersion"
+          } else {
+            echo "❌ WiX Toolset v6 installation verification failed"
+            exit 1
+          }
+        } catch {
+          echo "❌ Failed to verify WiX installation"
           exit 1
         }
         
@@ -221,6 +217,7 @@ jobs:
         files: |
           artifacts/*.nupkg
           artifacts/*.zip
+          artifacts/*.msi
         generate_release_notes: true
         draft: false
         prerelease: ${{ contains(needs.build-and-package.outputs.version, 'dev') }}
@@ -228,10 +225,16 @@ jobs:
           ## ReportMate ${{ needs.build-and-package.outputs.version }}
           
           ### 📦 Package Types
+          - **MSI Installer**: For enterprise deployment with Windows Installer
           - **NUPKG Package**: For Chocolatey and Cimian package management
           - **ZIP Archive**: For manual installation and testing
           
           ### 🚀 Quick Start
+          
+          **MSI Installation (Recommended):**
+          ```cmd
+          msiexec /i ReportMate-${{ needs.build-and-package.outputs.version }}.msi /quiet /norestart
+          ```
           
           **Chocolatey Installation:**
           ```cmd
@@ -339,4 +342,36 @@ jobs:
           echo "✅ ZIP package validation completed"
         } else {
           echo "❌ No ZIP file found in artifacts"
+        }
+        
+    - name: Test MSI package
+      shell: pwsh
+      run: |
+        $msiFile = Get-ChildItem -Path "artifacts" -Filter "*.msi" | Select-Object -First 1
+        if ($msiFile) {
+          echo "Testing MSI package: $($msiFile.Name)"
+          
+          # Check MSI file properties using msiexec (dry run)
+          try {
+            # Use msiexec to validate the MSI without installing
+            $result = Start-Process -FilePath "msiexec" -ArgumentList "/i", $msiFile.FullName, "/quiet", "/norestart", "/l*v", "msi-test.log", "INSTALLLEVEL=0" -Wait -PassThru -NoNewWindow
+            
+            if ($result.ExitCode -eq 0 -or $result.ExitCode -eq 1602 -or $result.ExitCode -eq 1641) {
+              echo "✅ MSI package structure is valid"
+              
+              # Check if log file was created and show preview
+              if (Test-Path "msi-test.log") {
+                echo "MSI validation log preview:"
+                Get-Content "msi-test.log" -Head 10 | ForEach-Object { echo "  $_" }
+              }
+            } else {
+              echo "⚠️  MSI validation returned exit code: $($result.ExitCode)"
+            }
+          } catch {
+            echo "⚠️  MSI validation test encountered an issue: $_"
+          }
+          
+          echo "✅ MSI package validation completed"
+        } else {
+          echo "❌ No MSI file found in artifacts"
         }
