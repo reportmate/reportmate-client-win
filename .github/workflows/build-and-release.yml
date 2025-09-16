@@ -42,6 +42,7 @@ jobs:
     runs-on: windows-latest
     outputs:
       version: ${{ steps.version.outputs.VERSION }}
+      display_version: ${{ steps.version.outputs.DISPLAY_VERSION }}
       should_create_release: ${{ steps.release.outputs.SHOULD_CREATE_RELEASE }}
       tag_created: ${{ steps.tag.outputs.TAG_CREATED }}
     
@@ -83,14 +84,30 @@ jobs:
           $version = Get-Date -Format "yyyy.MM.dd.HHmm"
           $isTaggedRelease = $false
         } else {
-          # PR or push to branch
-          $version = "$(Get-Date -Format 'yyyy.MM.dd.HHmm')-dev.$($env:GITHUB_RUN_NUMBER)"
+          # PR or push to branch - create numeric version for .NET compatibility
+          $baseVersion = Get-Date -Format "yyyy.MM.dd"
+          $buildNumber = $env:GITHUB_RUN_NUMBER
+          $version = "$baseVersion.$buildNumber"
           $isTaggedRelease = $false
         }
         
+        # Create display version for releases (can include -dev suffix)
+        $displayVersion = $version
+        if ($env:GITHUB_EVENT_NAME -eq "push" -or $env:GITHUB_EVENT_NAME -eq "pull_request") {
+          if (-not ($version -match '^\d{4}\.\d{2}\.\d{2}\.\d+$')) {
+            # If version doesn't match numeric format, create both versions
+            $baseVersion = Get-Date -Format "yyyy.MM.dd"
+            $buildNumber = $env:GITHUB_RUN_NUMBER
+            $version = "$baseVersion.$buildNumber"  # Numeric version for .NET
+            $displayVersion = "$baseVersion.$buildNumber-dev"  # Display version for releases
+          }
+        }
+        
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "DISPLAY_VERSION=$displayVersion" >> $env:GITHUB_OUTPUT
         echo "IS_TAGGED_RELEASE=$isTaggedRelease" >> $env:GITHUB_OUTPUT
         echo "Building version: $version"
+        echo "Display version: $displayVersion"
         echo "Is tagged release: $isTaggedRelease"
         
     - name: Create and push date-based tag
@@ -194,7 +211,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: reportmate-${{ steps.version.outputs.VERSION }}
+        name: reportmate-${{ steps.version.outputs.DISPLAY_VERSION }}
         path: |
           dist/*.nupkg
           dist/*.zip
@@ -220,23 +237,23 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
-        name: reportmate-${{ needs.build-and-package.outputs.version }}
+        name: reportmate-${{ needs.build-and-package.outputs.display_version }}
         path: ./artifacts
         
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: ${{ needs.build-and-package.outputs.tag_created != 'none' && needs.build-and-package.outputs.tag_created != 'existing' && needs.build-and-package.outputs.tag_created || needs.build-and-package.outputs.version }}
-        name: ReportMate ${{ needs.build-and-package.outputs.version }}
+        tag_name: ${{ needs.build-and-package.outputs.tag_created != 'none' && needs.build-and-package.outputs.tag_created != 'existing' && needs.build-and-package.outputs.tag_created || needs.build-and-package.outputs.display_version }}
+        name: ReportMate ${{ needs.build-and-package.outputs.display_version }}
         files: |
           artifacts/*.nupkg
           artifacts/*.zip
           artifacts/*.msi
         generate_release_notes: true
         draft: false
-        prerelease: ${{ contains(needs.build-and-package.outputs.version, 'dev') }}
+        prerelease: ${{ contains(needs.build-and-package.outputs.display_version, 'dev') }}
         body: |
-          ## ReportMate ${{ needs.build-and-package.outputs.version }}
+          ## ReportMate ${{ needs.build-and-package.outputs.display_version }}
           
           ### 📦 Package Types
           - **MSI Installer**: For enterprise deployment with Windows Installer
@@ -247,12 +264,12 @@ jobs:
           
           **MSI Installation (Recommended):**
           ```cmd
-          msiexec /i ReportMate-${{ needs.build-and-package.outputs.version }}.msi /quiet /norestart
+          msiexec /i ReportMate-${{ needs.build-and-package.outputs.display_version }}.msi /quiet /norestart
           ```
           
           **Chocolatey Installation:**
           ```cmd
-          choco install ReportMate-${{ needs.build-and-package.outputs.version }}.nupkg --source=.
+          choco install ReportMate-${{ needs.build-and-package.outputs.display_version }}.nupkg --source=.
           ```
           
           **Manual Installation:**
@@ -284,7 +301,7 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v4
       with:
-        name: reportmate-${{ needs.build-and-package.outputs.version }}
+        name: reportmate-${{ needs.build-and-package.outputs.display_version }}
         path: ./artifacts
         
     - name: Test NUPKG package structure
