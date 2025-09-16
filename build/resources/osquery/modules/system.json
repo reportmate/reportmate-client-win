@@ -103,6 +103,11 @@
       "query": "WITH user_sid AS (SELECT registry_hive FROM logged_in_users WHERE type = 'active' AND user != '' LIMIT 1) SELECT r.name, r.type, r.data FROM registry r, user_sid u WHERE r.path = u.registry_hive || '\\Keyboard Layout\\Toggle\\Layout Hotkey';",
       "interval": 300,
       "description": "Active keyboard layout hotkey setting for the currently logged in user"
+    },
+    "scheduled_tasks": {
+      "query": "SELECT name, path, enabled, action, hidden, state, last_run_time, next_run_time, last_run_code, last_run_message FROM scheduled_tasks;",
+      "interval": 3600,
+      "description": "All Windows scheduled tasks with execution status"
     }
   }
 }

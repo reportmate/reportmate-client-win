@@ -298,6 +298,67 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            // Process scheduled tasks
+            if (osqueryResults.TryGetValue("scheduled_tasks", out var scheduledTasks))
+            {
+                foreach (var task in scheduledTasks)
+                {
+                    var rawAction = GetStringValue(task, "action");
+                    var taskName = GetStringValue(task, "name");
+                    
+                    // Clean up duplicated directory paths in action field (osquery bug workaround)
+                    var cleanedAction = CleanDuplicatedPaths(rawAction);
+                    
+                    var scheduledTask = new ScheduledTask
+                    {
+                        Name = taskName,
+                        Path = GetStringValue(task, "path"),
+                        Enabled = GetStringValue(task, "enabled") == "1",
+                        Action = cleanedAction,
+                        Hidden = GetStringValue(task, "hidden") == "1",
+                        State = GetStringValue(task, "state"),
+                        LastRunCode = GetStringValue(task, "last_run_code"),
+                        LastRunMessage = GetStringValue(task, "last_run_message")
+                    };
+
+                    // Parse last run time
+                    var lastRunTimeStr = GetStringValue(task, "last_run_time");
+                    if (!string.IsNullOrEmpty(lastRunTimeStr) && long.TryParse(lastRunTimeStr, out var lastRunTimeUnix))
+                    {
+                        scheduledTask.LastRunTime = DateTimeOffset.FromUnixTimeSeconds(lastRunTimeUnix).DateTime;
+                    }
+
+                    // Parse next run time
+                    var nextRunTimeStr = GetStringValue(task, "next_run_time");
+                    if (!string.IsNullOrEmpty(nextRunTimeStr) && long.TryParse(nextRunTimeStr, out var nextRunTimeUnix))
+                    {
+                        scheduledTask.NextRunTime = DateTimeOffset.FromUnixTimeSeconds(nextRunTimeUnix).DateTime;
+                    }
+
+                    // Determine status based on enabled state and current state
+                    if (!scheduledTask.Enabled)
+                    {
+                        scheduledTask.Status = "Disabled";
+                    }
+                    else if (!string.IsNullOrEmpty(scheduledTask.State))
+                    {
+                        scheduledTask.Status = scheduledTask.State;
+                    }
+                    else if (string.IsNullOrEmpty(scheduledTask.LastRunCode) || scheduledTask.LastRunCode == "0")
+                    {
+                        scheduledTask.Status = "Ready";
+                    }
+                    else
+                    {
+                        scheduledTask.Status = "Error";
+                    }
+                    
+                    data.ScheduledTasks.Add(scheduledTask);
+                }
+                
+                _logger.LogDebug("Processed {Count} scheduled tasks", data.ScheduledTasks.Count);
+            }
+
             // Process Windows updates/patches
             if (osqueryResults.TryGetValue("windows_patches", out var patches))
             {
@@ -407,9 +468,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}", 
+            _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}, Services: {ServiceCount}, ScheduledTasks: {TaskCount}", 
                 data.OperatingSystem.Name, data.OperatingSystem.Version, data.OperatingSystem.Edition, 
-                data.OperatingSystem.DisplayVersion, data.OperatingSystem.Locale, data.OperatingSystem.TimeZone, data.UptimeString);
+                data.OperatingSystem.DisplayVersion, data.OperatingSystem.Locale, data.OperatingSystem.TimeZone, 
+                data.UptimeString, data.Services.Count, data.ScheduledTasks.Count);
 
             return Task.FromResult(data);
         }
@@ -630,6 +692,38 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return Task.FromResult(events);
+        }
+
+        /// <summary>
+        /// Clean up duplicated directory paths in scheduled task action fields (workaround for osquery bug)
+        /// Example: "C:\Program Files\ReportMate C:\Program Files\ReportMate\runner.exe" -> "C:\Program Files\ReportMate\runner.exe"
+        /// </summary>
+        private static string CleanDuplicatedPaths(string action)
+        {
+            if (string.IsNullOrWhiteSpace(action))
+                return action;
+
+            // Look for pattern where a directory path is duplicated with space separator
+            // Pattern: "path path\file.exe args" -> "path\file.exe args"
+            
+            // First, check for the specific ReportMate pattern
+            if (action.Contains("C:\\Program Files\\ReportMate C:\\Program Files\\ReportMate\\", StringComparison.OrdinalIgnoreCase))
+            {
+                return action.Replace("C:\\Program Files\\ReportMate C:\\Program Files\\ReportMate\\", "C:\\Program Files\\ReportMate\\");
+            }
+            
+            // More generic pattern for other potential duplications
+            var regex = new System.Text.RegularExpressions.Regex(@"^(.+?)\s+\1\\(.+)$");
+            var match = regex.Match(action.Trim());
+            
+            if (match.Success)
+            {
+                var cleanPath = match.Groups[1].Value;
+                var fileAndArgs = match.Groups[2].Value;
+                return $"{cleanPath}\\{fileAndArgs}";
+            }
+
+            return action;
         }
     }
 }
