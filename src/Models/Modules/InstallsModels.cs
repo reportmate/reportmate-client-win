@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Models.Modules
@@ -12,10 +13,6 @@ namespace ReportMate.WindowsClient.Models.Modules
     {
         public CimianInfo? Cimian { get; set; }
         public MunkiInfo? Munki { get; set; }
-        public List<ManagedInstall> PendingInstalls { get; set; } = new();
-        public List<ManagedInstall> RecentInstalls { get; set; } = new();
-        public List<CimianSession> RecentSessions { get; set; } = new();
-        public List<CimianEvent> RecentEvents { get; set; } = new();
         public DateTime? LastCheckIn { get; set; }
         public bool BootstrapModeActive { get; set; }
         public Dictionary<string, object> CacheStatus { get; set; } = new();
@@ -25,6 +22,149 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// Contains processed Cimian data for the current session
         /// </summary>
         public Dictionary<string, object>? CimianSnapshot { get; set; }
+        
+        /// <summary>
+        /// Enhanced Cimian session statistics for event generation
+        /// Based on sessions.json from Cimian technical specification
+        /// </summary>
+        public CimianSessionData? CimianSessionStats { get; set; }
+    }
+
+    /// <summary>
+    /// Cimian session data from sessions.json according to technical specification
+    /// </summary>
+    public class CimianSessionData
+    {
+        public string SessionId { get; set; } = string.Empty;
+        public string StartTime { get; set; } = string.Empty;
+        public string EndTime { get; set; } = string.Empty;
+        public int DurationSeconds { get; set; }
+        public string Hostname { get; set; } = string.Empty;
+        public string Username { get; set; } = string.Empty;
+        public string ManifestPath { get; set; } = string.Empty;
+        
+        // Package Statistics
+        public int TotalManagedPackages { get; set; }
+        public int PackagesProcessed { get; set; }
+        public int SuccessfulInstalls { get; set; }
+        public int SuccessfulUpdates { get; set; }
+        public int FailedOperations { get; set; }
+        public int WarningsGenerated { get; set; }
+        public int ErrorsEncountered { get; set; }
+        public int InstallLoopsDetected { get; set; }
+        public int ArchitectureMismatches { get; set; }
+        
+        // System Context
+        public string SystemArchitecture { get; set; } = string.Empty;
+        public string CimianVersion { get; set; } = string.Empty;
+        public string ExecutionMode { get; set; } = string.Empty;
+        public bool PreflightSkipped { get; set; }
+        public string ManifestValidationStatus { get; set; } = string.Empty;
+        public bool CatalogRefreshRequired { get; set; }
+        public int ConditionalItemsEvaluated { get; set; }
+        public int ConditionalItemsMatched { get; set; }
+        
+        // System Health Metrics
+        public string NetworkConnectivityStatus { get; set; } = string.Empty;
+        public double DiskSpaceAvailableGb { get; set; }
+        public double MemoryUsagePeakMb { get; set; }
+        
+        // Exit Information
+        public int ExitCode { get; set; }
+        public string ExitReason { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Cimian package item from items.json according to technical specification
+    /// </summary>
+    public class CimianPackageItem
+    {
+        public string Id { get; set; } = string.Empty;
+        public string ItemName { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string CurrentStatus { get; set; } = string.Empty;
+        
+        // Metrics
+        public int InstallCount { get; set; }
+        public int UpdateCount { get; set; }
+        public int FailureCount { get; set; }
+        public int WarningCount { get; set; }
+        
+        // Error and Warning Context
+        public string LastError { get; set; } = string.Empty;
+        public string LastWarning { get; set; } = string.Empty;
+        public string LastInstallDate { get; set; } = string.Empty;
+        public string LastUpdateDate { get; set; } = string.Empty;
+        
+        // Package Information
+        public string Version { get; set; } = string.Empty;
+        public List<string> SupportedArchitectures { get; set; } = new();
+        public bool InstallLoopDetected { get; set; }
+        public CimianLoopDetails? LoopDetails { get; set; }
+        
+        // Recent Activity
+        public List<CimianPackageAttempt> RecentAttempts { get; set; } = new();
+        public string LastAttemptTime { get; set; } = string.Empty;
+        public string LastAttemptStatus { get; set; } = string.Empty;
+        
+        // Technical Details
+        public string InstallMethod { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public double SizeMb { get; set; }
+        public string DownloadUrl { get; set; } = string.Empty;
+        public string CatalogSource { get; set; } = string.Empty;
+        public List<string> Dependencies { get; set; } = new();
+        public List<string> Conflicts { get; set; } = new();
+        public CimianSystemRequirements? SystemRequirements { get; set; }
+    }
+
+    /// <summary>
+    /// Cimian install loop detection details
+    /// </summary>
+    public class CimianLoopDetails
+    {
+        public string DetectionCriteria { get; set; } = string.Empty;
+        public string LoopStartSession { get; set; } = string.Empty;
+        public string SuspectedCause { get; set; } = string.Empty;
+        public string Recommendation { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Cimian package attempt record
+    /// </summary>
+    public class CimianPackageAttempt
+    {
+        public string SessionId { get; set; } = string.Empty;
+        public string Timestamp { get; set; } = string.Empty;
+        public string Action { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Version { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Cimian system requirements
+    /// </summary>
+    public class CimianSystemRequirements
+    {
+        public int MinimumRamGb { get; set; }
+        public int MinimumDiskGb { get; set; }
+        public List<string> SupportedOs { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Cimian event data from events.jsonl according to technical specification
+    /// </summary>
+    public class CimianEventData
+    {
+        public string Timestamp { get; set; } = string.Empty;
+        public string EventType { get; set; } = string.Empty;
+        public string SessionId { get; set; } = string.Empty;
+        public string? Hostname { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public string? PackageName { get; set; }
+        public string? Version { get; set; }
+        public string? Error { get; set; }
+        public Dictionary<string, object>? Details { get; set; }
     }
 
     public class CimianInfo
@@ -72,8 +212,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         public int InstallCount { get; set; }
         public int UpdateCount { get; set; }
         public int FailureCount { get; set; }
+        public int WarningCount { get; set; }
         public int TotalSessions { get; set; }
         public bool InstallLoopDetected { get; set; }
+        public bool HasInstallLoop { get; set; }
+        public string LastError { get; set; } = string.Empty;
+        public string LastWarning { get; set; } = string.Empty;
         public string InstallMethod { get; set; } = string.Empty;
         public string Type { get; set; } = string.Empty;
         public List<Dictionary<string, object>> RecentAttempts { get; set; } = new();
@@ -81,33 +225,74 @@ namespace ReportMate.WindowsClient.Models.Modules
 
     public class CimianSession
     {
+        [JsonPropertyName("session_id")]
         public string SessionId { get; set; } = string.Empty;
+        
+        [JsonPropertyName("start_time")]
         public DateTime StartTime { get; set; }
+        
+        [JsonPropertyName("end_time")]
         public DateTime? EndTime { get; set; }
+        
+        [JsonPropertyName("run_type")]
         public string RunType { get; set; } = string.Empty; // auto, manual, bootstrap, ondemand
+        
+        [JsonPropertyName("status")]
         public string Status { get; set; } = string.Empty; // running, completed, failed, interrupted
+        
+        [JsonPropertyName("total_actions")]
         public int TotalActions { get; set; }
+        
         public int TotalPackagesManaged { get; set; }
         public int PackagesInstalled { get; set; }
         public int PackagesPending { get; set; }
         public int PackagesFailed { get; set; }
+        
+        [JsonPropertyName("installs")]
         public int Installs { get; set; }
+        
+        [JsonPropertyName("updates")]
         public int Updates { get; set; }
+        
+        [JsonPropertyName("removals")]
         public int Removals { get; set; }
+        
+        [JsonPropertyName("successes")]
         public int Successes { get; set; }
+        
+        [JsonPropertyName("failures")]
         public int Failures { get; set; }
+        
         public TimeSpan Duration { get; set; }
+        
+        [JsonPropertyName("duration_seconds")]
         public int DurationSeconds { get; set; }
+        
         public double CacheSizeMb { get; set; }
+        
+        [JsonPropertyName("hostname")]
         public string Hostname { get; set; } = string.Empty;
+        
+        [JsonPropertyName("user")]
         public string User { get; set; } = string.Empty;
+        
+        [JsonPropertyName("process_id")]
         public int ProcessId { get; set; }
+        
+        [JsonPropertyName("log_version")]
         public string LogVersion { get; set; } = string.Empty;
+        
+        [JsonPropertyName("packages_handled")]
         public List<string> PackagesHandled { get; set; } = new();
+        
+        [JsonPropertyName("environment")]
         public Dictionary<string, object> Environment { get; set; } = new();
+        
+        [JsonPropertyName("config")]
         public Dictionary<string, object> Config { get; set; } = new(); // Session-specific config
         
         // Enhanced session data from sessions.json
+        [JsonPropertyName("summary")]
         public Dictionary<string, object> Summary { get; set; } = new(); // totalPackagesManaged, packagesInstalled, etc
         
         // Enhanced logging improvements data
