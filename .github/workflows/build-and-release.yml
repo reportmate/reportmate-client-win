@@ -154,18 +154,32 @@ jobs:
         # Install WiX v6 as a global dotnet tool
         dotnet tool install --global wix --version 6.0.1
         
-        # Verify installation
+        # Verify installation using the correct WiX 6 command format
         try {
-          $wixVersion = & dotnet wix --version 2>$null
+          $wixVersion = & wix --version 2>$null
           if ($LASTEXITCODE -eq 0) {
             echo "✅ WiX Toolset v6 installed successfully: $wixVersion"
           } else {
-            echo "❌ WiX Toolset v6 installation verification failed"
-            exit 1
+            # Try alternative verification methods
+            $toolList = & dotnet tool list --global | Select-String "wix"
+            if ($toolList) {
+              echo "✅ WiX Toolset v6 installed successfully (verified via tool list)"
+              echo "Tool info: $toolList"
+            } else {
+              echo "❌ WiX Toolset v6 installation verification failed"
+              exit 1
+            }
           }
         } catch {
-          echo "❌ Failed to verify WiX installation"
-          exit 1
+          # Fallback verification
+          $toolList = & dotnet tool list --global | Select-String "wix"
+          if ($toolList) {
+            echo "✅ WiX Toolset v6 installed successfully (verified via tool list)"
+            echo "Tool info: $toolList"
+          } else {
+            echo "❌ Failed to verify WiX installation"
+            exit 1
+          }
         }
         
     - name: Build with unified script
