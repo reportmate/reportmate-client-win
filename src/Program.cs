@@ -64,9 +64,17 @@ public class Program
                 if (AttachConsole(ATTACH_PARENT_PROCESS))
                 {
                     // Successfully attached to parent console
-                    // Redirect console output to the attached console
-                    Console.SetOut(new StreamWriter(Console.OpenStandardOutput()) { AutoFlush = true });
-                    Console.SetError(new StreamWriter(Console.OpenStandardError()) { AutoFlush = true });
+                    // Use safer console redirection without creating new StreamWriters
+                    try
+                    {
+                        // Don't redirect - just use existing console handles
+                        Console.WriteLine("Verbose logging enabled - attached to parent console");
+                    }
+                    catch (Exception ex)
+                    {
+                        // If console operations fail, continue without console redirection
+                        System.Diagnostics.Debug.WriteLine($"Console attachment failed: {ex.Message}");
+                    }
                 }
                 else
                 {
@@ -868,7 +876,7 @@ public class Program
             
             if (verbose > 0)
             {
-                output += $"\nAssembly: {System.Reflection.Assembly.GetExecutingAssembly().Location}";
+                output += $"\nAssembly: {System.AppContext.BaseDirectory}";
                 output += $"\nPlatform: {Environment.OSVersion.VersionString}";
                 output += $"\nRuntime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}";
             }
