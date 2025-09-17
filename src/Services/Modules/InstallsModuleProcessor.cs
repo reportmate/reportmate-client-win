@@ -2802,57 +2802,104 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Gets the Cimian ClientIdentifier from the configuration file
+        /// </summary>
+        private string? GetCimianClientIdentifier()
+        {
+            try
+            {
+                var standardConfigPath = @"C:\ProgramData\ManagedInstalls\config.yaml";
+                var cimianConfig = ReadCimianConfigurationFile(standardConfigPath);
+                
+                if (cimianConfig != null && cimianConfig.ContainsKey("ClientIdentifier"))
+                {
+                    return cimianConfig["ClientIdentifier"]?.ToString();
+                }
+                
+                _logger.LogWarning("Could not find ClientIdentifier in Cimian configuration");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error reading Cimian ClientIdentifier");
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Gets the most specific manifest file for the current user/machine
         /// </summary>
         private string GetUserSpecificManifest(string manifestsPath)
         {
             try
             {
-                // Try to find user-specific manifest following the hierarchy:
-                // Assigned/Staff/IT/B1115/RodChristiansen.yaml -> Assigned/Staff/IT/B1115.yaml -> etc.
+                // First try to determine the manifest path from Cimian's ClientIdentifier
+                var clientIdentifier = GetCimianClientIdentifier();
+                if (!string.IsNullOrEmpty(clientIdentifier))
+                {
+                    _logger.LogDebug("Using Cimian ClientIdentifier for manifest discovery: {ClientIdentifier}", clientIdentifier);
+                    
+                    // Convert ClientIdentifier path to Windows path separators
+                    var manifestPath = clientIdentifier.Replace('/', '\\') + ".yaml";
+                    var fullManifestPath = Path.Combine(manifestsPath, manifestPath);
+                    
+                    if (File.Exists(fullManifestPath))
+                    {
+                        _logger.LogInformation("Found manifest using ClientIdentifier: {ManifestPath}", manifestPath);
+                        return manifestPath;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Manifest not found at ClientIdentifier path: {FullPath}", fullManifestPath);
+                    }
+                }
+                
+                // Fallback: Dynamic discovery by recursively searching all manifests
+                _logger.LogInformation("ClientIdentifier not available, performing dynamic manifest discovery");
                 
                 var currentUser = Environment.UserName;
                 var computerName = Environment.MachineName;
                 
-                // First try to find any user-specific manifest by looking for actual files
-                var userSpecificDir = Path.Combine(manifestsPath, @"Assigned\Staff\IT\B1115");
-                if (Directory.Exists(userSpecificDir))
+                // Recursively search all manifest directories for user or machine-specific files
+                var allManifestFiles = Directory.GetFiles(manifestsPath, "*.yaml", SearchOption.AllDirectories)
+                    .Where(f => !Path.GetFileName(f).StartsWith(".")) // Skip hidden files
+                    .OrderBy(f => f.Length) // Prefer more specific (longer) paths
+                    .ToArray();
+                
+                // First priority: Look for user-specific manifests
+                var userManifests = allManifestFiles
+                    .Where(f => Path.GetFileNameWithoutExtension(f).Equals(currentUser, StringComparison.OrdinalIgnoreCase) ||
+                               Path.GetFileNameWithoutExtension(f).Equals($"{char.ToUpper(currentUser[0])}{currentUser.Substring(1)}", StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                
+                if (userManifests.Any())
                 {
-                    var userManifests = Directory.GetFiles(userSpecificDir, "*.yaml")
-                        .Where(f => !Path.GetFileNameWithoutExtension(f).Equals("B1115", StringComparison.OrdinalIgnoreCase))
-                        .ToArray();
-                    
-                    if (userManifests.Any())
-                    {
-                        var userManifest = userManifests.First();
-                        var relativePath = Path.GetRelativePath(manifestsPath, userManifest).Replace('/', '\\');
-                        _logger.LogDebug("Found user-specific manifest: {UserManifest}", relativePath);
-                        return relativePath;
-                    }
+                    var userManifest = userManifests.First();
+                    var relativePath = Path.GetRelativePath(manifestsPath, userManifest).Replace('/', '\\');
+                    _logger.LogInformation("Found user-specific manifest: {UserManifest}", relativePath);
+                    return relativePath;
                 }
                 
-                // Try various user-specific paths with common patterns
-                var candidatePaths = new[]
+                // Second priority: Look for machine-specific manifests
+                var machineManifests = allManifestFiles
+                    .Where(f => Path.GetFileNameWithoutExtension(f).Equals(computerName, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                
+                if (machineManifests.Any())
                 {
-                    $@"Assigned\Staff\IT\B1115\{currentUser}.yaml",
-                    $@"Assigned\Staff\IT\B1115\{char.ToUpper(currentUser[0])}{currentUser.Substring(1)}.yaml", // Capitalize first letter
-                    $@"Assigned\Staff\IT\{currentUser}.yaml", 
-                    $@"Assigned\Staff\{currentUser}.yaml",
-                    $@"Assigned\{currentUser}.yaml",
-                    $@"Assigned\Staff\IT\B1115.yaml",
-                    $@"Assigned\Staff\IT.yaml",
-                    $@"Assigned\Staff.yaml",
-                    $@"Assigned.yaml"
-                };
-
-                foreach (var candidatePath in candidatePaths)
+                    var machineManifest = machineManifests.First();
+                    var relativePath = Path.GetRelativePath(manifestsPath, machineManifest).Replace('/', '\\');
+                    _logger.LogInformation("Found machine-specific manifest: {MachineManifest}", relativePath);
+                    return relativePath;
+                }
+                
+                // Third priority: Look for any manifest file (use first available)
+                if (allManifestFiles.Any())
                 {
-                    var fullPath = Path.Combine(manifestsPath, candidatePath);
-                    if (File.Exists(fullPath))
-                    {
-                        _logger.LogDebug("Found manifest: {ManifestPath}", candidatePath);
-                        return candidatePath;
-                    }
+                    var anyManifest = allManifestFiles.First();
+                    var relativePath = Path.GetRelativePath(manifestsPath, anyManifest).Replace('/', '\\');
+                    _logger.LogInformation("Using fallback manifest: {FallbackManifest}", relativePath);
+                    return relativePath;
                 }
             }
             catch (Exception ex)
