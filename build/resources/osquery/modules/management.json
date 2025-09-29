@@ -41,7 +41,7 @@
     "entra_device_info": {
       "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AAD\\Storage\\%' AND (name LIKE '%ObjectId%' OR name LIKE '%DeviceId%' OR name LIKE '%TenantId%');",
       "interval": 3600,
-      "description": "Entra (Azure AD) device object information from AAD storage"
+      "description": "Entra (Entra ID) device object information from AAD storage"
     },
     "mdm_device_info": {
       "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Provisioning\\OMADM\\Accounts\\%' AND (name IN ('DeviceClientId', 'HWDevID', 'DeviceID') OR name LIKE '%DeviceID%');",
