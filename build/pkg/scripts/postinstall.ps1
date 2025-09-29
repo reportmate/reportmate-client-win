@@ -1,73 +1,15 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# ReportMate Post-Installation Script - Comprehensive Checklist & Implementation
+# ReportMate Post-Installation Script - PKG Format
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# INSTALLATION DUTIES CHECKLIST:
-# ═══════════════════════════════════════════════════════════════════════════════
-#
-# REGISTRY CONFIGURATION:
-#   - Check for CSP/OMA-URI configuration (HKLM\SOFTWARE\Config\ReportMate)
-#   - Create main registry key (HKLM\SOFTWARE\ReportMate)
-#   - Set default configuration values (CollectionInterval, LogLevel, OsQuery paths)
-#   - Configure API URL from environment/CSP/production default
-#   - Configure Passphrase from environment/CSP/production default
-#   - Support DeviceId override (optional, auto-detected by default)
-#
-# DIRECTORY STRUCTURE:
-#   - Create ProgramData directories (ManagedReports, config, logs, cache, data)
-#   - Set proper permissions on data directory (SYSTEM FullControl)
-#   - Copy payload data files to ProgramData location
-#   - Preserve directory structure during data file copying
-#
-# FILE MANAGEMENT:
-#   - Copy osquery modules to C:\ProgramData\ManagedReports\osquery\
-#   - Copy configuration files (appsettings.yaml, appsettings.template.yaml)
-#   - Handle file path escaping and relative path calculation
-#   - Create parent directories as needed during file operations
-#
-# SCHEDULED TASKS:
-#   - Remove any existing ReportMate scheduled tasks (prevent duplicates)
-#   - Load module schedules configuration from module-schedules.json
-#   - Create hourly collection task (security, installs, profiles, system, network)
-#   - Create 4-hourly collection task (applications, inventory)
-#   - Create daily collection task (hardware, management, printers, displays)
-#   - Create all modules collection task (if configured)
-#   - Configure task settings (execution time limits, restart policies, network requirements)
-#   - Run tasks as SYSTEM with highest privileges
-#
-# CIMIAN INTEGRATION:
-#   - Move files from C:\Program Files\ReportMate\cimian to C:\Program Files\Cimian
-#   - Create target Cimian directory if needed
-#   - Ensure only one copy of files exists (in final Cimian location)
-#   - Handle missing Cimian directory gracefully
-#
-# OSQUERY DEPENDENCY:
-#   - Check if osquery is installed at C:\Program Files\osquery\osqueryi.exe
-#   - Attempt automatic installation via chocolatey if missing
-#   - Verify osquery installation and version
-#   - Provide manual installation instructions if automatic fails
-#   - Continue installation even if osquery is missing (with warnings)
-#
-# VALIDATION & TESTING:
-#   - Test installation by running 'runner.exe info'
-#   - Verify exit codes and handle test failures
-#   - Provide comprehensive installation summary
-#   - Display configuration status and registry locations
-#   - Show environment variable override instructions
-#   - Provide next steps and verification commands
-#
-# ERROR HANDLING:
-#   - Use "Continue" error action for non-critical operations
-#   - Wrap critical operations in try-catch blocks
-#   - Provide meaningful warning messages for failures
-#   - Continue installation even if individual components fail
-#   - Distinguish between warnings and critical errors
+# This script handles the complete installation of ReportMate after files are copied
+# to their target location by cimipkg. It configures registry settings, creates
+# scheduled tasks, sets up data directories, and ensures proper integration.
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
-Write-Host "ReportMate Post-Installation Script"
+Write-Host "ReportMate Post-Installation Script (PKG Format)"
 Write-Host "=================================================="
-Write-Host "Comprehensive checklist verified - all duties covered!"
 
 $ErrorActionPreference = "Continue"
 
@@ -198,38 +140,41 @@ try {
     Write-Warning "Failed to set permissions on data directory: $_"
 }
 
-# Copy ProgramData files from payload to correct location
-$payloadRoot = Split-Path -Parent $PSScriptRoot  
-$dataPayloadPath = Join-Path $payloadRoot "payload\data"
-$programDataLocation = "C:\ProgramData\ManagedReports"
+# Copy configuration files to ProgramData (they should be in payload root since PKG uses install_location)
+$configFiles = @(
+    @{ Source = "C:\Program Files\ReportMate\appsettings.yaml"; Destination = "C:\ProgramData\ManagedReports\appsettings.yaml" },
+    @{ Source = "C:\Program Files\ReportMate\appsettings.template.yaml"; Destination = "C:\ProgramData\ManagedReports\appsettings.template.yaml" }
+)
 
-if (Test-Path $dataPayloadPath) {
-    Write-Host "Copying data files to ProgramData..."
-    New-Item -ItemType Directory -Path $programDataLocation -Force | Out-Null
-    
-    Get-ChildItem -Path $dataPayloadPath -Recurse | ForEach-Object {
-        $fullName = $_.FullName
-        $fullName = [Management.Automation.WildcardPattern]::Escape($fullName)
-        $relative = $fullName.Substring($dataPayloadPath.Length).TrimStart('\','/')
-        $dest = Join-Path $programDataLocation $relative
-        
-        if ($_.PSIsContainer) {
-            New-Item -ItemType Directory -Force -Path $dest | Out-Null
-        } else {
-            $parentDir = Split-Path $dest -Parent
-            if ($parentDir -and -not (Test-Path $parentDir)) {
-                New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
-            }
-            Copy-Item -LiteralPath $fullName -Destination $dest -Force
-            Write-Verbose "Copied data file: $relative"
+foreach ($configFile in $configFiles) {
+    if (Test-Path $configFile.Source) {
+        try {
+            Copy-Item $configFile.Source $configFile.Destination -Force
+            Write-Host "Copied config file: $(Split-Path $configFile.Destination -Leaf)"
+        } catch {
+            Write-Warning "Failed to copy config file: $_"
         }
     }
-    Write-Host "Data files copied to ProgramData successfully"
-} else {
-    Write-Warning "No data payload directory found at: $dataPayloadPath"
 }
 
-# SCHEDULED TASKS INSTALLATION (INLINE)
+# Copy osquery modules to ProgramData
+$osquerySource = "C:\Program Files\ReportMate\osquery"
+$osqueryDestination = "C:\ProgramData\ManagedReports\osquery"
+
+if (Test-Path $osquerySource) {
+    Write-Host "Copying osquery modules to ProgramData..."
+    try {
+        if (Test-Path $osqueryDestination) {
+            Remove-Item $osqueryDestination -Recurse -Force
+        }
+        Copy-Item $osquerySource $osqueryDestination -Recurse -Force
+        Write-Host "osquery modules copied successfully"
+    } catch {
+        Write-Warning "Failed to copy osquery modules: $_"
+    }
+}
+
+# SCHEDULED TASKS INSTALLATION
 Write-Host "Installing ReportMate scheduled tasks..."
 try {
     $InstallPath = "C:\Program Files\ReportMate"
@@ -327,9 +272,6 @@ if (Test-Path $cimianReportMateDir) {
 }
 
 # OSQUERY DEPENDENCY CHECK & INSTALLATION
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Check if osquery is installed
 $osqueryPath = "C:\Program Files\osquery\osqueryi.exe"
 if (-not (Test-Path $osqueryPath)) {
     Write-Host "WARNING: osquery not found at expected location: $osqueryPath"
@@ -404,39 +346,3 @@ Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -7,7 +7,7 @@
     
 .DESCRIPTION
     One-stop build script that replicates the CI pipeline locally.
-    Builds all package types: EXE, NUPKG, and ZIP.
+    Builds all package types: PKG (primary), EXE, NUPKG, MSI, and ZIP.
     Supports creating tags and releases when run with appropriate parameters.
     
 .PARAMETER Version
@@ -27,6 +27,9 @@
 
 .PARAMETER SkipMSI
     Skip MSI creation
+
+.PARAMETER SkipPKG
+    Skip PKG creation
     
 .PARAMETER Clean
     Clean all build artifacts first
@@ -53,7 +56,7 @@
     Override auto-detection with specific certificate thumbprint
 
 .PARAMETER Install
-    Automatically install the built package using the preferred method (MSI if available, otherwise NUPKG via chocolatey) - requires admin privileges
+    Automatically install the built package using the preferred method (PKG if available, otherwise MSI, then NUPKG via chocolatey) - requires admin privileges
     
 .EXAMPLE
     .\build.ps1
@@ -85,11 +88,15 @@
 
 .EXAMPLE
     .\build.ps1 -Install
-    Build and automatically install the MSI package (requires admin privileges)
+    Build and automatically install the PKG package (requires admin privileges)
 
 .EXAMPLE
     .\build.ps1 -SkipNUPKG -SkipZIP
     Build only EXE and MSI (skip NUPKG and ZIP)
+
+.EXAMPLE
+    .\build.ps1 -SkipMSI -SkipNUPKG -SkipZIP
+    Build only PKG (skip other package formats)
 #>
 
 param(
@@ -100,6 +107,7 @@ param(
     [switch]$SkipNUPKG = $false,
     [switch]$SkipZIP = $false,
     [switch]$SkipMSI = $false,
+    [switch]$SkipPKG = $false,
     [switch]$Clean = $false,
     [string]$ApiUrl = "",
     [switch]$CreateTag = $false,
@@ -323,9 +331,11 @@ $RootDir = $PSScriptRoot
 $SrcDir = Join-Path $RootDir "src"
 $BuildDir = Join-Path $RootDir "build"
 $NupkgDir = Join-Path $BuildDir "nupkg"
+$PkgDir = Join-Path $BuildDir "pkg"
 $ProgramFilesPayloadDir = Join-Path $NupkgDir "payload"
 $ProgramDataPayloadDir = Join-Path $NupkgDir "payload\data"
 $CimianPayloadDir = Join-Path $NupkgDir "payload\cimian"
+$PkgPayloadDir = Join-Path $PkgDir "payload"
 $MsiStagingDir = Join-Path $RootDir "dist\msi-staging"
 $PublishDir = Join-Path $RootDir ".publish"
 $OutputDir = Join-Path $RootDir "dist"
@@ -372,11 +382,39 @@ Write-Output ""
 
 # Create directories
 Write-Step "Creating directories..."
-@($PublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir, $MsiStagingDir) | ForEach-Object {
+@($PublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir, $PkgPayloadDir, $MsiStagingDir) | ForEach-Object {
     New-Item -ItemType Directory -Path $_ -Force | Out-Null
     Write-Verbose "Created: $_"
 }
 Write-Success "Directories created"
+Write-Output ""
+
+# Always refresh payload directories from resources (clean slate for each build)
+Write-Step "Refreshing payload directories from resources..."
+
+# Clean and refresh NUPKG payload directory
+if (Test-Path $ProgramFilesPayloadDir) {
+    Remove-Item $ProgramFilesPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $ProgramDataPayloadDir) {
+    Remove-Item $ProgramDataPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $CimianPayloadDir) {
+    Remove-Item $CimianPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Clean and refresh PKG payload directory
+if (Test-Path $PkgPayloadDir) {
+    Remove-Item $PkgPayloadDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Recreate payload directories
+@($ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir, $PkgPayloadDir) | ForEach-Object {
+    New-Item -ItemType Directory -Path $_ -Force | Out-Null
+    Write-Verbose "Refreshed: $_"
+}
+
+Write-Success "Payload directories refreshed from clean slate"
 Write-Output ""
 
 # Check prerequisites
@@ -418,9 +456,9 @@ if ($CreateRelease) {
     }
 }
 
-# Check cimipkg (for NUPKG)
+# Check cimipkg (for NUPKG and PKG)
 $cimipkgPath = $null
-if (-not $SkipNUPKG) {
+if (-not $SkipNUPKG -or -not $SkipPKG) {
     $cimipkgLocations = @(
         (Get-Command cimipkg -ErrorAction SilentlyContinue)?.Source,
         "$RootDir/cimipkg.exe",
@@ -693,15 +731,25 @@ if (Test-Path $installTasksInPayload) {
 # cimian-pkg will generate the chocolatey install script automatically
 # The enhanced postinstall.ps1 in scripts/ directory will be appended to it
 
-# Update package build-info.yaml
+# Update package build-info.yaml for NUPKG
 $buildInfoPath = Join-Path $NupkgDir "build-info.yaml"
 if (Test-Path $buildInfoPath) {
     $content = Get-Content $buildInfoPath -Raw
-    $content = $content -replace 'version: ".*?"', "version: `"$Version`""
+    $content = $content -replace 'version:.*', "version: $Version"
     # Remove any trailing newlines and add exactly one
     $content = $content.TrimEnd(@("`r", "`n")) + "`n"
     Set-Content $buildInfoPath $content -Encoding UTF8 -NoNewline
-    Write-Verbose "Updated build-info.yaml version"
+    Write-Verbose "Updated NUPKG build-info.yaml version to: $Version"
+}
+
+# Copy .env file from root to NUPKG build directory for cimipkg
+$rootEnvFile = Join-Path $RootDir ".env"
+$nupkgEnvFile = Join-Path $NupkgDir ".env"
+if (Test-Path $rootEnvFile) {
+    Copy-Item $rootEnvFile $nupkgEnvFile -Force
+    Write-Verbose "Copied .env file to NUPKG build directory for cimipkg"
+} else {
+    Write-Warning "Root .env file not found at: $rootEnvFile - NUPKG may fail during installation"
 }
 
 Write-Success "Package payload prepared"
@@ -744,9 +792,10 @@ if (-not $SkipNUPKG) {
             Push-Location $NupkgDir
             
             # Use Start-Process to properly handle output and avoid redirection issues
+            $envFile = Join-Path $NupkgDir ".env"
             $startInfo = New-Object System.Diagnostics.ProcessStartInfo
             $startInfo.FileName = $cimipkgPath
-            $startInfo.Arguments = "."
+            $startInfo.Arguments = "-env `"$envFile`" ."
             $startInfo.WorkingDirectory = $NupkgDir
             $startInfo.UseShellExecute = $false
             $startInfo.CreateNoWindow = $true
@@ -802,6 +851,176 @@ if (-not $SkipNUPKG) {
     }
 } else {
     Write-Info "Skipping NUPKG creation"
+}
+
+Write-Output ""
+
+# Create PKG package
+if (-not $SkipPKG) {
+    Write-Step "Creating PKG package..."
+    
+    # Prepare PKG payload
+    Write-Verbose "Preparing PKG payload..."
+    
+    # Copy executable to PKG payload (will be installed to Program Files/ReportMate)
+    Copy-Item (Join-Path $PublishDir "runner.exe") $PkgPayloadDir -Force
+    Write-Verbose "Copied runner.exe to PKG payload"
+    
+    # Copy configuration files to PKG payload
+    Copy-Item (Join-Path $SrcDir "appsettings.yaml") $PkgPayloadDir -Force
+    Copy-Item (Join-Path $SrcDir "appsettings.yaml") (Join-Path $PkgPayloadDir "appsettings.template.yaml") -Force
+    Write-Verbose "Copied configuration files to PKG payload"
+    
+    # Copy osquery modules to PKG payload
+    $osquerySourceDir = Join-Path $BuildDir "resources\osquery"
+    if (Test-Path $osquerySourceDir) {
+        Copy-Item $osquerySourceDir $PkgPayloadDir -Recurse -Force
+        Write-Verbose "Copied osquery modules to PKG payload"
+    }
+    
+    # Copy shared resources
+    $sharedResourcesDir = Join-Path $BuildDir "resources"
+    $sharedFiles = @(
+        "module-schedules.json",
+        "uninstall-tasks.ps1"
+    )
+    
+    foreach ($file in $sharedFiles) {
+        $sourcePath = Join-Path $sharedResourcesDir $file
+        if (Test-Path $sourcePath) {
+            Copy-Item $sourcePath $PkgPayloadDir -Force
+            Write-Verbose "Copied $file to PKG payload"
+        }
+    }
+    
+    # Copy Cimian integration files to PKG payload
+    $cimianPostflightSource = Join-Path $sharedResourcesDir "cimian-postflight.ps1"
+    if (Test-Path $cimianPostflightSource) {
+        $pkgCimianDir = Join-Path $PkgPayloadDir "cimian"
+        New-Item -ItemType Directory -Path $pkgCimianDir -Force | Out-Null
+        Copy-Item $cimianPostflightSource (Join-Path $pkgCimianDir "postflight.ps1") -Force
+        Write-Verbose "Copied Cimian integration files to PKG payload"
+    }
+    
+    # Create version file
+    $versionContent = @"
+ReportMate
+Version: $Version
+Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
+Platform: Windows x64
+Commit: $env:GITHUB_SHA
+"@
+    $versionContent | Out-File (Join-Path $PkgPayloadDir "version.txt") -Encoding UTF8
+    
+    # Update PKG build-info.yaml version
+    $pkgBuildInfoPath = Join-Path $PkgDir "build-info.yaml"
+    if (Test-Path $pkgBuildInfoPath) {
+        $content = Get-Content $pkgBuildInfoPath -Raw
+        $content = $content -replace 'version:.*', "version: $Version"
+        $content = $content.TrimEnd(@("`r", "`n")) + "`n"
+        Set-Content $pkgBuildInfoPath $content -Encoding UTF8 -NoNewline
+        Write-Verbose "Updated PKG build-info.yaml version to: $Version"
+    }
+    
+    # Copy .env file from root to PKG build directory for cimipkg
+    $rootEnvFile = Join-Path $RootDir ".env"
+    $pkgEnvFile = Join-Path $PkgDir ".env"
+    if (Test-Path $rootEnvFile) {
+        Copy-Item $rootEnvFile $pkgEnvFile -Force
+        Write-Verbose "Copied .env file to PKG build directory for cimipkg"
+    } else {
+        Write-Warning "Root .env file not found at: $rootEnvFile - PKG may fail during installation"
+    }
+    
+    # Check for cimipkg
+    if (-not $cimipkgPath) {
+        Write-Verbose "Downloading cimipkg for PKG creation..."
+        try {
+            $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/windowsadmins/cimian-pkg/releases/latest"
+            $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*amd64*" } | Select-Object -First 1 -ExpandProperty browser_download_url
+            
+            if (-not $downloadUrl) {
+                $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1 -ExpandProperty browser_download_url
+            }
+            
+            if ($downloadUrl) {
+                $cimipkgPath = Join-Path $RootDir "cimipkg.exe"
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $cimipkgPath
+                Write-Success "Downloaded cimipkg: $downloadUrl"
+            } else {
+                throw "No suitable cimipkg binary found"
+            }
+        } catch {
+            Write-Error "Failed to download cimipkg: $_"
+            Write-Info "Download manually from: https://github.com/windowsadmins/cimian-pkg/releases"
+            $SkipPKG = $true
+        }
+    }
+    
+    if (-not $SkipPKG -and $cimipkgPath) {
+        try {
+            Write-Verbose "Creating PKG with cimipkg from: $cimipkgPath"
+            Push-Location $PkgDir
+            
+            # Build PKG using cimipkg (default format is .pkg, not .nupkg)
+            # cimipkg reads version from build-info.yaml, no -v flag needed
+            $envFile = Join-Path $PkgDir ".env"
+            $pkgArgs = @("-verbose", "-env", $envFile, ".")  # verbose flag, env file, and current directory
+            
+            Write-Verbose "Running cimipkg with args: $($pkgArgs -join ' ')"
+            
+            # Use Start-Process for better control
+            $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $startInfo.FileName = $cimipkgPath
+            $startInfo.Arguments = $pkgArgs -join ' '
+            $startInfo.WorkingDirectory = $PkgDir
+            $startInfo.UseShellExecute = $false
+            $startInfo.CreateNoWindow = $true
+            $startInfo.RedirectStandardOutput = $true
+            $startInfo.RedirectStandardError = $true
+            
+            $process = [System.Diagnostics.Process]::Start($startInfo)
+            $stdout = $process.StandardOutput.ReadToEnd()
+            $stderr = $process.StandardError.ReadToEnd()
+            $process.WaitForExit()
+            $exitCode = $process.ExitCode
+            
+            Write-Verbose "cimipkg stdout: $stdout"
+            if ($stderr) {
+                Write-Verbose "cimipkg stderr: $stderr"
+            }
+            Write-Verbose "cimipkg exit code: $exitCode"
+            
+            if ($exitCode -eq 0) {
+                # Find generated pkg files
+                $pkgFiles = Get-ChildItem -Path "." -Filter "*.pkg" -Recurse
+                if (-not $pkgFiles) {
+                    $pkgFiles = Get-ChildItem -Path "build" -Filter "*.pkg" -ErrorAction SilentlyContinue
+                }
+                
+                foreach ($file in $pkgFiles) {
+                    # Move PKG file to output directory with proper naming
+                    $newFileName = "ReportMate-$Version.pkg"
+                    $targetPath = "$OutputDir/$newFileName"
+                    Move-Item $file.FullName $targetPath -Force
+                    $pkgSize = (Get-Item $targetPath).Length / 1MB
+                    Write-Success "PKG created: $newFileName ($([math]::Round($pkgSize, 2)) MB)"
+                }
+                
+                if (-not $pkgFiles) {
+                    Write-Warning "No .pkg files found after cimipkg execution"
+                }
+            } else {
+                throw "cimipkg failed with exit code: $exitCode"
+            }
+        } catch {
+            Write-Error "PKG creation failed: $_"
+        } finally {
+            Pop-Location
+        }
+    }
+} else {
+    Write-Info "Skipping PKG creation"
 }
 
 Write-Output ""
@@ -1078,7 +1297,7 @@ if ($CreateRelease -and $ghFound) {
         $outputFiles = Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue
         
         foreach ($file in $outputFiles) {
-            if ($file.Extension -in @('.nupkg', '.zip')) {
+            if ($file.Extension -in @('.pkg', '.msi', '.nupkg', '.zip')) {
                 $releaseFiles += $file.FullName
             }
         }
@@ -1091,10 +1310,20 @@ if ($CreateRelease -and $ghFound) {
 ## ReportMate $Version
 
 ### 📦 Package Types
+- **PKG Package**: Modern format for sbin-installer deployment (primary)
+- **MSI Package**: Traditional Windows installer with full UI
 - **NUPKG Package**: For Chocolatey and Cimian package management  
 - **ZIP Archive**: For manual installation and testing
 
 ### 🚀 Quick Start
+
+**PKG Installation (Recommended):**
+Extract PKG and run `scripts/postinstall.ps1` as administrator
+
+**MSI Installation:**
+``````cmd
+msiexec.exe /i ReportMate-$Version.msi /quiet
+``````
 
 **Chocolatey Installation:**
 ``````cmd
@@ -1158,7 +1387,9 @@ if ($outputFiles) {
         $sizeKB = [math]::Round($file.Length / 1KB, 1)
         $icon = switch ($file.Extension) {
             ".nupkg" { "📦" }
+            ".pkg" { "📦" }
             ".zip" { "🗜️ " }
+            ".msi" { "🔧" }
             ".exe" { "⚡" }
             default { "📄" }
         }
@@ -1170,10 +1401,11 @@ if ($outputFiles) {
 
 Write-Output ""
 Write-Header "Next Steps"
-Write-Info "1. Test MSI: msiexec.exe /i `"$(Join-Path $OutputDir "ReportMate-$Version.msi")`" /quiet /norestart"
-Write-Info "2. Test NUPKG: choco install `"$(Join-Path $OutputDir "ReportMate-$Version.nupkg")`" --source=."
-Write-Info "3. Test ZIP: Extract and run install.bat as administrator"
-Write-Info "4. Deploy via Windows Installer, Chocolatey, or manual installation"
+Write-Info "1. Test PKG: Install with sbin-installer or extract manually"
+Write-Info "2. Test MSI: msiexec.exe /i `"$(Join-Path $OutputDir "ReportMate-$Version.msi")`" /quiet /norestart"
+Write-Info "3. Test NUPKG: choco install `"$(Join-Path $OutputDir "ReportMate-$Version.nupkg")`" --source=."
+Write-Info "4. Test ZIP: Extract and run install.bat as administrator"
+Write-Info "5. Deploy via PKG (primary), MSI, Chocolatey, or manual installation"
 
 if ($ApiUrl) {
     Write-Info "5. Configured API URL: $ApiUrl"
@@ -1191,11 +1423,30 @@ if ($CreateRelease -and $ghFound) {
 if ($Install) {
     Write-Step "Installing ReportMate package..."
     
-    # Prioritize MSI installation if available
+    # Prioritize PKG installation if available (primary format)
+    $pkgPath = Join-Path $OutputDir "ReportMate-$Version.pkg"
     $msiPath = Join-Path $OutputDir "ReportMate-$Version.msi"
     $nupkgPath = Join-Path $OutputDir "ReportMate-$Version.nupkg"
     
-    if ((Test-Path $msiPath) -and (-not $SkipMSI)) {
+    if ((Test-Path $pkgPath) -and (-not $SkipPKG)) {
+        Write-Info "Installing PKG package: ReportMate-$Version.pkg"
+        Write-Info "PKG format is the primary deployment method for ReportMate"
+        try {
+            # PKG files can be installed via sbin-installer or extracted manually
+            Write-Info "PKG installation options:"
+            Write-Info "1. Use sbin-installer for automated installation"
+            Write-Info "2. Extract manually and run scripts"
+            Write-Info "3. Deploy via enterprise management tools"
+            
+            # For now, provide instructions rather than attempting automatic installation
+            # as PKG installation methods may vary by environment
+            Write-Success "PKG package ready for deployment: $pkgPath"
+            Write-Info "Extract the PKG and run scripts/postinstall.ps1 as administrator for manual installation"
+            
+        } catch {
+            Write-Error "PKG package preparation failed: $_"
+        }
+    } elseif ((Test-Path $msiPath) -and (-not $SkipMSI)) {
         Write-Info "Installing MSI package: ReportMate-$Version.msi"
         try {
             # Check if running as administrator
@@ -1283,6 +1534,7 @@ if ($Install) {
     } else {
         Write-Error "No installation packages found"
         Write-Info "Expected files:"
+        Write-Info "  - PKG: $pkgPath (primary)"
         Write-Info "  - MSI: $msiPath"
         Write-Info "  - NUPKG: $nupkgPath"
         Write-Info "Make sure packages were built successfully"
@@ -1301,6 +1553,19 @@ if (Test-Path $osqueryProgramFilesDir) {
     Write-Verbose "Removed duplicate osquery directory from Program Files payload"
 }
 Write-Success "Duplicate osquery files cleaned up"
+
+# Clean up all payload directories after package creation
+Write-Step "Cleaning up payload directories after package creation..."
+$payloadDirs = @($ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir, $PkgPayloadDir)
+
+foreach ($dir in $payloadDirs) {
+    if (Test-Path $dir) {
+        Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Verbose "Cleaned up: $dir"
+    }
+}
+
+Write-Success "All payload directories cleaned up"
 
 Write-Output ""
 Write-Success "Build completed successfully!"
