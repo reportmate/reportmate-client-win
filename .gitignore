@@ -389,6 +389,9 @@ FodyWeavers.xsd
 appsettings.Production.json
 appsettings.Development.json
 appsettings.Local.json
+.env
+**/.env
+*.env
 
 # Logs
 *.log
