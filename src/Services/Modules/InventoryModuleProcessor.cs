@@ -208,54 +208,53 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// </summary>
         private string ExtractSerialNumber(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
         {
+            // Method 1: Try system_info hardware_serial (BIOS/UEFI serial - most reliable)
             if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
             {
                 var firstResult = systemInfo[0];
                 if (firstResult.TryGetValue("hardware_serial", out var serial) && !string.IsNullOrEmpty(serial?.ToString()))
                 {
-                    var serialStr = serial.ToString();
+                    var serialStr = serial.ToString()?.Trim();
+                    
+                    // Reject only obvious placeholder values - accept everything else as-is
                     if (!string.IsNullOrEmpty(serialStr) && 
                         serialStr != "0" && 
                         serialStr != "System Serial Number" &&
                         serialStr != "To be filled by O.E.M." &&
                         serialStr != "Default string" &&
-                        serialStr != Environment.MachineName &&
                         !serialStr.StartsWith("00000000"))
                     {
+                        _logger.LogInformation("Using hardware_serial from system_info: {Serial}", serialStr);
                         return serialStr;
-                    }
-                }
-                
-                if (firstResult.TryGetValue("computer_name", out var computerName) && !string.IsNullOrEmpty(computerName?.ToString()))
-                {
-                    var computerNameStr = computerName.ToString();
-                    if (!string.IsNullOrEmpty(computerNameStr) && computerNameStr != Environment.MachineName)
-                    {
-                        return computerNameStr;
                     }
                 }
             }
 
-            // Try chassis info as fallback
+            // Method 2: Try chassis_info serial as fallback
             if (osqueryResults.TryGetValue("chassis_info", out var chassisInfo) && chassisInfo.Count > 0)
             {
                 var chassis = chassisInfo[0];
                 if (chassis.TryGetValue("serial", out var chassisSerial) && !string.IsNullOrEmpty(chassisSerial?.ToString()))
                 {
-                    var chassisSerialStr = chassisSerial.ToString();
+                    var chassisSerialStr = chassisSerial.ToString()?.Trim();
+                    
+                    // Reject only obvious placeholder values
                     if (!string.IsNullOrEmpty(chassisSerialStr) && 
                         chassisSerialStr != "0" && 
                         chassisSerialStr != "System Serial Number" &&
                         chassisSerialStr != "To be filled by O.E.M." &&
-                        chassisSerialStr != Environment.MachineName)
+                        chassisSerialStr != "Default string")
                     {
+                        _logger.LogInformation("Using serial from chassis_info: {Serial}", chassisSerialStr);
                         return chassisSerialStr;
                     }
                 }
             }
 
-            // Fallback to machine name if no valid serial found
-            return Environment.MachineName;
+            // CRITICAL: No valid hardware serial found - device cannot register with ReportMate
+            // We do NOT fall back to machine name or any other identifier
+            _logger.LogError("FATAL: No valid hardware serial number found. Device cannot register with ReportMate.");
+            throw new InvalidOperationException("No valid hardware serial number found. Device requires a valid BIOS/chassis serial to register with ReportMate.");
         }
         
         /// <summary>
