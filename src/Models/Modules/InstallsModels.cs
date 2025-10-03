@@ -201,7 +201,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string ItemName { get; set; } = string.Empty;
         public string DisplayName { get; set; } = string.Empty;
         public string ItemType { get; set; } = string.Empty;
-        public string CurrentStatus { get; set; } = string.Empty;
+        public string CurrentStatus { get; set; } = string.Empty;  // Original Cimian status (Error, Install Loop, Not Available, etc.)
+        public string MappedStatus { get; set; } = string.Empty;    // Simplified status for filtering (Failed, Pending, Warning, Installed, Unknown)
         public string LatestVersion { get; set; } = string.Empty;
         public string InstalledVersion { get; set; } = string.Empty;
         public string LastSeenInSession { get; set; } = string.Empty;
