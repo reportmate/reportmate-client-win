@@ -1150,70 +1150,77 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                 foreach (var itemDict in items)
                 {
+                    var originalStatus = GetDictValue(itemDict, "current_status");
+                    
                     var item = new CimianItem
                     {
                         Id = GetDictValue(itemDict, "id"),
                         ItemName = GetDictValue(itemDict, "item_name"),
                         DisplayName = GetDictValue(itemDict, "display_name"),
-                        CurrentStatus = GetDictValue(itemDict, "current_status"),
+                        CurrentStatus = originalStatus,  // CRITICAL: Preserve original Cimian status
                         LatestVersion = GetDictValue(itemDict, "latest_version"),
                         InstalledVersion = GetDictValue(itemDict, "installed_version"),
-                        LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session")
+                        LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session"),
+                        LastError = GetDictValue(itemDict, "last_error") ?? string.Empty, // CRITICAL: Error messages
+                        LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty // CRITICAL: Warning messages
                     };
 
                     // Clean status mapping for Cimian - PRIORITIZE FAILURE STATES
-                    var cimianStatus = "Unknown";
+                    var mappedStatus = "Unknown";
                     
                     // CRITICAL: Check failure states FIRST before version matching
-                    if (item.CurrentStatus?.Equals("Error", StringComparison.OrdinalIgnoreCase) == true ||
-                        item.CurrentStatus?.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) == true ||
-                        item.CurrentStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true ||
+                    // This creates a SIMPLIFIED status for filtering while preserving original in CurrentStatus
+                    if (originalStatus?.Equals("Error", StringComparison.OrdinalIgnoreCase) == true ||
+                        originalStatus?.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) == true ||
+                        originalStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true ||
                         HasFailedAttempts(itemDict))
                     {
-                        cimianStatus = "Failed";  // Map Install Loop and failures to Failed
+                        mappedStatus = "Failed";  // Map Install Loop and failures to Failed
                         errorsCount++;
                     }
-                    else if (item.CurrentStatus?.Equals("Pending", StringComparison.OrdinalIgnoreCase) == true)
+                    else if (originalStatus?.Equals("Pending", StringComparison.OrdinalIgnoreCase) == true)
                     {
-                        cimianStatus = "Pending";
+                        mappedStatus = "Pending";
                         updatesCount++;
                     }
                     else if (!string.IsNullOrEmpty(item.InstalledVersion) && !string.IsNullOrEmpty(item.LatestVersion))
                     {
                         if (item.InstalledVersion == item.LatestVersion)
                         {
-                            cimianStatus = "Installed";
+                            mappedStatus = "Installed";
                         }
                         else
                         {
-                            cimianStatus = "Pending";  // Update available → Pending
+                            mappedStatus = "Pending";  // Update available → Pending
                             updatesCount++;
                         }
                     }
                     else if (!string.IsNullOrEmpty(item.InstalledVersion))
                     {
-                        cimianStatus = "Installed";
+                        mappedStatus = "Installed";
                     }
                     else
                     {
-                        cimianStatus = "Pending";
+                        mappedStatus = "Pending";
                     }
 
                     // Log the status determination for debugging
-                    _logger.LogInformation("ITEM STATUS MAPPING - Item [{id}]: raw_status='{rawStatus}', failure_count={failureCount}, mapped_status='{mappedStatus}'", 
+                    _logger.LogInformation("ITEM STATUS MAPPING - Item [{id}]: original_status='{originalStatus}', failure_count={failureCount}, mapped_status='{mappedStatus}'", 
                         GetDictValue(itemDict, "id"), 
                         item.CurrentStatus ?? "null", 
                         GetDictValue(itemDict, "failure_count") ?? "0",
-                        cimianStatus);
+                        mappedStatus);
 
                     // Check for warnings
-                    if (HasWarningAttempts(itemDict) && cimianStatus != "Error")
+                    if (HasWarningAttempts(itemDict) && mappedStatus != "Failed")
                     {
-                        cimianStatus = "Warning";
+                        mappedStatus = "Warning";
                         warningsCount++;
                     }
 
-                    item.CurrentStatus = cimianStatus; // Override with clean Cimian status
+                    // CRITICAL FIX: Store mapped status separately, preserve original CurrentStatus
+                    item.MappedStatus = mappedStatus;  // Simplified for filtering: Failed/Pending/Warning/Installed/Unknown
+                    // item.CurrentStatus already contains original: Error/Install Loop/Not Available/Warning/Pending/Installed
                     data.Cimian.Items.Add(item);
                 }
 
@@ -1970,17 +1977,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                     
                     // CRITICAL FIX: Determine status based on failure states FIRST, then version comparison
+                    // PRESERVE ORIGINAL: Store original Cimian status before any transformations
+                    var originalCimianStatus = GetDictValue(item, "current_status");
                     string determinedStatus;
-                    var currentStatus = GetDictValue(item, "current_status");
                     
                     // PRIORITY 1: Check for failure states BEFORE version matching
-                    if (currentStatus?.Equals("Error", StringComparison.OrdinalIgnoreCase) == true ||
-                        currentStatus?.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) == true ||
-                        currentStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)
+                    if (originalCimianStatus?.Equals("Error", StringComparison.OrdinalIgnoreCase) == true ||
+                        originalCimianStatus?.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) == true ||
+                        originalCimianStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)
                     {
                         determinedStatus = "Failed";
                         _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: current_status='{CurrentStatus}' -> 'Failed' (prioritizing failure state over version comparison)", 
-                            GetDictValue(item, "id"), currentStatus);
+                            GetDictValue(item, "id"), originalCimianStatus);
                     }
                     else if (!string.IsNullOrEmpty(latestVersion) && !string.IsNullOrEmpty(installedVersion))
                     {
@@ -2024,13 +2032,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         // Fall back to Cimian status if version comparison isn't possible
                         determinedStatus = string.IsNullOrEmpty(cimianStatus) ? 
-                            (GetDictValue(item, "current_status") ?? "Unknown") : cimianStatus;
+                            (originalCimianStatus ?? "Unknown") : cimianStatus;
                         _logger.LogInformation("STATUS DETERMINATION - Item {ItemId}: No version comparison possible, using fallback status: '{Status}'", 
                             GetDictValue(item, "id"), determinedStatus);
                     }
                     
-                    // Use the determined status instead of raw cimianStatus
-                    cimianStatus = determinedStatus;
+                    // Use the determined status for mapping purposes (simplified status)
+                    // but keep originalCimianStatus for detailed tracking
+                    var mappedStatus = determinedStatus;
                     
                     // Check for install loop detection flag
                     bool hasInstallLoop = false;
@@ -2051,15 +2060,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                     
                     // Map Cimian's detailed status to ReportMate's simplified dashboard status
-                    var reportMateStatus = MapCimianStatusToReportMate(cimianStatus, hasInstallLoop);
+                    var reportMateStatus = MapCimianStatusToReportMate(mappedStatus, hasInstallLoop);
                     
                     // Debug: Log key field values
                     var itemId = GetDictValue(item, "id");
                     var itemName = GetDictValue(item, "item_name") ?? GetDictValue(item, "name") ?? itemId;
                     var displayName = GetDictValue(item, "display_name") ?? itemName;
                     
-                    _logger.LogInformation("Item [{ItemId}]: name='{ItemName}', display_name='{DisplayName}', version='{Version}', cimian_status='{CimianStatus}' -> mapped_status='{ReportMateStatus}'", 
-                        itemId, itemName, displayName, extractedVersion, cimianStatus, reportMateStatus);
+                    _logger.LogInformation("Item [{ItemId}]: name='{ItemName}', display_name='{DisplayName}', version='{Version}', original_status='{OriginalStatus}', mapped_status='{MappedStatus}' -> reportmate_status='{ReportMateStatus}'", 
+                        itemId, itemName, displayName, extractedVersion, originalCimianStatus, mappedStatus, reportMateStatus);
 
                     var managedInstall = new ManagedInstall
                     {
@@ -2084,13 +2093,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                         ItemName = itemName,
                         DisplayName = displayName,
                         ItemType = GetDictValue(item, "item_type"),
-                        CurrentStatus = cimianStatus, // Enhanced: Store original Cimian status for detailed tracking
+                        CurrentStatus = originalCimianStatus ?? "Unknown", // CRITICAL: Store ORIGINAL Cimian status (Error, Install Loop, etc.)
+                        MappedStatus = mappedStatus, // Store simplified status (Failed, Pending, Installed, etc.)
                         LatestVersion = extractedVersion, // Enhanced: Use version from recent_attempts
                         InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
                         LastSeenInSession = GetDictValue(item, "last_seen_in_session"),
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
-                        Type = GetDictValue(item, "type")
+                        Type = GetDictValue(item, "type"),
+                        LastError = GetDictValue(item, "last_error") ?? string.Empty, // CRITICAL: Error messages for failed installs
+                        LastWarning = GetDictValue(item, "last_warning") ?? string.Empty // CRITICAL: Warning messages for install loops
                     };
 
                     // Parse timestamps
@@ -2146,13 +2158,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                         cimianItem.FailureCount = failureCount;
                     }
 
-                    // Enhanced fields: Log additional counts for debugging
-                    var removalCount = GetDictValue(item, "removal_count");
-                    var warningCount = GetDictValue(item, "warning_count");
-                    if (!string.IsNullOrEmpty(removalCount) || !string.IsNullOrEmpty(warningCount))
+                    // Enhanced fields: Parse additional counts
+                    if (item.TryGetValue("warning_count", out var warningCountObj) && 
+                        int.TryParse(warningCountObj.ToString(), out var warningCount))
                     {
-                        _logger.LogDebug("Item [{ItemId}]: removal_count='{RemovalCount}', warning_count='{WarningCount}'", 
-                            itemId, removalCount, warningCount);
+                        cimianItem.WarningCount = warningCount;
+                    }
+                    
+                    if (item.TryGetValue("removal_count", out var removalCountObj) && 
+                        int.TryParse(removalCountObj.ToString(), out var removalCount))
+                    {
+                        // Store removal count if we add it to model later
+                        _logger.LogDebug("Item [{ItemId}]: removal_count='{RemovalCount}'", itemId, removalCount);
                     }
 
                     if (item.TryGetValue("total_sessions", out var totalSessionsObj) && 
