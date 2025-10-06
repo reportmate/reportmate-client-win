@@ -149,6 +149,22 @@ namespace ReportMate.WindowsClient.Services
                     }
                 }
 
+                // Add summary info event about the collection
+                var moduleList = string.Join(", ", payload.Metadata.EnabledModules.Select(m => char.ToUpper(m[0]) + m.Substring(1)));
+                var summaryEvent = new ReportMateEvent
+                {
+                    EventType = "info",
+                    Message = $"{moduleList} data reported",
+                    Timestamp = DateTime.UtcNow,
+                    Details = new Dictionary<string, object>
+                    {
+                        ["collectionType"] = payload.Metadata.CollectionType,
+                        ["moduleCount"] = payload.Metadata.EnabledModules.Count,
+                        ["modules"] = payload.Metadata.EnabledModules
+                    }
+                };
+                payload.Events.Add(summaryEvent);
+
                 // Save unified payload
                 await SaveUnifiedPayloadAsync(payload);
 
@@ -314,6 +330,22 @@ namespace ReportMate.WindowsClient.Services
                 {
                     _logger.LogWarning(ex, "Failed to generate events for single module {ModuleId} in unified payload", moduleData.ModuleId);
                 }
+
+                // Add summary info event about the single module collection
+                var capitalizedModule = char.ToUpper(moduleData.ModuleId[0]) + moduleData.ModuleId.Substring(1);
+                var summaryEvent = new ReportMateEvent
+                {
+                    EventType = "info",
+                    Message = $"{capitalizedModule} data reported",
+                    Timestamp = DateTime.UtcNow,
+                    Details = new Dictionary<string, object>
+                    {
+                        ["collectionType"] = payload.Metadata.CollectionType,
+                        ["moduleCount"] = 1,
+                        ["modules"] = new List<string> { moduleData.ModuleId }
+                    }
+                };
+                payload.Events.Add(summaryEvent);
 
                 // Save the unified payload as event.json
                 await SaveUnifiedPayloadAsync(payload);
