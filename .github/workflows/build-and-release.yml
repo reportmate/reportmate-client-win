@@ -118,25 +118,10 @@ jobs:
         $version = "${{ steps.version.outputs.VERSION }}"
         $dateTag = Get-Date -Format "yyyy.MM.dd.HHmm"
         
-        # Only create tag if it doesn't exist and version matches date format
-        if ($version -match '^\d{4}\.\d{2}\.\d{2}\.\d{4}$') {
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          $existingTag = git tag -l $dateTag
-          if (-not $existingTag) {
-            git tag $dateTag
-            git push origin $dateTag
-            echo "TAG_CREATED=$dateTag" >> $env:GITHUB_OUTPUT
-            echo "Created and pushed tag: $dateTag"
-          } else {
-            echo "TAG_CREATED=existing" >> $env:GITHUB_OUTPUT
-            echo "Tag $dateTag already exists"
-          }
-        } else {
-          echo "TAG_CREATED=none" >> $env:GITHUB_OUTPUT
-          echo "Version $version does not match date format, skipping tag creation"
-        }
+        # Automatic tag creation DISABLED per user request
+        # Tags should be created manually only
+        echo "TAG_CREATED=disabled" >> $env:GITHUB_OUTPUT
+        echo "Automatic tag creation is disabled"
         
     - name: Determine release strategy
       id: release
