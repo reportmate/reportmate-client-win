@@ -1243,48 +1243,10 @@ if exist "C:\Program Files\ReportMate\runner.exe" (
 
 Write-Output ""
 
-# Create git tag if requested
-if ($CreateTag -and $gitFound) {
-    Write-Step "Creating git tag..."
-    
-    try {
-        # Only create date-based tags for YYYY.MM.DD.HHMM format versions
-        if ($Version -match '^\d{4}\.\d{2}\.\d{2}\.\d{4}$') {
-            # Check if tag already exists
-            $existingTag = git tag -l $Version 2>$null
-            if ($existingTag) {
-                Write-Warning "Tag $Version already exists"
-            } else {
-                # Ensure we have a clean working directory
-                $gitStatus = git status --porcelain
-                if ($gitStatus) {
-                    Write-Warning "Working directory has uncommitted changes:"
-                    Write-Output $gitStatus
-                    Write-Info "Committing build-related changes..."
-                    git add .
-                    git commit -m "Build version $Version"
-                }
-                
-                # Create and push tag
-                git tag $Version
-                Write-Success "Created tag: $Version"
-                
-                # Try to push tag
-                try {
-                    git push origin $Version
-                    Write-Success "Pushed tag to origin: $Version"
-                } catch {
-                    Write-Warning "Failed to push tag to origin: $_"
-                    Write-Info "You may need to push manually: git push origin $Version"
-                }
-            }
-        } else {
-            Write-Warning "Version $Version does not match YYYY.MM.DD.HHMM format, skipping tag creation"
-            Write-Info "Use YYYY.MM.DD.HHMM format for automatic tagging (e.g., 2024.06.27.1430)"
-        }
-    } catch {
-        Write-Error "Failed to create git tag: $_"
-    }
+# Create git tag if requested - DISABLED (user preference)
+# Automatic tag creation disabled per user request
+if ($false) {
+    # Tag creation code commented out
 }
 
 # Create GitHub release if requested
