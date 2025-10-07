@@ -878,8 +878,9 @@ namespace ReportMate.WindowsClient.Services
                 }
             }
 
-            // Fallback to machine name if no valid serial found
-            return Environment.MachineName;
+            // Serial number or bust - NEVER use hostname as fallback
+            _logger.LogError("Failed to extract valid serial number from device. Cannot proceed with registration.");
+            throw new InvalidOperationException("Unable to extract valid device serial number. Device registration requires a valid serial number.");
         }
 
         /// <summary>
