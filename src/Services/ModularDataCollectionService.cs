@@ -149,21 +149,30 @@ namespace ReportMate.WindowsClient.Services
                     }
                 }
 
-                // Add summary info event about the collection
-                var moduleList = string.Join(", ", payload.Metadata.EnabledModules.Select(m => char.ToUpper(m[0]) + m.Substring(1)));
-                var summaryEvent = new ReportMateEvent
+                // Add summary info event about the collection (skip for installs module - it generates its own events when needed)
+                var nonInstallsModules = payload.Metadata.EnabledModules.Where(m => !m.Equals("installs", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (nonInstallsModules.Any())
                 {
-                    EventType = "info",
-                    Message = $"{moduleList} data reported",
-                    Timestamp = DateTime.UtcNow,
-                    Details = new Dictionary<string, object>
+                    var moduleList = string.Join(", ", nonInstallsModules.Select(m => char.ToUpper(m[0]) + m.Substring(1)));
+                    var summaryEvent = new ReportMateEvent
                     {
-                        ["collectionType"] = payload.Metadata.CollectionType,
-                        ["moduleCount"] = payload.Metadata.EnabledModules.Count,
-                        ["modules"] = payload.Metadata.EnabledModules
-                    }
-                };
-                payload.Events.Add(summaryEvent);
+                        EventType = "info",
+                        Message = $"{moduleList} data reported",
+                        Timestamp = DateTime.UtcNow,
+                        Details = new Dictionary<string, object>
+                        {
+                            ["collectionType"] = payload.Metadata.CollectionType,
+                            ["moduleCount"] = nonInstallsModules.Count,
+                            ["modules"] = nonInstallsModules
+                        }
+                    };
+                    payload.Events.Add(summaryEvent);
+                    _logger.LogDebug("Added summary event for {ModuleCount} modules (excluding installs)", nonInstallsModules.Count);
+                }
+                else if (payload.Metadata.EnabledModules.All(m => m.Equals("installs", StringComparison.OrdinalIgnoreCase)))
+                {
+                    _logger.LogDebug("Skipped summary event - installs module generates its own conditional events");
+                }
 
                 // Save unified payload
                 await SaveUnifiedPayloadAsync(payload);
@@ -331,21 +340,29 @@ namespace ReportMate.WindowsClient.Services
                     _logger.LogWarning(ex, "Failed to generate events for single module {ModuleId} in unified payload", moduleData.ModuleId);
                 }
 
-                // Add summary info event about the single module collection
-                var capitalizedModule = char.ToUpper(moduleData.ModuleId[0]) + moduleData.ModuleId.Substring(1);
-                var summaryEvent = new ReportMateEvent
+                // Add summary info event about the single module collection (skip for installs - it generates its own events when needed)
+                if (!moduleData.ModuleId.Equals("installs", StringComparison.OrdinalIgnoreCase))
                 {
-                    EventType = "info",
-                    Message = $"{capitalizedModule} data reported",
-                    Timestamp = DateTime.UtcNow,
-                    Details = new Dictionary<string, object>
+                    var capitalizedModule = char.ToUpper(moduleData.ModuleId[0]) + moduleData.ModuleId.Substring(1);
+                    var summaryEvent = new ReportMateEvent
                     {
-                        ["collectionType"] = payload.Metadata.CollectionType,
-                        ["moduleCount"] = 1,
-                        ["modules"] = new List<string> { moduleData.ModuleId }
-                    }
-                };
-                payload.Events.Add(summaryEvent);
+                        EventType = "info",
+                        Message = $"{capitalizedModule} data reported",
+                        Timestamp = DateTime.UtcNow,
+                        Details = new Dictionary<string, object>
+                        {
+                            ["collectionType"] = payload.Metadata.CollectionType,
+                            ["moduleCount"] = 1,
+                            ["modules"] = new List<string> { moduleData.ModuleId }
+                        }
+                    };
+                    payload.Events.Add(summaryEvent);
+                    _logger.LogDebug("Added summary event for single module: {ModuleId}", moduleData.ModuleId);
+                }
+                else
+                {
+                    _logger.LogDebug("Skipped summary event for installs module - generates its own conditional events");
+                }
 
                 // Save the unified payload as event.json
                 await SaveUnifiedPayloadAsync(payload);
@@ -829,58 +846,60 @@ namespace ReportMate.WindowsClient.Services
 
         /// <summary>
         /// Extract device serial number from osquery results
+        /// CRITICAL: This method MUST return a hardware serial number only
+        /// NEVER returns hostname/computer_name - device registration will fail if no valid serial found
         /// </summary>
         private string ExtractSerialNumber(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
         {
+            // Method 1: Try system_info hardware_serial (BIOS/UEFI serial - most reliable)
             if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
             {
                 var firstResult = systemInfo[0];
                 if (firstResult.TryGetValue("hardware_serial", out var serial) && !string.IsNullOrEmpty(serial?.ToString()))
                 {
-                    var serialStr = serial.ToString();
+                    var serialStr = serial.ToString()?.Trim();
+                    
+                    // Reject only obvious placeholder values - accept everything else
                     if (!string.IsNullOrEmpty(serialStr) && 
                         serialStr != "0" && 
                         serialStr != "System Serial Number" &&
                         serialStr != "To be filled by O.E.M." &&
                         serialStr != "Default string" &&
-                        serialStr != Environment.MachineName &&
                         !serialStr.StartsWith("00000000"))
                     {
+                        _logger.LogInformation("Using hardware_serial from system_info: {Serial}", serialStr);
                         return serialStr;
-                    }
-                }
-                
-                if (firstResult.TryGetValue("computer_name", out var computerName) && !string.IsNullOrEmpty(computerName?.ToString()))
-                {
-                    var computerNameStr = computerName.ToString();
-                    if (!string.IsNullOrEmpty(computerNameStr) && computerNameStr != Environment.MachineName)
-                    {
-                        return computerNameStr;
                     }
                 }
             }
 
-            // Try chassis info as fallback
+            // Method 2: Try chassis_info serial as fallback
             if (osqueryResults.TryGetValue("chassis_info", out var chassisInfo) && chassisInfo.Count > 0)
             {
                 var chassis = chassisInfo[0];
                 if (chassis.TryGetValue("serial", out var chassisSerial) && !string.IsNullOrEmpty(chassisSerial?.ToString()))
                 {
-                    var chassisSerialStr = chassisSerial.ToString();
+                    var chassisSerialStr = chassisSerial.ToString()?.Trim();
+                    
+                    // Reject only obvious placeholder values
                     if (!string.IsNullOrEmpty(chassisSerialStr) && 
                         chassisSerialStr != "0" && 
                         chassisSerialStr != "System Serial Number" &&
                         chassisSerialStr != "To be filled by O.E.M." &&
-                        chassisSerialStr != Environment.MachineName)
+                        chassisSerialStr != "Default string")
                     {
+                        _logger.LogInformation("Using serial from chassis_info: {Serial}", chassisSerialStr);
                         return chassisSerialStr;
                     }
                 }
             }
 
-            // Serial number or bust - NEVER use hostname as fallback
-            _logger.LogError("Failed to extract valid serial number from device. Cannot proceed with registration.");
-            throw new InvalidOperationException("Unable to extract valid device serial number. Device registration requires a valid serial number.");
+            // CRITICAL: No valid hardware serial found - device cannot register with ReportMate
+            // We do NOT fall back to hostname/computer_name or any other identifier
+            // This ensures database integrity - only devices with valid hardware serials can register
+            _logger.LogError("FATAL: No valid hardware serial number found. Device cannot register with ReportMate.");
+            _logger.LogError("Checked: system_info.hardware_serial and chassis_info.serial - both invalid or missing");
+            throw new InvalidOperationException("No valid hardware serial number found. Device requires a valid BIOS/chassis serial to register with ReportMate. Hostname-based registration is not permitted.");
         }
 
         /// <summary>
