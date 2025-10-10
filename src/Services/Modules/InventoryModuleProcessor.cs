@@ -204,6 +204,44 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Sanitize serial numbers that contain hostname-like prefixes
+        /// Some BIOS implementations include computer names or network prefixes in the serial
+        /// </summary>
+        private string SanitizeSerialNumber(string rawSerial)
+        {
+            if (string.IsNullOrWhiteSpace(rawSerial))
+                return rawSerial;
+
+            var sanitized = rawSerial.Trim();
+            
+            // List of known problematic prefixes from Windows hostnames
+            var prefixesToRemove = new[]
+            {
+                "WIN-",         // Default Windows hostname prefix
+                "DESKTOP-",     // Windows 10/11 default hostname prefix
+                "ANIM-",        // Custom organizational prefixes
+                "LAB-",
+                "STUDIO-",
+                "CTQ-",
+                "STD-"
+            };
+
+            foreach (var prefix in prefixesToRemove)
+            {
+                if (sanitized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    var before = sanitized;
+                    sanitized = sanitized.Substring(prefix.Length);
+                    _logger.LogWarning("Sanitized serial number: removed prefix '{Prefix}' from '{Before}' -> '{After}'", 
+                        prefix, before, sanitized);
+                    break; // Only remove first matching prefix
+                }
+            }
+
+            return sanitized;
+        }
+
+        /// <summary>
         /// Extract device serial number from osquery results
         /// </summary>
         private string ExtractSerialNumber(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
@@ -224,8 +262,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                         serialStr != "Default string" &&
                         !serialStr.StartsWith("00000000"))
                     {
-                        _logger.LogInformation("Using hardware_serial from system_info: {Serial}", serialStr);
-                        return serialStr;
+                        // Sanitize before returning
+                        var sanitized = SanitizeSerialNumber(serialStr);
+                        _logger.LogInformation("Using hardware_serial from system_info: {Serial} (sanitized: {Sanitized})", 
+                            serialStr, sanitized);
+                        return sanitized;
                     }
                 }
             }
@@ -245,8 +286,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                         chassisSerialStr != "To be filled by O.E.M." &&
                         chassisSerialStr != "Default string")
                     {
-                        _logger.LogInformation("Using serial from chassis_info: {Serial}", chassisSerialStr);
-                        return chassisSerialStr;
+                        // Sanitize before returning
+                        var sanitized = SanitizeSerialNumber(chassisSerialStr);
+                        _logger.LogInformation("Using serial from chassis_info: {Serial} (sanitized: {Sanitized})", 
+                            chassisSerialStr, sanitized);
+                        return sanitized;
                     }
                 }
             }
