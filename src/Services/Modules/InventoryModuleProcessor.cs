@@ -55,23 +55,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
             
-            // Process chassis info for serial and asset tag
+            // Process chassis info for asset tag only
+            // Serial number is already extracted by ExtractSerialNumber() which throws exception if invalid
+            // We do NOT override serial number here - it's set correctly or the process has already failed
             if (osqueryResults.TryGetValue("chassis_info", out var chassisResults) && chassisResults.Count > 0)
             {
                 var chassis = chassisResults[0];
                 
-                // Use chassis serial if system_info serial was not valid
-                var chassisSerial = GetStringValue(chassis, "serial");
-                if (!string.IsNullOrEmpty(chassisSerial) && 
-                    chassisSerial != "0" && 
-                    chassisSerial != "System Serial Number" &&
-                    chassisSerial != "To be filled by O.E.M." &&
-                    data.SerialNumber == Environment.MachineName)
-                {
-                    data.SerialNumber = chassisSerial;
-                    _logger.LogInformation("Updated serial number from chassis_info: {Serial}", chassisSerial);
-                }
-                
+                // Extract asset tag only (serial is already handled by ExtractSerialNumber)
                 var assetTag = GetStringValue(chassis, "asset_tag");
                 if (!string.IsNullOrEmpty(assetTag) && 
                     assetTag != "0" && 
