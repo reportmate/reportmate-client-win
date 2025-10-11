@@ -112,7 +112,14 @@ public class ApiService : IApiService
 
             // Use Serial Number as the primary identifier for API routing
             // The URL should be /device/{serial} while DeviceId field shows the hardware UUID
-            var deviceSerial = deviceData.SerialNumber ?? deviceInfo?.SerialNumber ?? Environment.MachineName;
+            // NEVER fall back to Environment.MachineName - serial number or FAIL
+            var deviceSerial = deviceData.SerialNumber ?? deviceInfo?.SerialNumber;
+            if (string.IsNullOrEmpty(deviceSerial))
+            {
+                _logger.LogError("FATAL: No serial number available for device transmission. Cannot proceed.");
+                _logger.LogError("Device registration requires a valid hardware serial number. Hostname is NOT permitted.");
+                throw new InvalidOperationException("No valid serial number available. Device transmission requires hardware serial number (BIOS/chassis serial). Hostname-based registration is not permitted.");
+            }
             var hardwareUuid = deviceInfo?.DeviceId; // This is the actual hardware UUID
             
             _logger.LogInformation("=== TRANSMISSION DETAILS ===");
