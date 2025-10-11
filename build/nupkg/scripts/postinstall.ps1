@@ -333,35 +333,59 @@ if (Test-Path $cimianReportMateDir) {
 $osqueryPath = "C:\Program Files\osquery\osqueryi.exe"
 if (-not (Test-Path $osqueryPath)) {
     Write-Host "WARNING: osquery not found at expected location: $osqueryPath"
-    Write-Host "Checking if osquery is available via chocolatey..."
+    Write-Host "Attempting automatic installation via Windows Package Manager (winget)..."
     
-    # Check if chocolatey is available
-    $chocoCommand = Get-Command choco -ErrorAction SilentlyContinue
-    if ($chocoCommand) {
-        Write-Host "Installing osquery via chocolatey..."
+    # Check if winget is available (built-in to Windows 11 and modern Windows 10)
+    $wingetCommand = Get-Command winget -ErrorAction SilentlyContinue
+    
+    # If winget not found, try to register it (required after fresh Windows install/OOBE)
+    if (-not $wingetCommand) {
+        Write-Host "winget not immediately available - attempting to register App Installer..."
         try {
-            & choco install osquery -y --no-progress
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "osquery installed successfully via chocolatey"
+            Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $wingetCommand = Get-Command winget -ErrorAction SilentlyContinue
+        } catch {
+            Write-Verbose "Could not register App Installer: $_"
+        }
+    }
+    
+    if ($wingetCommand) {
+        Write-Host "Installing osquery via winget..."
+        try {
+            # Install osquery silently with automatic acceptance
+            $installProcess = Start-Process winget -ArgumentList "install --id osquery.osquery --silent --accept-package-agreements --accept-source-agreements" -Wait -PassThru -NoNewWindow
+            
+            if ($installProcess.ExitCode -eq 0) {
+                Write-Host "osquery installed successfully via winget"
                 
                 # Verify installation
                 if (Test-Path $osqueryPath) {
                     Write-Host "osquery verified at: $osqueryPath"
+                    
+                    # Get and display osquery version
+                    try {
+                        $osqueryVersion = & $osqueryPath --version 2>&1 | Select-Object -First 1
+                        Write-Host "osquery version: $osqueryVersion"
+                    } catch {
+                        Write-Verbose "Could not retrieve osquery version: $_"
+                    }
                 } else {
                     Write-Warning "osquery installation completed but not found at expected location"
+                    Write-Host "INFO: You may need to restart your session for PATH changes to take effect"
                 }
             } else {
-                Write-Warning "Failed to install osquery via chocolatey (exit code: $LASTEXITCODE)"
+                Write-Warning "Failed to install osquery via winget (exit code: $($installProcess.ExitCode))"
                 Write-Host "INFO: You can manually install osquery from: https://osquery.io/downloads/"
             }
         } catch {
-            Write-Warning "Error installing osquery: $_"
+            Write-Warning "Error installing osquery via winget: $_"
             Write-Host "INFO: You can manually install osquery from: https://osquery.io/downloads/"
         }
     } else {
-        Write-Warning "Chocolatey not available for automatic osquery installation"
+        Write-Warning "Windows Package Manager (winget) not available for automatic osquery installation"
         Write-Host "INFO: Please install osquery manually from: https://osquery.io/downloads/"
-        Write-Host "INFO: Or install via chocolatey: choco install osquery"
+        Write-Host "INFO: Or use winget if available: winget install osquery.osquery"
     }
 } else {
     Write-Host "osquery found at: $osqueryPath"
@@ -404,6 +428,10 @@ Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"
+
+
+
+
 
 
 
