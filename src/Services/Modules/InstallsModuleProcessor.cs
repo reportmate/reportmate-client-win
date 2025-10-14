@@ -1895,36 +1895,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogInformation("Processing {ItemCount} items from Cimian report", items.Count);
                 
-                // DYNAMIC MANIFEST FILTERING: Parse actual manifest files to get currently managed packages
-                var activelyManagedPackages = GetActivelyManagedPackagesFromManifests();
-                
-                if (activelyManagedPackages.Any())
-                {
-                    _logger.LogInformation("Filtering to show only {ActiveCount} actively managed packages from manifests: {ActivePackages}", 
-                        activelyManagedPackages.Count, string.Join(", ", activelyManagedPackages.OrderBy(p => p)));
-                    
-                    // Filter items to only process actively managed packages
-                    var filteredItems = items.Where(item => 
-                    {
-                        var itemName = GetDictValue(item, "item_name") ?? GetDictValue(item, "name") ?? GetDictValue(item, "id");
-                        var isActive = activelyManagedPackages.Contains(itemName, StringComparer.OrdinalIgnoreCase);
-                        if (!isActive)
-                        {
-                            _logger.LogDebug("FILTERED OUT: {ItemName} - not in active manifest", itemName);
-                        }
-                        return isActive;
-                    }).ToList();
-                    
-                    _logger.LogInformation("Filtered from {OriginalCount} to {FilteredCount} actively managed packages", 
-                        items.Count, filteredItems.Count);
-                    
-                    // Process only the filtered (actively managed) items
-                    items = filteredItems;
-                }
-                else
-                {
-                    _logger.LogWarning("Could not parse active manifests - showing all packages without filtering");
-                }
+                // Cimian's items.json is already the authoritative, filtered view of managed software.
                 
                 foreach (var item in items)
                 {
