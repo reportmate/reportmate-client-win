@@ -7,6 +7,7 @@ using ReportMate.WindowsClient.Services.Modules;
 using ReportMate.WindowsClient.Configuration;
 using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Models.Modules;
+using ReportMate.WindowsClient.Services.Usage;
 using System.CommandLine;
 using System.CommandLine.Builder;
 using System.CommandLine.Parsing;
@@ -473,6 +474,7 @@ public class Program
         // Register modular services
         services.AddScoped<ModularOsQueryService>();
         services.AddScoped<IModularDataCollectionService, ModularDataCollectionService>();
+    services.AddSingleton<IApplicationUsageTracker, ApplicationUsageTracker>();
         
         // Register module processors
         services.AddScoped<IModuleProcessorFactory, ModuleProcessorFactory>();

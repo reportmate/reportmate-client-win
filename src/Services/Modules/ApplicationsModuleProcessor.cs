@@ -1,10 +1,13 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services.Modules;
+using ReportMate.WindowsClient.Services.Usage;
 
 namespace ReportMate.WindowsClient.Services.Modules
 {
@@ -14,15 +17,17 @@ namespace ReportMate.WindowsClient.Services.Modules
     public class ApplicationsModuleProcessor : BaseModuleProcessor<ApplicationsData>
     {
         private readonly ILogger<ApplicationsModuleProcessor> _logger;
+        private readonly IApplicationUsageTracker _usageTracker;
 
         public override string ModuleId => "applications";
 
-        public ApplicationsModuleProcessor(ILogger<ApplicationsModuleProcessor> logger)
+        public ApplicationsModuleProcessor(ILogger<ApplicationsModuleProcessor> logger, IApplicationUsageTracker usageTracker)
         {
             _logger = logger;
+            _usageTracker = usageTracker;
         }
 
-        public override Task<ApplicationsData> ProcessModuleAsync(
+        public override async Task<ApplicationsData> ProcessModuleAsync(
             Dictionary<string, List<Dictionary<string, object>>> osqueryResults, 
             string deviceId)
         {
@@ -140,7 +145,29 @@ namespace ReportMate.WindowsClient.Services.Modules
             data.TotalApplications = data.InstalledApplications.Count;
             data.LastInventoryUpdate = DateTime.UtcNow;
 
-            return Task.FromResult(data);
+            // Capture application usage analytics
+            try
+            {
+                var usageSnapshot = await _usageTracker.CollectUsageAsync(deviceId).ConfigureAwait(false);
+                if (usageSnapshot != null)
+                {
+                    EnhanceUsageSnapshotWithInventory(usageSnapshot, data.InstalledApplications);
+                    data.Usage = usageSnapshot;
+
+                    _logger.LogInformation(
+                        "Application usage analytics captured - {TrackedCount} apps, {LaunchCount} launches, {ActiveSessions} active",
+                        usageSnapshot.Applications.Count,
+                        usageSnapshot.TotalLaunches,
+                        usageSnapshot.ActiveSessions.Count);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to capture application usage analytics");
+                data.Usage = ApplicationUsageSnapshot.CreateUnavailable($"Application usage tracking failed: {ex.Message}");
+            }
+
+            return data;
         }
 
         public override async Task<bool> ValidateModuleDataAsync(ApplicationsData data)
@@ -159,6 +186,138 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return isValid;
+        }
+
+        public override Task<List<ReportMateEvent>> GenerateEventsAsync(ApplicationsData data)
+        {
+            var events = new List<ReportMateEvent>();
+
+            var usageSummaries = data.InstalledApplications
+                .Where(app => app.Usage is not null)
+                .Select(app => app.Usage!)
+                .ToList();
+
+            if (data.Usage.IsCaptureEnabled && usageSummaries.Any())
+            {
+                var topApplications = usageSummaries
+                    .OrderByDescending(app => app.TotalUsageSeconds + app.ActiveUsageSeconds)
+                    .ThenByDescending(app => app.LaunchCount)
+                    .Take(5)
+                    .Select(app => new Dictionary<string, object>
+                    {
+                        ["name"] = app.Name,
+                        ["publisher"] = app.Publisher,
+                        ["launchCount"] = app.LaunchCount,
+                        ["totalUsageHours"] = Math.Round((app.TotalUsageSeconds + app.ActiveUsageSeconds) / 3600, 2)
+                    })
+                    .ToList();
+
+                var details = new Dictionary<string, object>
+                {
+                    ["windowStart"] = data.Usage.WindowStart,
+                    ["windowEnd"] = data.Usage.WindowEnd,
+                    ["trackedApplications"] = usageSummaries.Count,
+                    ["totalLaunches"] = data.Usage.TotalLaunches,
+                    ["topApplications"] = topApplications
+                };
+
+                events.Add(CreateEvent(
+                    "usage.summary",
+                    $"Tracked {usageSummaries.Count} applications across {data.Usage.TotalLaunches} launches",
+                    details));
+            }
+            else if (!data.Usage.IsCaptureEnabled)
+            {
+                var details = new Dictionary<string, object>
+                {
+                    ["status"] = data.Usage.Status,
+                    ["warnings"] = data.Usage.Warnings
+                };
+
+                events.Add(CreateEvent(
+                    "usage.disabled",
+                    "Application usage tracking is currently unavailable",
+                    details));
+            }
+
+            return Task.FromResult(events);
+        }
+
+        private static void EnhanceUsageSnapshotWithInventory(ApplicationUsageSnapshot usageSnapshot, List<InstalledApplication> inventory)
+        {
+            if (usageSnapshot.Applications.Count == 0 || inventory.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var summary in usageSnapshot.Applications)
+            {
+                var match = FindInstalledApplication(summary, inventory);
+                if (match == null)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(summary.Name) || summary.Name.Equals(summary.Executable, StringComparison.OrdinalIgnoreCase))
+                {
+                    summary.Name = match.Name;
+                }
+
+                if (string.IsNullOrWhiteSpace(summary.Publisher) && !string.IsNullOrWhiteSpace(match.Publisher))
+                {
+                    summary.Publisher = match.Publisher;
+                }
+
+                if (string.IsNullOrWhiteSpace(summary.Path) && !string.IsNullOrWhiteSpace(match.InstallLocation))
+                {
+                    summary.Path = match.InstallLocation;
+                }
+
+                match.Usage = summary;
+            }
+        }
+
+        private static InstalledApplication? FindInstalledApplication(ApplicationUsageSummary summary, List<InstalledApplication> inventory)
+        {
+            if (!string.IsNullOrWhiteSpace(summary.Path))
+            {
+                var directory = Path.GetDirectoryName(summary.Path);
+                if (!string.IsNullOrWhiteSpace(directory))
+                {
+                    var byLocation = inventory.FirstOrDefault(app =>
+                        !string.IsNullOrWhiteSpace(app.InstallLocation) &&
+                        summary.Path.StartsWith(app.InstallLocation, StringComparison.OrdinalIgnoreCase));
+
+                    if (byLocation != null)
+                    {
+                        return byLocation;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(summary.Name))
+            {
+                var byName = inventory.FirstOrDefault(app => app.Name.Equals(summary.Name, StringComparison.OrdinalIgnoreCase));
+                if (byName != null)
+                {
+                    return byName;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(summary.Executable))
+            {
+                var executableName = summary.Executable;
+                var byExecutable = inventory.FirstOrDefault(app =>
+                    !string.IsNullOrWhiteSpace(app.InstallLocation) &&
+                    executableName.Equals(Path.GetFileName(app.InstallLocation.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)), StringComparison.OrdinalIgnoreCase));
+
+                if (byExecutable != null)
+                {
+                    return byExecutable;
+                }
+            }
+
+            return null;
         }
     }
 }
