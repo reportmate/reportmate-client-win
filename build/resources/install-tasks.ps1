@@ -7,6 +7,42 @@ param(
 
 Write-Host "Installing ReportMate scheduled tasks..."
 
+function Enable-ReportMateKernelProcessLog {
+    param(
+        [string[]]$LogNames = @(
+            "Microsoft-Windows-Kernel-Process/Analytic",
+            "Microsoft-Windows-Kernel-Process/Operational"
+        )
+    )
+
+    foreach ($logName in $LogNames) {
+        Write-Host "Configuring kernel process telemetry log: $logName"
+
+        try {
+            & wevtutil gl $logName > $null 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Verbose "Telemetry log not available: $logName"
+                continue
+            }
+
+            & wevtutil sl $logName /q:true /e:true > $null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Kernel process telemetry log enabled: $logName"
+                return $true
+            }
+
+            Write-Warning "Telemetry log command returned exit code $LASTEXITCODE for $logName"
+        } catch {
+            Write-Warning ("Failed to configure telemetry log {0}: {1}" -f $logName, $_.Exception.Message)
+        }
+    }
+
+    Write-Warning "Unable to enable kernel process telemetry logs. Application usage tracking may be unavailable."
+    return $false
+}
+
+$ProcessLogEnabled = Enable-ReportMateKernelProcessLog
+
 try {
     # First, remove any existing ReportMate tasks to prevent duplicates
     Write-Host "Removing any existing ReportMate tasks..."
@@ -87,6 +123,11 @@ try {
     }
     
     Write-Host "✅ All ReportMate scheduled tasks created successfully"
+    if ($ProcessLogEnabled) {
+        Write-Host "✅ Kernel process telemetry log enabled"
+    } else {
+        Write-Warning "Kernel process telemetry log could not be enabled automatically. Usage tracking may be limited."
+    }
     
 } catch {
     Write-Error "Failed to create scheduled tasks: $_"

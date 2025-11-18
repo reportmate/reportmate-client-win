@@ -71,6 +71,40 @@ Write-Host "Comprehensive checklist verified - all duties covered!"
 
 $ErrorActionPreference = "Continue"
 
+function Enable-ReportMateKernelProcessLog {
+    param(
+        [string[]]$LogNames = @(
+            "Microsoft-Windows-Kernel-Process/Analytic",
+            "Microsoft-Windows-Kernel-Process/Operational"
+        )
+    )
+
+    foreach ($logName in $LogNames) {
+        Write-Host "Configuring kernel process telemetry log: $logName"
+
+        try {
+            & wevtutil gl $logName > $null 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Verbose "Telemetry log not available: $logName"
+                continue
+            }
+
+            & wevtutil sl $logName /q:true /e:true > $null 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Kernel process telemetry log enabled: $logName"
+                return $true
+            }
+
+            Write-Warning "Telemetry log command returned exit code $LASTEXITCODE for $logName"
+        } catch {
+            Write-Warning ("Failed to configure telemetry log {0}: {1}" -f $logName, $_.Exception.Message)
+        }
+    }
+
+    Write-Warning "Unable to enable kernel process telemetry logs. Application usage tracking may be unavailable."
+    return $false
+}
+
 # =================================================================
 # CONFIGURATION VARIABLES
 # =================================================================
@@ -82,22 +116,19 @@ $PROD_API_URL = if ($env:REPORTMATE_API_URL) { $env:REPORTMATE_API_URL } else { 
 $PROD_PASSPHRASE = if ($env:REPORTMATE_PASSPHRASE) { $env:REPORTMATE_PASSPHRASE } else { $env:PROD_PASSPHRASE }
 $AUTO_CONFIGURE = if (-not [string]::IsNullOrEmpty($env:REPORTMATE_AUTO_CONFIGURE)) { [bool]::Parse($env:REPORTMATE_AUTO_CONFIGURE) } else { $true }
 
-# Validate required environment variables are available
-if ([string]::IsNullOrEmpty($env:PROD_API_URL)) {
-    Write-Error "CRITICAL: PROD_API_URL environment variable is required but not found"
-    Write-Host "Please ensure .env file is properly configured with PROD_API_URL"
-    exit 1
+if ([string]::IsNullOrEmpty($env:PROD_API_URL) -and [string]::IsNullOrEmpty($PROD_API_URL)) {
+    Write-Warning "PROD_API_URL environment variable not provided. ReportMate will rely on existing registry or manual configuration."
 }
 
-if ([string]::IsNullOrEmpty($env:PROD_PASSPHRASE)) {
-    Write-Error "CRITICAL: PROD_PASSPHRASE environment variable is required but not found" 
-    Write-Host "Please ensure .env file is properly configured with PROD_PASSPHRASE"
-    exit 1
+if ([string]::IsNullOrEmpty($env:PROD_PASSPHRASE) -and [string]::IsNullOrEmpty($PROD_PASSPHRASE)) {
+    Write-Warning "PROD_PASSPHRASE environment variable not provided. Authentication must be configured separately."
 }
 
 # Initialize configuration variables
 $ApiUrl = ""
 $Passphrase = ""
+
+$ProcessLogEnabled = Enable-ReportMateKernelProcessLog
 
 # REGISTRY CONFIGURATION
 # Check for CSP OMA-URI first (management configs)
@@ -414,6 +445,7 @@ Write-Host "  API URL: $(if ($ApiUrl) { $ApiUrl } else { 'Not configured' })"
 Write-Host "  Passphrase: $(if ($Passphrase) { '[CONFIGURED]' } else { 'Not set' })"
 Write-Host "  Auto-Configure: $AUTO_CONFIGURE"
 Write-Host "  osquery: $(if (Test-Path 'C:\Program Files\osquery\osqueryi.exe') { 'Installed' } else { 'Missing' })"
+Write-Host "  Kernel Process Telemetry Log: $(if ($ProcessLogEnabled) { 'Enabled' } else { 'Unavailable' })"
 Write-Host ""
 Write-Host "Registry Locations:"
 Write-Host "  CSP/Policy: HKLM\SOFTWARE\Config\ReportMate (highest precedence)"
@@ -428,6 +460,17 @@ Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"
+
+
+
+
+
+
+
+
+
+
+
 
 
 
