@@ -271,6 +271,7 @@ choco install reportmate-windows-client.nupkg
 - **Configuration Management**: Multi-source configuration with Windows Registry support
 - **Error Handling**: Robust retry logic and comprehensive logging
 - **Performance Optimization**: Efficient data collection with caching
+- **Application Usage Analytics**: Tracks launch counts and session durations using Windows kernel process telemetry
 
 ### Security Features
 
