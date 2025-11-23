@@ -4,7 +4,6 @@ using System.Text.Json.Serialization;
 using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services;
-using ReportMate.WindowsClient.Services.Usage;
 using ReportMate.WindowsClient.DataProcessing;
 
 namespace ReportMate.WindowsClient.Models;
@@ -104,13 +103,6 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Dictionary<string, Modules.BlockingApplicationInfo>))]
 [JsonSerializable(typeof(Dictionary<string, Modules.PackageAnalytics>))]
 [JsonSerializable(typeof(Dictionary<string, int>))]
-[JsonSerializable(typeof(ApplicationUsageState))]
-[JsonSerializable(typeof(ActiveSessionState))]
-[JsonSerializable(typeof(ApplicationUsageAggregate))]
-[JsonSerializable(typeof(ApplicationUsageSessionRecord))]
-[JsonSerializable(typeof(Dictionary<string, ApplicationUsageAggregate>), TypeInfoPropertyName = "ApplicationUsageAggregateMap")]
-[JsonSerializable(typeof(Dictionary<string, ActiveSessionState>), TypeInfoPropertyName = "ActiveSessionStateMap")]
-[JsonSerializable(typeof(List<ApplicationUsageSessionRecord>), TypeInfoPropertyName = "ApplicationUsageSessionRecordList")]
 // Storage Management types for hardware module
 [JsonSerializable(typeof(Modules.StorageDevice))]
 [JsonSerializable(typeof(Modules.DirectoryInformation))]

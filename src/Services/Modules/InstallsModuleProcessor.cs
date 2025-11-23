@@ -135,6 +135,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process cache status
             ProcessCacheStatus(osqueryResults, data);
 
+            // Process run log
+            ProcessRunLog(data);
+
             data.LastCheckIn = DateTime.UtcNow;
 
             _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Items: {ItemCount}", 
@@ -3003,9 +3006,6 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         /// <summary>
         /// Execute managedsoftwareupdate.exe --version to get the full version string
-        /// </summary>
-        /// <summary>
-        /// Execute managedsoftwareupdate.exe --version to get the full version string
         /// Falls back to version transformation if command execution fails
         /// </summary>
         private async Task<string?> ExecuteManagedsoftwareupdateVersionAsync(string executablePath)
@@ -3194,6 +3194,33 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogDebug(ex, "Error checking scheduled task via registry: {Error}", ex.Message);
                 return Task.CompletedTask;
+            }
+        }
+
+        private void ProcessRunLog(InstallsData data)
+        {
+            try
+            {
+                var logPath = @"C:\ProgramData\ManagedInstalls\reports\run.log";
+                if (File.Exists(logPath))
+                {
+                    // Read the log file
+                    // Use FileShare.ReadWrite to avoid locking issues if Cimian is running
+                    using (var fileStream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (var streamReader = new StreamReader(fileStream))
+                    {
+                        data.RunLog = streamReader.ReadToEnd();
+                    }
+                    _logger.LogInformation("Loaded Cimian run log ({Length} chars)", data.RunLog?.Length ?? 0);
+                }
+                else
+                {
+                    _logger.LogDebug("Cimian run log not found at {Path}", logPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read Cimian run log");
             }
         }
     }
