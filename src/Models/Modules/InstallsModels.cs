@@ -28,6 +28,11 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// Based on sessions.json from Cimian technical specification
         /// </summary>
         public CimianSessionData? CimianSessionStats { get; set; }
+        
+        /// <summary>
+        /// Full verbose run log from the last Cimian execution
+        /// </summary>
+        public string? RunLog { get; set; }
     }
 
     /// <summary>
