@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -1030,12 +1031,37 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (string.IsNullOrEmpty(manufacturer))
                 return string.Empty;
 
-            return manufacturer
+            var cleaned = manufacturer
                 .Replace("(R)", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("(TM)", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("®", "")
                 .Replace("™", "")
                 .Trim();
+
+            // Remove " Inc." or " Inc" from the end (case insensitive)
+            if (cleaned.EndsWith(" Inc.", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(0, cleaned.Length - 5);
+            }
+            else if (cleaned.EndsWith(" Inc", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(0, cleaned.Length - 4);
+            }
+            
+            cleaned = cleaned.Trim();
+
+            // Normalize to Title Case (e.g. LENOVO -> Lenovo)
+            // We convert to lower case first because ToTitleCase preserves all-caps words (assuming they are acronyms)
+            var textInfo = CultureInfo.CurrentCulture.TextInfo;
+            cleaned = textInfo.ToTitleCase(cleaned.ToLower());
+
+            // Fix specific known acronyms that shouldn't be title-cased
+            if (cleaned.Equals("Hp", StringComparison.OrdinalIgnoreCase)) return "HP";
+            if (cleaned.Equals("Ibm", StringComparison.OrdinalIgnoreCase)) return "IBM";
+            if (cleaned.Equals("Msi", StringComparison.OrdinalIgnoreCase)) return "MSI";
+            if (cleaned.Equals("Amd", StringComparison.OrdinalIgnoreCase)) return "AMD";
+            
+            return cleaned;
         }
 
         /// <summary>
@@ -1046,12 +1072,28 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (string.IsNullOrEmpty(productName))
                 return string.Empty;
 
-            return productName
+            var cleaned = productName
                 .Replace("(R)", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("(TM)", "", StringComparison.OrdinalIgnoreCase)
                 .Replace("®", "")
                 .Replace("™", "")
                 .Trim();
+
+            // Remove " Corporation" or " Corp." from the end (case insensitive)
+            if (cleaned.EndsWith(" Corporation", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(0, cleaned.Length - 12);
+            }
+            else if (cleaned.EndsWith(" Corp.", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(0, cleaned.Length - 6);
+            }
+            else if (cleaned.EndsWith(" Corp", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(0, cleaned.Length - 5);
+            }
+
+            return cleaned.Trim();
         }
 
         /// <summary>
@@ -2715,7 +2757,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Subdirectories = otherDirectories
                     };
 
-                    otherRootDirectory.FormattedSize = FormatStorageSize(otherRootDirectory.Size);
+                    otherRootDirectory.FormattedSize = FormatDirectorySize(otherRootDirectory.Size);
                     if (storage.Capacity > 0)
                     {
                         otherRootDirectory.PercentageOfDrive = (double)otherRootDirectory.Size / storage.Capacity * 100;
@@ -2723,7 +2765,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                     storage.RootDirectories.Add(otherRootDirectory);
                     var totalSizeGB = otherRootDirectory.Size / 1024.0 / 1024.0 / 1024.0;
-                    _logger.LogInformation("   [x] Added Other Directories category with {Count} directories totaling {SizeGB:F1} GB", 
+                    _logger.LogInformation("   [x] Added Other Directories with {Count} directories totaling {SizeGB:F1} GB using PowerShell fallback", 
                         otherDirectories.Count, totalSizeGB);
                 }
                 else
