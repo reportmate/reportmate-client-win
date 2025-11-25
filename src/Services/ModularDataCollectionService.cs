@@ -240,6 +240,27 @@ namespace ReportMate.WindowsClient.Services
 
                 // Process the module data
                 _logger.LogInformation("Processing module: {ModuleId}", processor.ModuleId);
+
+                // Special handling for Installs module in triggered runs
+                if (processor is InstallsModuleProcessor installsProcessor)
+                {
+                    _logger.LogInformation("Enabling bypass check for Installs module in triggered run");
+                    installsProcessor.BypassRunningCheck = true;
+                }
+                // Also handle wrapped processors
+                else if (processor.GetType().Name == "ModuleProcessorWrapper")
+                {
+                    // Use reflection to check if the underlying processor is InstallsModuleProcessor
+                    var processorField = processor.GetType().GetField("_processor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var underlyingProcessor = processorField?.GetValue(processor);
+                    
+                    if (underlyingProcessor is InstallsModuleProcessor wrappedInstallsProcessor)
+                    {
+                        _logger.LogInformation("Enabling bypass check for wrapped Installs module in triggered run");
+                        wrappedInstallsProcessor.BypassRunningCheck = true;
+                    }
+                }
+
                 var moduleData = await processor.ProcessModuleAsync(osqueryResults, deviceId);
                 
                 // Validate the module data
