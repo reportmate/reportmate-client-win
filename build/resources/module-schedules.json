@@ -1,9 +1,9 @@
 {
   "schedules": {
     "hourly": {
-      "modules": ["security", "installs", "profiles", "network"],
+      "modules": ["security", "profiles", "network"],
       "interval_minutes": 60,
-      "description": "Modules that need frequent updates for security and configuration monitoring"
+      "description": "Modules that need frequent updates for security and configuration monitoring (installs module runs from Cimian's postflight script)"
     },
     "every_4_hours": {
       "modules": ["applications", "inventory", "system"],
