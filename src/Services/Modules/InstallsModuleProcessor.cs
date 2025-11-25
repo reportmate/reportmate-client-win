@@ -29,14 +29,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                 TypeInfoResolver = ReportMateJsonContext.Default
             };
 
-            public override string ModuleId => "installs";
+        public override string ModuleId => "installs";
 
-            public InstallsModuleProcessor(ILogger<InstallsModuleProcessor> logger)
-            {
-                _logger = logger;
-            }
+        /// <summary>
+        /// Flag to bypass the running process check.
+        /// Set to true when running in a triggered context (e.g. --run-module) where we know it's safe.
+        /// </summary>
+        public bool BypassRunningCheck { get; set; } = false;
 
-            /// <summary>
+        public InstallsModuleProcessor(ILogger<InstallsModuleProcessor> logger)
+        {
+            _logger = logger;
+        }            /// <summary>
             /// Maps Cimian's detailed status values to ReportMate's simplified dashboard statuses
             /// Uses only: Installed, Pending, Warning, Error, Removed
             /// Updated for Cimian v2025.09.03+ enhanced status vocabulary
@@ -113,6 +117,15 @@ namespace ReportMate.WindowsClient.Services.Modules
             Dictionary<string, List<Dictionary<string, object>>> osqueryResults, 
             string deviceId)
         {
+            // Check if managedsoftwareupdate is running to avoid race conditions
+            // Skip this check if BypassRunningCheck is true (e.g. triggered run)
+            if (!BypassRunningCheck && IsManagedSoftwareUpdateRunning())
+            {
+                var msg = "Cimian managedsoftwareupdate is currently running. Skipping Installs module collection to avoid race conditions.";
+                _logger.LogWarning(msg);
+                throw new InvalidOperationException(msg);
+            }
+
             _logger.LogDebug("Processing Installs module for device {DeviceId}", deviceId);
             _logger.LogDebug("Available osquery result keys: {Keys}", string.Join(", ", osqueryResults.Keys));
 
@@ -144,6 +157,27 @@ namespace ReportMate.WindowsClient.Services.Modules
                 deviceId, data.Cimian?.IsInstalled ?? false, data.Cimian?.Items?.Count ?? 0);
 
             return data;
+        }
+
+        private bool IsManagedSoftwareUpdateRunning()
+        {
+            try
+            {
+                var processes = Process.GetProcesses();
+                foreach (var p in processes)
+                {
+                    if (p.ProcessName.Equals("managedsoftwareupdate", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to check if managedsoftwareupdate is running");
+                return false; // Assume not running if check fails
+            }
         }
 
         private async Task<CimianInfo> ProcessCimianInfo(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
