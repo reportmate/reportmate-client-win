@@ -14,6 +14,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public EncryptionInfo Encryption { get; set; } = new();
         public TpmInfo Tpm { get; set; } = new();
         public WindowsHelloInfo WindowsHello { get; set; } = new();
+        public SecureShellInfo SecureShell { get; set; } = new();
         public List<SecurityUpdate> SecurityUpdates { get; set; } = new();
         public List<SecurityEvent> SecurityEvents { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
@@ -232,5 +233,20 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Name { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
         public string Scope { get; set; } = string.Empty; // LocalMachine, CurrentUser
+    }
+
+    public class SecureShellInfo
+    {
+        public bool IsInstalled { get; set; }
+        public bool IsServiceRunning { get; set; }
+        public bool IsFirewallRulePresent { get; set; }
+        public bool IsConfigured { get; set; } // sshd_config has PubkeyAuthentication yes
+        public bool IsKeyDeployed { get; set; } // authorized_keys exists and has content
+        public bool ArePermissionsCorrect { get; set; } // ACLs are correct
+        public string ServiceStatus { get; set; } = string.Empty;
+        public string ConfigStatus { get; set; } = string.Empty;
+        
+        // Computed status fields for UI display
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled", "Partially Configured"
     }
 }
