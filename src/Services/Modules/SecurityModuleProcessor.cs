@@ -59,6 +59,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Windows Hello information
             await ProcessWindowsHelloInfo(osqueryResults, data);
 
+            // Process Secure Shell information
+            await ProcessSecureShellInfo(data);
+
             // Process security updates
             ProcessSecurityUpdates(osqueryResults, data);
 
@@ -1260,6 +1263,147 @@ try {
             else
             {
                 data.Tpm.StatusDisplay = "Not Present";
+            }
+        }
+
+        private async Task ProcessSecureShellInfo(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Secure Shell status via PowerShell");
+
+                var script = @"
+                    $result = @{
+                        IsInstalled = $false
+                        IsServiceRunning = $false
+                        IsFirewallRulePresent = $false
+                        IsConfigured = $false
+                        IsKeyDeployed = $false
+                        ArePermissionsCorrect = $false
+                        ServiceStatus = 'Not Installed'
+                        ConfigStatus = 'Unknown'
+                    }
+
+                    try {
+                        # 1. Check Install
+                        $cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
+                        if ($cap.State -eq 'Installed') {
+                            $result.IsInstalled = $true
+                        }
+
+                        # 2. Check Service
+                        $service = Get-Service sshd -ErrorAction SilentlyContinue
+                        if ($service) {
+                            $result.ServiceStatus = $service.Status.ToString()
+                            if ($service.Status -eq 'Running') {
+                                $result.IsServiceRunning = $true
+                            }
+                        }
+
+                        # 3. Check Firewall
+                        if (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue) {
+                            $result.IsFirewallRulePresent = $true
+                        }
+
+                        # 4. Check Config
+                        $SshdConfigPath = Join-Path $env:ProgramData 'ssh\sshd_config'
+                        if (Test-Path $SshdConfigPath) {
+                            $content = Get-Content $SshdConfigPath -Raw -ErrorAction SilentlyContinue
+                            if ($content -match 'PubkeyAuthentication\s+yes') {
+                                $result.IsConfigured = $true
+                                $result.ConfigStatus = 'Configured'
+                            } else {
+                                $result.ConfigStatus = 'Missing PubkeyAuthentication'
+                            }
+                        } else {
+                            $result.ConfigStatus = 'Config Missing'
+                        }
+
+                        # 5. Check Key
+                        $AdminKeyFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+                        if (Test-Path $AdminKeyFile) {
+                            $keyContent = Get-Content $AdminKeyFile -Raw -ErrorAction SilentlyContinue
+                            if ($keyContent.Length -gt 0) {
+                                $result.IsKeyDeployed = $true
+                            }
+                            
+                            # 6. Check Permissions
+                            $acl = Get-Acl $AdminKeyFile
+                            if ($acl.AreAccessRulesProtected) {
+                                $result.ArePermissionsCorrect = $true
+                            }
+                        }
+                    } catch {
+                        Write-Output ""Error: $($_.Exception.Message)""
+                    }
+
+                    $result | ConvertTo-Json
+                ";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                
+                if (!string.IsNullOrEmpty(result))
+                {
+                    using var document = JsonDocument.Parse(result);
+                    var root = document.RootElement;
+                    
+                    if (root.ValueKind == JsonValueKind.Object)
+                    {
+                        // Helper to safely get bool property
+                        bool GetBoolProp(JsonElement element, string propName)
+                        {
+                            if (element.TryGetProperty(propName, out var prop))
+                            {
+                                if (prop.ValueKind == JsonValueKind.True) return true;
+                                if (prop.ValueKind == JsonValueKind.False) return false;
+                            }
+                            return false;
+                        }
+
+                        // Helper to safely get string property
+                        string GetStringProp(JsonElement element, string propName)
+                        {
+                            if (element.TryGetProperty(propName, out var prop))
+                            {
+                                return prop.GetString() ?? string.Empty;
+                            }
+                            return string.Empty;
+                        }
+
+                        data.SecureShell.IsInstalled = GetBoolProp(root, "IsInstalled");
+                        data.SecureShell.IsServiceRunning = GetBoolProp(root, "IsServiceRunning");
+                        data.SecureShell.IsFirewallRulePresent = GetBoolProp(root, "IsFirewallRulePresent");
+                        data.SecureShell.IsConfigured = GetBoolProp(root, "IsConfigured");
+                        data.SecureShell.IsKeyDeployed = GetBoolProp(root, "IsKeyDeployed");
+                        data.SecureShell.ArePermissionsCorrect = GetBoolProp(root, "ArePermissionsCorrect");
+                        data.SecureShell.ServiceStatus = GetStringProp(root, "ServiceStatus");
+                        data.SecureShell.ConfigStatus = GetStringProp(root, "ConfigStatus");
+
+                        // Compute status display
+                        if (data.SecureShell.IsServiceRunning && 
+                            data.SecureShell.IsConfigured && 
+                            data.SecureShell.IsKeyDeployed && 
+                            data.SecureShell.ArePermissionsCorrect)
+                        {
+                            data.SecureShell.StatusDisplay = "Enabled";
+                        }
+                        else if (data.SecureShell.IsInstalled)
+                        {
+                            data.SecureShell.StatusDisplay = "Partially Configured";
+                        }
+                        else
+                        {
+                            data.SecureShell.StatusDisplay = "Disabled";
+                        }
+
+                        _logger.LogInformation("Secure Shell status: {Status}, Service: {Service}, Config: {Config}", 
+                            data.SecureShell.StatusDisplay, data.SecureShell.ServiceStatus, data.SecureShell.ConfigStatus);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect Secure Shell status");
             }
         }
     }
