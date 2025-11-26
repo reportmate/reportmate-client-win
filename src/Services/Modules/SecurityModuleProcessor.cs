@@ -1285,31 +1285,41 @@ try {
                     }
 
                     try {
-                        # 1. Check Install
-                        $cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
-                        if ($cap.State -eq 'Installed') {
-                            $result.IsInstalled = $true
-                        }
-
-                        # 2. Check Service
+                        # 1. Check Install - use simpler check that doesn't require elevation
                         $service = Get-Service sshd -ErrorAction SilentlyContinue
                         if ($service) {
+                            $result.IsInstalled = $true
                             $result.ServiceStatus = $service.Status.ToString()
                             if ($service.Status -eq 'Running') {
                                 $result.IsServiceRunning = $true
                             }
+                        } else {
+                            # Try capability check only if service not found
+                            try {
+                                $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction SilentlyContinue
+                                if ($cap -and $cap.State -eq 'Installed') {
+                                    $result.IsInstalled = $true
+                                }
+                            } catch {
+                                # Capability check failed, leave as not installed
+                            }
                         }
 
                         # 3. Check Firewall
-                        if (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue) {
-                            $result.IsFirewallRulePresent = $true
+                        try {
+                            $fwRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+                            if ($fwRule) {
+                                $result.IsFirewallRulePresent = $true
+                            }
+                        } catch {
+                            # Firewall check failed
                         }
 
                         # 4. Check Config
                         $SshdConfigPath = Join-Path $env:ProgramData 'ssh\sshd_config'
                         if (Test-Path $SshdConfigPath) {
                             $content = Get-Content $SshdConfigPath -Raw -ErrorAction SilentlyContinue
-                            if ($content -match 'PubkeyAuthentication\s+yes') {
+                            if ($content -and $content -match 'PubkeyAuthentication\s+yes') {
                                 $result.IsConfigured = $true
                                 $result.ConfigStatus = 'Configured'
                             } else {
@@ -1323,28 +1333,45 @@ try {
                         $AdminKeyFile = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
                         if (Test-Path $AdminKeyFile) {
                             $keyContent = Get-Content $AdminKeyFile -Raw -ErrorAction SilentlyContinue
-                            if ($keyContent.Length -gt 0) {
+                            if ($keyContent -and $keyContent.Length -gt 0) {
                                 $result.IsKeyDeployed = $true
                             }
                             
                             # 6. Check Permissions
-                            $acl = Get-Acl $AdminKeyFile
-                            if ($acl.AreAccessRulesProtected) {
-                                $result.ArePermissionsCorrect = $true
+                            try {
+                                $acl = Get-Acl $AdminKeyFile -ErrorAction SilentlyContinue
+                                if ($acl -and $acl.AreAccessRulesProtected) {
+                                    $result.ArePermissionsCorrect = $true
+                                }
+                            } catch {
+                                # ACL check failed
                             }
                         }
                     } catch {
-                        Write-Output ""Error: $($_.Exception.Message)""
+                        # Silently handle errors - result will contain defaults
                     }
 
-                    $result | ConvertTo-Json
+                    $result | ConvertTo-Json -Compress
                 ";
 
                 var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
                 
                 if (!string.IsNullOrEmpty(result))
                 {
-                    using var document = JsonDocument.Parse(result);
+                    // Trim and find JSON object in the result
+                    var trimmedResult = result.Trim();
+                    
+                    // Find the start of JSON (first '{')
+                    var jsonStart = trimmedResult.IndexOf('{');
+                    if (jsonStart < 0)
+                    {
+                        _logger.LogDebug("No JSON object found in Secure Shell result: {Result}", trimmedResult.Substring(0, Math.Min(100, trimmedResult.Length)));
+                        return;
+                    }
+                    
+                    var jsonContent = trimmedResult.Substring(jsonStart);
+                    
+                    using var document = JsonDocument.Parse(jsonContent);
                     var root = document.RootElement;
                     
                     if (root.ValueKind == JsonValueKind.Object)
