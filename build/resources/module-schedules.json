@@ -5,7 +5,7 @@
       "interval_minutes": 60,
       "description": "Modules that need frequent updates for security and configuration monitoring (installs module runs from Cimian's postflight script)"
     },
-    "every_4_hours": {
+    "every4hours": {
       "modules": ["applications", "inventory", "system"],
       "interval_minutes": 240,
       "description": "Modules that change moderately - software installs and basic device info"
@@ -16,9 +16,9 @@
       "description": "Modules that rarely change - physical hardware and peripheral devices"
     },
     "all": {
-      "modules": "all",
+      "modules": ["security", "profiles", "network", "applications", "inventory", "system", "hardware", "management", "printers", "displays"],
       "interval_minutes": 720,
-      "description": "Run all available modules for comprehensive data collection"
+      "description": "Run all available modules (except installs) for comprehensive data collection"
     }
   },
   "task_settings": {

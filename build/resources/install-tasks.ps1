@@ -67,11 +67,11 @@ try {
             schedules = @{
                 hourly = @{
                     interval = "PT1H"
-                    modules = @("security", "installs", "profiles", "system", "network")
+                    modules = @("security", "profiles", "network")
                 }
                 every4hours = @{
                     interval = "PT4H" 
-                    modules = @("applications", "inventory")
+                    modules = @("applications", "inventory", "system")
                 }
                 daily = @{
                     interval = "P1D"
@@ -79,7 +79,7 @@ try {
                 }
                 all = @{
                     interval_minutes = 720
-                    modules = "all"
+                    modules = @("security", "profiles", "network", "applications", "inventory", "system", "hardware", "management", "printers", "displays")
                 }
             }
         }
@@ -113,8 +113,17 @@ try {
     # Create all modules collection task (if configured)
     if ($scheduleConfig.schedules.all) {
         Write-Host "Creating all modules collection task..."
-        # For 'all' modules, don't use --run-modules flag to run everything
-        $action = New-ScheduledTaskAction -Execute $runnerExe -WorkingDirectory $InstallPath
+        
+        $allModules = $scheduleConfig.schedules.all.modules
+        if ($allModules -eq "all") {
+            # For 'all' modules, don't use --run-modules flag to run everything
+            $action = New-ScheduledTaskAction -Execute $runnerExe -WorkingDirectory $InstallPath
+        } else {
+            # If explicit list, use --run-modules
+            $modulesArg = $allModules -join ','
+            $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $modulesArg" -WorkingDirectory $InstallPath
+        }
+
         $intervalMinutes = $scheduleConfig.schedules.all.interval_minutes
         $intervalHours = [math]::Floor($intervalMinutes / 60)
         $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours $intervalHours)
