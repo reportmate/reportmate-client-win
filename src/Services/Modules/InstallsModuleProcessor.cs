@@ -2288,6 +2288,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (match5.Success)
                 return match5.Groups[1].Value;
 
+            return null;
+        }
+
         /// Priority: Error > Warning > Success (only generate one event per device)
         /// </summary>
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(InstallsData data)
