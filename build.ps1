@@ -367,7 +367,8 @@ $cleanupPaths = @(
     (Join-Path $OutputDir "*.zip"), 
     (Join-Path $OutputDir "*.msi"),
     (Join-Path $OutputDir "*.exe"),
-    (Join-Path $OutputDir "*.wixpdb")
+    (Join-Path $OutputDir "*.wixpdb"),
+    (Join-Path $OutputDir "*.pkg")
 )
 
 foreach ($pattern in $cleanupPaths) {
