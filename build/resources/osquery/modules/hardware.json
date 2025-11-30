@@ -81,6 +81,43 @@
       "platform_specific": true,
       "error_expected": "Desktops don't have a battery table"
     },
+    "wireless_adapters": {
+      "query": "SELECT interface, mac, type, mtu, enabled FROM interface_details WHERE type = 'wireless' OR interface LIKE '%Wi%' OR interface LIKE '%Wireless%' OR interface LIKE '%WLAN%' OR interface LIKE '%802.11%';",
+      "interval": 3600,
+      "description": "Wireless network adapter information",
+      "optional": true
+    },
+    "wireless_drivers": {
+      "query": "SELECT device_name, description, manufacturer, provider, version, date FROM drivers WHERE (device_name LIKE '%Wi-Fi%' OR device_name LIKE '%Wireless%' OR device_name LIKE '%WLAN%' OR device_name LIKE '%802.11%' OR description LIKE '%Wireless%' OR description LIKE '%Wi-Fi%' OR description LIKE '%WLAN%') AND device_name IS NOT NULL;",
+      "interval": 3600,
+      "description": "Wireless adapter driver information"
+    },
+    "wireless_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e972-e325-11ce-bfc1-08002be10318}\\%\\DriverDesc' AND (data LIKE '%Wi-Fi%' OR data LIKE '%Wireless%' OR data LIKE '%WLAN%' OR data LIKE '%802.11%');",
+      "interval": 3600,
+      "description": "Wireless adapter information from registry"
+    },
+    "bluetooth_adapters": {
+      "query": "SELECT device_name, description, manufacturer, provider, version, date FROM drivers WHERE (device_name LIKE '%Bluetooth%' OR description LIKE '%Bluetooth%') AND device_name IS NOT NULL;",
+      "interval": 3600,
+      "description": "Bluetooth adapter driver information",
+      "optional": true
+    },
+    "bluetooth_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\%\\%\\%\\FriendlyName' AND data LIKE '%Bluetooth%';",
+      "interval": 3600,
+      "description": "Bluetooth device names from registry"
+    },
+    "bluetooth_device_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\LocalRadio\\%';",
+      "interval": 3600,
+      "description": "Bluetooth radio parameters from registry"
+    },
+    "bluetooth_radio_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE (path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{e0cbf06c-cd8b-4647-bb8a-263b43f0f974}\\%\\DriverDesc' OR path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{e0cbf06c-cd8b-4647-bb8a-263b43f0f974}\\%\\ProviderName');",
+      "interval": 3600,
+      "description": "Bluetooth radio driver information from registry"
+    },
     "cpu_architecture_registry": {
       "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment\\PROCESSOR_ARCHITECTURE';",
       "interval": 3600,

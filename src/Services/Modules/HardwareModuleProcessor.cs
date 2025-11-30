@@ -57,9 +57,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 var info = systemInfo[0];
                 
-                // Extract manufacturer and model from system_info
+                // Extract manufacturer first, then model (passing manufacturer to remove redundant prefix)
                 data.Manufacturer = CleanManufacturerName(GetStringValue(info, "hardware_vendor"));
-                data.Model = CleanProductName(GetStringValue(info, "hardware_model"));
+                data.Model = CleanModelName(GetStringValue(info, "hardware_model"), data.Manufacturer);
                 
                 // Process processor info
                 var cpuBrand = GetStringValue(info, "cpu_brand");
@@ -225,7 +225,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
                 if (string.IsNullOrEmpty(data.Model))
                 {
-                    data.Model = GetStringValue(info, "hardware_model");
+                    data.Model = CleanModelName(GetStringValue(info, "hardware_model"), data.Manufacturer);
                 }
                 
                 _logger.LogDebug("Hardware system info extended extracted - Manufacturer: '{Manufacturer}', Model: '{Model}'", 
@@ -254,8 +254,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                         
                         if (!string.IsNullOrEmpty(directModel) && string.IsNullOrEmpty(data.Model))
                         {
-                            data.Model = directModel;
-                            _logger.LogInformation("Retrieved model from direct osquery: {Model}", directModel);
+                            // Use current manufacturer (may have just been set above) to clean the model
+                            data.Model = CleanModelName(directModel, data.Manufacturer);
+                            _logger.LogInformation("Retrieved model from direct osquery: {Model}", data.Model);
                         }
                     }
                 }
@@ -287,8 +288,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                         var wmiModel = await _wmiHelperService.QueryWmiSingleValueAsync<string>("SELECT Model FROM Win32_ComputerSystem", "Model");
                         if (!string.IsNullOrEmpty(wmiModel))
                         {
-                            data.Model = wmiModel;
-                            _logger.LogInformation("Retrieved model from WMI: {Model}", wmiModel);
+                            // Use current manufacturer to clean the model
+                            data.Model = CleanModelName(wmiModel, data.Manufacturer);
+                            _logger.LogInformation("Retrieved model from WMI: {Model}", data.Model);
                         }
                     }
                 }
@@ -946,11 +948,17 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process NPU information
             await ProcessNpuInformation(osqueryResults, data);
 
+            // Process Wireless adapter information
+            await ProcessWirelessInformation(osqueryResults, data);
+
+            // Process Bluetooth adapter information
+            await ProcessBluetoothInformation(osqueryResults, data);
+
             // Process hierarchical directory storage analysis
             await ProcessStorageAnalysis(osqueryResults, data);
 
-            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}", 
-                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None");
+            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}, Wireless: {Wireless}, Bluetooth: {Bluetooth}", 
+                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None", data.Wireless?.Name ?? "Not Present", data.Bluetooth?.Name ?? "Not Present");
 
             return data;
         }
@@ -1094,6 +1102,46 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return cleaned.Trim();
+        }
+
+        /// <summary>
+        /// Clean model names by removing trademark symbols, standardizing format, filtering common noise words,
+        /// and removing redundant manufacturer prefix if the model starts with it
+        /// </summary>
+        private string CleanModelName(string? modelName, string? manufacturer = null)
+        {
+            if (string.IsNullOrEmpty(modelName))
+                return string.Empty;
+
+            // First apply standard product name cleaning
+            var cleaned = CleanProductName(modelName);
+            
+            // Remove manufacturer prefix if model starts with it (case-insensitive)
+            if (!string.IsNullOrEmpty(manufacturer))
+            {
+                var cleanedManufacturer = CleanManufacturerName(manufacturer);
+                if (!string.IsNullOrEmpty(cleanedManufacturer) && 
+                    cleaned.StartsWith(cleanedManufacturer, StringComparison.OrdinalIgnoreCase))
+                {
+                    cleaned = cleaned.Substring(cleanedManufacturer.Length).TrimStart();
+                }
+            }
+            
+            // Remove common noise words from model names
+            var noiseWords = new[] { "Workstation", "Desktop", "PC" };
+            foreach (var word in noiseWords)
+            {
+                cleaned = System.Text.RegularExpressions.Regex.Replace(
+                    cleaned, 
+                    $@"\b{word}\b", 
+                    "", 
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            }
+            
+            // Clean up any double spaces and trim
+            cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"\s+", " ").Trim();
+            
+            return cleaned;
         }
 
         /// <summary>
@@ -2125,6 +2173,414 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogDebug("PowerShell NPU detection failed: {Error}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Process Wireless adapter information from osquery results
+        /// </summary>
+        private async Task ProcessWirelessInformation(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            _logger.LogDebug("Processing Wireless adapter information");
+
+            // Initialize Wireless data
+            data.Wireless = new WirelessInfo
+            {
+                Name = string.Empty,
+                Manufacturer = string.Empty,
+                MacAddress = string.Empty,
+                DriverVersion = string.Empty,
+                DriverDate = null,
+                Status = "Not Present",
+                Protocol = string.Empty,
+                IsAvailable = false
+            };
+
+            // Process wireless drivers (primary source)
+            if (osqueryResults.TryGetValue("wireless_drivers", out var wirelessDrivers) && wirelessDrivers.Count > 0)
+            {
+                var driver = wirelessDrivers[0]; // Use the first wireless adapter found
+                
+                var deviceName = GetStringValue(driver, "device_name");
+                var description = GetStringValue(driver, "description");
+                var manufacturer = GetStringValue(driver, "manufacturer");
+                var version = GetStringValue(driver, "version");
+                var dateStr = GetStringValue(driver, "date");
+                
+                if (!string.IsNullOrEmpty(deviceName) || !string.IsNullOrEmpty(description))
+                {
+                    data.Wireless.Name = CleanProductName(!string.IsNullOrEmpty(deviceName) ? deviceName : description);
+                    data.Wireless.Manufacturer = CleanManufacturerName(manufacturer);
+                    data.Wireless.DriverVersion = version;
+                    data.Wireless.Status = "Enabled";
+                    data.Wireless.IsAvailable = true;
+                    
+                    if (!string.IsNullOrEmpty(dateStr) && DateTime.TryParse(dateStr, out var driverDate))
+                    {
+                        data.Wireless.DriverDate = driverDate;
+                    }
+                    
+                    // Extract protocol from name (Wi-Fi 6, 802.11ax, etc.)
+                    data.Wireless.Protocol = ExtractWirelessProtocol(data.Wireless.Name);
+                    
+                    _logger.LogDebug("Found Wireless adapter from drivers: {Name} (Manufacturer: {Manufacturer}, Protocol: {Protocol})", 
+                        data.Wireless.Name, data.Wireless.Manufacturer, data.Wireless.Protocol);
+                }
+            }
+
+            // Process wireless interface details (for MAC address)
+            if (osqueryResults.TryGetValue("wireless_adapters", out var wirelessAdapters) && wirelessAdapters.Count > 0)
+            {
+                var adapter = wirelessAdapters[0];
+                
+                var macAddress = GetStringValue(adapter, "mac");
+                var enabled = GetStringValue(adapter, "enabled");
+                
+                if (!string.IsNullOrEmpty(macAddress))
+                {
+                    data.Wireless.MacAddress = macAddress.ToUpper();
+                    data.Wireless.IsAvailable = true;
+                }
+                
+                if (enabled == "1" || enabled.Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    data.Wireless.Status = "Enabled";
+                }
+                else if (enabled == "0" || enabled.Equals("false", StringComparison.OrdinalIgnoreCase))
+                {
+                    data.Wireless.Status = "Disabled";
+                }
+                
+                _logger.LogDebug("Wireless adapter interface details - MAC: {MAC}, Status: {Status}", 
+                    data.Wireless.MacAddress, data.Wireless.Status);
+            }
+
+            // Process wireless registry for additional info
+            if (osqueryResults.TryGetValue("wireless_registry", out var wirelessRegistry) && wirelessRegistry.Count > 0)
+            {
+                foreach (var reg in wirelessRegistry)
+                {
+                    var regData = GetStringValue(reg, "data");
+                    if (!string.IsNullOrEmpty(regData) && string.IsNullOrEmpty(data.Wireless.Name))
+                    {
+                        data.Wireless.Name = CleanProductName(regData);
+                        data.Wireless.IsAvailable = true;
+                        data.Wireless.Status = "Enabled";
+                        
+                        // Extract protocol from name
+                        data.Wireless.Protocol = ExtractWirelessProtocol(data.Wireless.Name);
+                        
+                        _logger.LogDebug("Found Wireless adapter from registry: {Name}", regData);
+                        break;
+                    }
+                }
+            }
+
+            // PowerShell fallback if no wireless adapter found
+            if (!data.Wireless.IsAvailable)
+            {
+                await ProcessWirelessViaPowerShell(data);
+            }
+
+            if (data.Wireless.IsAvailable)
+            {
+                _logger.LogInformation("Wireless adapter detected - Name: {Name}, Manufacturer: {Manufacturer}, Status: {Status}, Protocol: {Protocol}", 
+                    data.Wireless.Name, data.Wireless.Manufacturer, data.Wireless.Status, data.Wireless.Protocol);
+            }
+            else
+            {
+                _logger.LogDebug("No Wireless adapter detected on this system");
+                data.Wireless = null; // Set to null if no wireless adapter found
+            }
+        }
+
+        /// <summary>
+        /// Extract wireless protocol from adapter name
+        /// </summary>
+        private string ExtractWirelessProtocol(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return string.Empty;
+            
+            var lowerName = name.ToLowerInvariant();
+            
+            // Wi-Fi 7 / 802.11be
+            if (lowerName.Contains("wi-fi 7") || lowerName.Contains("wifi 7") || lowerName.Contains("802.11be"))
+                return "Wi-Fi 7 (802.11be)";
+            
+            // Wi-Fi 6E / 802.11ax 6GHz
+            if (lowerName.Contains("wi-fi 6e") || lowerName.Contains("wifi 6e") || lowerName.Contains("6e"))
+                return "Wi-Fi 6E (802.11ax)";
+            
+            // Wi-Fi 6 / 802.11ax
+            if (lowerName.Contains("wi-fi 6") || lowerName.Contains("wifi 6") || lowerName.Contains("802.11ax") || lowerName.Contains("ax"))
+                return "Wi-Fi 6 (802.11ax)";
+            
+            // Wi-Fi 5 / 802.11ac
+            if (lowerName.Contains("wi-fi 5") || lowerName.Contains("wifi 5") || lowerName.Contains("802.11ac") || lowerName.Contains("ac"))
+                return "Wi-Fi 5 (802.11ac)";
+            
+            // Wi-Fi 4 / 802.11n
+            if (lowerName.Contains("wi-fi 4") || lowerName.Contains("wifi 4") || lowerName.Contains("802.11n"))
+                return "Wi-Fi 4 (802.11n)";
+            
+            // Older standards
+            if (lowerName.Contains("802.11g"))
+                return "802.11g";
+            if (lowerName.Contains("802.11b"))
+                return "802.11b";
+            if (lowerName.Contains("802.11a"))
+                return "802.11a";
+            
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// PowerShell fallback for wireless adapter detection
+        /// </summary>
+        private async Task ProcessWirelessViaPowerShell(HardwareData data)
+        {
+            try
+            {
+                _logger.LogDebug("Attempting PowerShell fallback for wireless adapter detection...");
+                
+                var powershellScript = @"
+try {
+    $adapter = Get-NetAdapter | Where-Object { $_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*' } | Select-Object -First 1
+    if ($adapter) {
+        $driver = Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceName -like '*Wi*' -or $_.DeviceName -like '*Wireless*' } | Select-Object -First 1
+        ""$($adapter.InterfaceDescription)|$($adapter.MacAddress)|$($adapter.Status)|$($driver.Manufacturer)|$($driver.DriverVersion)|$($driver.DriverDate)""
+    } else {
+        'NOT_FOUND'
+    }
+} catch {
+    'ERROR'
+}";
+
+                var result = await ExecutePowerShellScriptAsync(powershellScript);
+                
+                if (!string.IsNullOrWhiteSpace(result) && result != "NOT_FOUND" && result != "ERROR")
+                {
+                    var parts = result.Trim().Split('|');
+                    if (parts.Length >= 3 && data.Wireless != null)
+                    {
+                        data.Wireless.Name = CleanProductName(parts[0]);
+                        data.Wireless.MacAddress = parts[1].Replace("-", ":").ToUpper();
+                        data.Wireless.Status = parts[2] == "Up" ? "Enabled" : "Disabled";
+                        data.Wireless.IsAvailable = true;
+                        
+                        if (parts.Length >= 4) data.Wireless.Manufacturer = CleanManufacturerName(parts[3]);
+                        if (parts.Length >= 5) data.Wireless.DriverVersion = parts[4];
+                        if (parts.Length >= 6 && DateTime.TryParse(parts[5], out var driverDate))
+                        {
+                            data.Wireless.DriverDate = driverDate;
+                        }
+                        
+                        data.Wireless.Protocol = ExtractWirelessProtocol(data.Wireless.Name);
+                        
+                        _logger.LogDebug("Wireless adapter detected via PowerShell: {Name}", data.Wireless.Name);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("PowerShell wireless detection failed: {Error}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Process Bluetooth adapter information from osquery results
+        /// </summary>
+        private async Task ProcessBluetoothInformation(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            _logger.LogDebug("Processing Bluetooth adapter information");
+
+            // Initialize Bluetooth data
+            data.Bluetooth = new BluetoothInfo
+            {
+                Name = string.Empty,
+                Manufacturer = string.Empty,
+                MacAddress = string.Empty,
+                DriverVersion = string.Empty,
+                DriverDate = null,
+                Status = "Not Present",
+                BluetoothVersion = string.Empty,
+                IsAvailable = false
+            };
+
+            // Process Bluetooth drivers (primary source)
+            if (osqueryResults.TryGetValue("bluetooth_adapters", out var bluetoothDrivers) && bluetoothDrivers.Count > 0)
+            {
+                var driver = bluetoothDrivers[0]; // Use the first Bluetooth adapter found
+                
+                var deviceName = GetStringValue(driver, "device_name");
+                var description = GetStringValue(driver, "description");
+                var manufacturer = GetStringValue(driver, "manufacturer");
+                var version = GetStringValue(driver, "version");
+                var dateStr = GetStringValue(driver, "date");
+                
+                if (!string.IsNullOrEmpty(deviceName) || !string.IsNullOrEmpty(description))
+                {
+                    data.Bluetooth.Name = CleanProductName(!string.IsNullOrEmpty(deviceName) ? deviceName : description);
+                    data.Bluetooth.Manufacturer = CleanManufacturerName(manufacturer);
+                    data.Bluetooth.DriverVersion = version;
+                    data.Bluetooth.Status = "Enabled";
+                    data.Bluetooth.IsAvailable = true;
+                    
+                    if (!string.IsNullOrEmpty(dateStr) && DateTime.TryParse(dateStr, out var driverDate))
+                    {
+                        data.Bluetooth.DriverDate = driverDate;
+                    }
+                    
+                    // Extract Bluetooth version from name
+                    data.Bluetooth.BluetoothVersion = ExtractBluetoothVersion(data.Bluetooth.Name);
+                    
+                    _logger.LogDebug("Found Bluetooth adapter from drivers: {Name} (Manufacturer: {Manufacturer}, Version: {Version})", 
+                        data.Bluetooth.Name, data.Bluetooth.Manufacturer, data.Bluetooth.BluetoothVersion);
+                }
+            }
+
+            // Process Bluetooth registry for additional info
+            if (osqueryResults.TryGetValue("bluetooth_registry", out var bluetoothRegistry) && bluetoothRegistry.Count > 0)
+            {
+                foreach (var reg in bluetoothRegistry)
+                {
+                    var regData = GetStringValue(reg, "data");
+                    if (!string.IsNullOrEmpty(regData) && string.IsNullOrEmpty(data.Bluetooth.Name))
+                    {
+                        data.Bluetooth.Name = CleanProductName(regData);
+                        data.Bluetooth.IsAvailable = true;
+                        data.Bluetooth.Status = "Enabled";
+                        
+                        // Extract Bluetooth version from name
+                        data.Bluetooth.BluetoothVersion = ExtractBluetoothVersion(data.Bluetooth.Name);
+                        
+                        _logger.LogDebug("Found Bluetooth adapter from registry: {Name}", regData);
+                        break;
+                    }
+                }
+            }
+
+            // Process Bluetooth radio registry for driver info
+            if (osqueryResults.TryGetValue("bluetooth_radio_registry", out var bluetoothRadioRegistry) && bluetoothRadioRegistry.Count > 0)
+            {
+                foreach (var reg in bluetoothRadioRegistry)
+                {
+                    var path = GetStringValue(reg, "path");
+                    var regData = GetStringValue(reg, "data");
+                    
+                    if (!string.IsNullOrEmpty(path) && !string.IsNullOrEmpty(regData))
+                    {
+                        if (path.Contains("DriverDesc", StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(data.Bluetooth.Name))
+                        {
+                            data.Bluetooth.Name = CleanProductName(regData);
+                            data.Bluetooth.IsAvailable = true;
+                            data.Bluetooth.Status = "Enabled";
+                        }
+                        else if (path.Contains("ProviderName", StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(data.Bluetooth.Manufacturer))
+                        {
+                            data.Bluetooth.Manufacturer = CleanManufacturerName(regData);
+                        }
+                    }
+                }
+            }
+
+            // PowerShell fallback if no Bluetooth adapter found
+            if (!data.Bluetooth.IsAvailable)
+            {
+                await ProcessBluetoothViaPowerShell(data);
+            }
+
+            if (data.Bluetooth.IsAvailable)
+            {
+                _logger.LogInformation("Bluetooth adapter detected - Name: {Name}, Manufacturer: {Manufacturer}, Status: {Status}, Version: {Version}", 
+                    data.Bluetooth.Name, data.Bluetooth.Manufacturer, data.Bluetooth.Status, data.Bluetooth.BluetoothVersion);
+            }
+            else
+            {
+                _logger.LogDebug("No Bluetooth adapter detected on this system");
+                data.Bluetooth = null; // Set to null if no Bluetooth adapter found
+            }
+        }
+
+        /// <summary>
+        /// Extract Bluetooth version from adapter name or description
+        /// </summary>
+        private string ExtractBluetoothVersion(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return string.Empty;
+            
+            var lowerName = name.ToLowerInvariant();
+            
+            // Check for explicit version numbers
+            if (lowerName.Contains("5.4") || lowerName.Contains("bluetooth 5.4"))
+                return "5.4";
+            if (lowerName.Contains("5.3") || lowerName.Contains("bluetooth 5.3"))
+                return "5.3";
+            if (lowerName.Contains("5.2") || lowerName.Contains("bluetooth 5.2"))
+                return "5.2";
+            if (lowerName.Contains("5.1") || lowerName.Contains("bluetooth 5.1"))
+                return "5.1";
+            if (lowerName.Contains("5.0") || lowerName.Contains("bluetooth 5.0") || lowerName.Contains("bluetooth 5"))
+                return "5.0";
+            if (lowerName.Contains("4.2") || lowerName.Contains("bluetooth 4.2"))
+                return "4.2";
+            if (lowerName.Contains("4.1") || lowerName.Contains("bluetooth 4.1"))
+                return "4.1";
+            if (lowerName.Contains("4.0") || lowerName.Contains("bluetooth 4.0") || lowerName.Contains("bluetooth 4") || lowerName.Contains("bluetooth le"))
+                return "4.0";
+            
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// PowerShell fallback for Bluetooth adapter detection
+        /// </summary>
+        private async Task ProcessBluetoothViaPowerShell(HardwareData data)
+        {
+            try
+            {
+                _logger.LogDebug("Attempting PowerShell fallback for Bluetooth adapter detection...");
+                
+                var powershellScript = @"
+try {
+    $btRadio = Get-PnpDevice | Where-Object { $_.Class -eq 'Bluetooth' -and $_.FriendlyName -like '*Bluetooth*' } | Select-Object -First 1
+    if ($btRadio) {
+        $driver = Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceClass -eq 'Bluetooth' -or $_.DeviceName -like '*Bluetooth*' } | Select-Object -First 1
+        ""$($btRadio.FriendlyName)|$($btRadio.Status)|$($driver.Manufacturer)|$($driver.DriverVersion)|$($driver.DriverDate)""
+    } else {
+        'NOT_FOUND'
+    }
+} catch {
+    'ERROR'
+}";
+
+                var result = await ExecutePowerShellScriptAsync(powershellScript);
+                
+                if (!string.IsNullOrWhiteSpace(result) && result != "NOT_FOUND" && result != "ERROR")
+                {
+                    var parts = result.Trim().Split('|');
+                    if (parts.Length >= 2 && data.Bluetooth != null)
+                    {
+                        data.Bluetooth.Name = CleanProductName(parts[0]);
+                        data.Bluetooth.Status = parts[1] == "OK" ? "Enabled" : "Disabled";
+                        data.Bluetooth.IsAvailable = true;
+                        
+                        if (parts.Length >= 3) data.Bluetooth.Manufacturer = CleanManufacturerName(parts[2]);
+                        if (parts.Length >= 4) data.Bluetooth.DriverVersion = parts[3];
+                        if (parts.Length >= 5 && DateTime.TryParse(parts[4], out var driverDate))
+                        {
+                            data.Bluetooth.DriverDate = driverDate;
+                        }
+                        
+                        data.Bluetooth.BluetoothVersion = ExtractBluetoothVersion(data.Bluetooth.Name);
+                        
+                        _logger.LogDebug("Bluetooth adapter detected via PowerShell: {Name}", data.Bluetooth.Name);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("PowerShell Bluetooth detection failed: {Error}", ex.Message);
             }
         }
 

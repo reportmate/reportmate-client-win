@@ -20,6 +20,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public BatteryInfo? Battery { get; set; }
         public ThermalInfo? Thermal { get; set; }
         public NpuInfo? Npu { get; set; }
+        public WirelessInfo? Wireless { get; set; }
+        public BluetoothInfo? Bluetooth { get; set; }
     }
 
     public class ProcessorInfo
@@ -157,6 +159,36 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Architecture { get; set; } = string.Empty;
         public double ComputeUnits { get; set; } // TOPS (Tera Operations Per Second)
         public DateTime? DriverDate { get; set; }
+        public bool IsAvailable { get; set; }
+    }
+
+    /// <summary>
+    /// Wireless network adapter information
+    /// </summary>
+    public class WirelessInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Manufacturer { get; set; } = string.Empty;
+        public string MacAddress { get; set; } = string.Empty;
+        public string DriverVersion { get; set; } = string.Empty;
+        public DateTime? DriverDate { get; set; }
+        public string Status { get; set; } = string.Empty; // Enabled, Disabled, Not Present
+        public string Protocol { get; set; } = string.Empty; // 802.11ax, 802.11ac, etc.
+        public bool IsAvailable { get; set; }
+    }
+
+    /// <summary>
+    /// Bluetooth adapter information
+    /// </summary>
+    public class BluetoothInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Manufacturer { get; set; } = string.Empty;
+        public string MacAddress { get; set; } = string.Empty;
+        public string DriverVersion { get; set; } = string.Empty;
+        public DateTime? DriverDate { get; set; }
+        public string Status { get; set; } = string.Empty; // Enabled, Disabled, Not Present
+        public string BluetoothVersion { get; set; } = string.Empty; // 5.0, 5.2, 5.3, etc.
         public bool IsAvailable { get; set; }
     }
 }
