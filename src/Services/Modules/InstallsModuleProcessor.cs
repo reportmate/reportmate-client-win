@@ -670,32 +670,56 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
-                // Process events report - structured event intelligence
-                var eventsPath = Path.Combine(CIMIAN_REPORTS_PATH, "events.json");
-                if (File.Exists(eventsPath))
+                // Process events from the LATEST SESSION's events.jsonl (authoritative for what happened this run)
+                // This is the key fix: read from the session's events.jsonl, not reports/events.json
+                const string CIMIAN_LOGS_PATH = @"C:\ProgramData\ManagedInstalls\logs";
+                _logger.LogDebug("Looking for session events in: {LogsPath}", CIMIAN_LOGS_PATH);
+                
+                if (Directory.Exists(CIMIAN_LOGS_PATH) && data.Cimian != null)
                 {
-                    var events = ReadCimianEventsReport(eventsPath);
-                    // Store events in Cimian data structure only
-                    if (data.Cimian != null)
+                    var sessionDirs = Directory.GetDirectories(CIMIAN_LOGS_PATH)
+                        .OrderByDescending(d => Path.GetFileName(d))
+                        .ToList();
+                    
+                    _logger.LogDebug("Found {SessionCount} session directories in logs", sessionDirs.Count);
+                    
+                    if (sessionDirs.Any())
                     {
-                        data.Cimian.Events.AddRange(events.Take(100));
+                        var latestSessionDir = sessionDirs.First();
+                        var latestSessionId = Path.GetFileName(latestSessionDir);
+                        _logger.LogDebug("Reading events from latest session: {SessionId} ({SessionDir})", latestSessionId, latestSessionDir);
+                        
+                        // Read events from the latest session's events.jsonl
+                        var sessionEvents = ReadCimianEventData(latestSessionDir, latestSessionId);
+                        if (sessionEvents.Any())
+                        {
+                            data.Cimian.Events.AddRange(sessionEvents);
+                            _logger.LogInformation("Loaded {Count} events from latest session {SessionId} events.jsonl", 
+                                sessionEvents.Count, latestSessionId);
+                        }
+                        else
+                        {
+                            _logger.LogDebug("No events found in session {SessionId}", latestSessionId);
+                        }
                     }
-                    _logger.LogInformation("Loaded {Count} events from enhanced Cimian events report", events.Count);
                 }
-                else if (osqueryResults.TryGetValue("cimian_reports_events", out var eventsQuery))
+                else
                 {
-                    // Fallback to osquery result
-                    var eventsFile = eventsQuery.FirstOrDefault();
-                    if (eventsFile != null)
+                    _logger.LogDebug("Cimian logs path does not exist or Cimian data is null");
+                }
+                
+                // Fallback: Try reports/events.json if no session events loaded
+                if (data.Cimian?.Events?.Count == 0)
+                {
+                    var eventsPath = Path.Combine(CIMIAN_REPORTS_PATH, "events.json");
+                    if (File.Exists(eventsPath))
                     {
-                        var path = GetStringValue(eventsFile, "path");
-                        var events = ReadCimianEventsReport(path);
-                        // Store events in Cimian data structure only
-                        if (data.Cimian != null)
+                        var events = ReadCimianEventsReport(eventsPath);
+                        if (data.Cimian != null && events.Any())
                         {
                             data.Cimian.Events.AddRange(events.Take(100));
+                            _logger.LogDebug("Loaded {Count} events from reports/events.json (fallback)", events.Count);
                         }
-                        _logger.LogDebug("Loaded {Count} events from Cimian reports (osquery fallback)", events.Count);
                     }
                 }
 
@@ -1486,11 +1510,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var eventsFile = Path.Combine(sessionDir, "events.jsonl");
                 if (!File.Exists(eventsFile))
                 {
+                    _logger.LogDebug("Session events file not found: {EventsFile}", eventsFile);
                     return events;
                 }
 
                 var lines = File.ReadAllLines(eventsFile);
-                foreach (var line in lines.TakeLast(20)) // Take last 20 events
+                _logger.LogDebug("Reading {LineCount} lines from events.jsonl in session {SessionId}", lines.Length, sessionId);
+                
+                // Read ALL events from the session (not just last 20)
+                foreach (var line in lines)
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
 
@@ -2292,6 +2320,8 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// Priority: Error > Warning > Success (only generate one event per device)
+        /// FIXED: Now counts from the latest session's events.jsonl, not cumulative items.json
+        /// This ensures we report only what happened in the LAST run, not historical failures
         /// </summary>
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(InstallsData data)
         {
@@ -2301,35 +2331,69 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogInformation("Starting consolidated event generation for device {DeviceId}", data.DeviceId);
                 
-                // FIXED: Count package statuses from items.json, not runtime log events
+                // Get events from the latest session's events.jsonl (NOT from items.json)
+                // This gives us accurate counts of what happened in the LAST run only
+                var sessionEvents = data.Cimian?.Events ?? new List<CimianEvent>();
+                
+                // Helper function to get package name from event (Package field or context.item)
+                string GetPackageFromEvent(CimianEvent e)
+                {
+                    if (!string.IsNullOrEmpty(e.Package))
+                        return e.Package;
+                    
+                    // Fallback to context.item for warnings
+                    if (e.Context.TryGetValue("item", out var itemValue))
+                        return itemValue?.ToString() ?? "";
+                    
+                    return "";
+                }
+                
+                // Count install-related events by level from the session events
+                // ERROR level events from install operations = failed installs
+                var errorEvents = sessionEvents.Where(e =>
+                    e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase) &&
+                    (e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                     e.Action.Contains("install", StringComparison.OrdinalIgnoreCase))
+                ).ToList();
+                
+                // Get unique failed packages from error events
+                var failedPackages = errorEvents
+                    .Select(e => GetPackageFromEvent(e))
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .Distinct()
+                    .ToList();
+                
+                // WARN level events = warnings (include verification_missing, etc.)
+                var warningEvents = sessionEvents.Where(e =>
+                    e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase) &&
+                    (e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                     e.Action.Contains("install", StringComparison.OrdinalIgnoreCase) ||
+                     e.Action.Contains("verification", StringComparison.OrdinalIgnoreCase))
+                ).ToList();
+                
+                // Get unique packages with warnings
+                var warningPackages = warningEvents
+                    .Select(e => GetPackageFromEvent(e))
+                    .Where(p => !string.IsNullOrEmpty(p))
+                    .Distinct()
+                    .Where(p => !failedPackages.Contains(p, StringComparer.OrdinalIgnoreCase)) // Don't double-count failed packages
+                    .ToList();
+                
+                // Get the total packages from items.json that are "Installed" (for success count)
+                // Only count packages that were NOT in failures or warnings this session
                 var allItems = data.Cimian?.Items ?? new List<CimianItem>();
+                var installedPackages = allItems
+                    .Where(i => 
+                        i.CurrentStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase) &&
+                        !failedPackages.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase) &&
+                        !warningPackages.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase))
+                    .Select(i => i.ItemName)
+                    .ToList();
                 
-                // Count packages with errors (Failed/Error/Install Loop status)
-                var errorItems = allItems.Where(i => 
-                    i.MappedStatus.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
-                    i.CurrentStatus.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
-                    i.CurrentStatus.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) ||
-                    i.InstallLoopDetected ||
-                    i.FailureCount > 0
-                ).ToList();
-                
-                // Count packages with warnings (Warning status or warning messages)
-                var warningItems = allItems.Where(i => 
-                    i.MappedStatus.Equals("Warning", StringComparison.OrdinalIgnoreCase) ||
-                    i.CurrentStatus.Equals("Warning", StringComparison.OrdinalIgnoreCase) ||
-                    (!string.IsNullOrEmpty(i.LastWarning) && !IsExpectedWarning(i.LastWarning))
-                ).Where(i => !errorItems.Contains(i)) // Don't double-count errors as warnings
-                .ToList();
-                
-                // Count successfully installed packages (not errors or warnings)
-                var successItems = allItems.Where(i => 
-                    i.MappedStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase) &&
-                    !errorItems.Contains(i) &&
-                    !warningItems.Contains(i)
-                ).ToList();
-                
-                _logger.LogInformation("Event analysis - Errors: {ErrorCount}, Warnings: {WarningCount}, Successes: {SuccessCount}", 
-                    errorItems.Count, warningItems.Count, successItems.Count);
+                _logger.LogInformation("Session event analysis - Errors: {ErrorCount} ({FailedPkgs}), Warnings: {WarningCount} ({WarnPkgs}), Installed: {InstalledCount}", 
+                    failedPackages.Count, string.Join(", ", failedPackages.Take(5)),
+                    warningPackages.Count, string.Join(", ", warningPackages.Take(5)),
+                    installedPackages.Count);
                 
                 // Build consolidated message and determine event type
                 string eventType;
@@ -2345,64 +2409,64 @@ namespace ReportMate.WindowsClient.Services.Modules
                     details["duration_seconds"] = latestSession.DurationSeconds;
                 }
                 
-                // PRIORITY 1: ERROR - If there are any errors, this is an error event
-                if (errorItems.Any())
+                // PRIORITY 1: ERROR - If there are any failed packages in this session
+                if (failedPackages.Any())
                 {
                     eventType = "error";
                     var messageParts = new List<string>();
                     
                     // Always mention failed installs first
-                    messageParts.Add($"{errorItems.Count} failed install{(errorItems.Count == 1 ? "" : "s")}");
+                    messageParts.Add($"{failedPackages.Count} failed install{(failedPackages.Count == 1 ? "" : "s")}");
                     
                     // Add warnings if any
-                    if (warningItems.Any())
-                        messageParts.Add($"{warningItems.Count} warning{(warningItems.Count == 1 ? "" : "s")}");
+                    if (warningPackages.Any())
+                        messageParts.Add($"{warningPackages.Count} warning{(warningPackages.Count == 1 ? "" : "s")}");
                     
-                    // Add successes if any
-                    if (successItems.Any())
-                        messageParts.Add($"{successItems.Count} successful install{(successItems.Count == 1 ? "" : "s")}");
+                    // Add installed count if any
+                    if (installedPackages.Any())
+                        messageParts.Add($"{installedPackages.Count} successful install{(installedPackages.Count == 1 ? "" : "s")}");
                     
                     message = string.Join(", ", messageParts);
                     
-                    details["error_count"] = errorItems.Count;
-                    details["warning_count"] = warningItems.Count;
-                    details["success_count"] = successItems.Count;
+                    details["error_count"] = failedPackages.Count;
+                    details["warning_count"] = warningPackages.Count;
+                    details["success_count"] = installedPackages.Count;
                     details["module_status"] = "error";
-                    details["failed_packages"] = errorItems.Select(i => i.ItemName).Take(10).ToList();
+                    details["failed_packages"] = failedPackages.Take(10).ToList();
                     
                     _logger.LogInformation("Generated single ERROR event: {Message}", message);
                 }
-                // PRIORITY 2: WARNING - If there are warnings but no errors, this is a warning event
-                else if (warningItems.Any())
+                // PRIORITY 2: WARNING - If there are warnings but no errors
+                else if (warningPackages.Any())
                 {
                     eventType = "warning";
                     var messageParts = new List<string>();
                     
                     // Always mention warnings first
-                    messageParts.Add($"{warningItems.Count} warning{(warningItems.Count == 1 ? "" : "s")}");
+                    messageParts.Add($"{warningPackages.Count} warning{(warningPackages.Count == 1 ? "" : "s")}");
                     
-                    // Add successes if any
-                    if (successItems.Any())
-                        messageParts.Add($"{successItems.Count} successful install{(successItems.Count == 1 ? "" : "s")}");
+                    // Add installed count if any
+                    if (installedPackages.Any())
+                        messageParts.Add($"{installedPackages.Count} successful install{(installedPackages.Count == 1 ? "" : "s")}");
                     
                     message = string.Join(", ", messageParts);
                     
-                    details["warning_count"] = warningItems.Count;
-                    details["success_count"] = successItems.Count;
+                    details["warning_count"] = warningPackages.Count;
+                    details["success_count"] = installedPackages.Count;
                     details["module_status"] = "warning";
-                    details["warning_packages"] = warningItems.Select(i => i.ItemName).Take(10).ToList();
+                    details["warning_packages"] = warningPackages.Take(10).ToList();
                     
                     _logger.LogInformation("Generated single WARNING event: {Message}", message);
                 }
-                // PRIORITY 3: SUCCESS - Only if there are actual successful operations
-                else if (successItems.Any())
+                // PRIORITY 3: SUCCESS - Only if there are actual installed packages
+                else if (installedPackages.Any())
                 {
                     eventType = "success";
-                    message = $"{successItems.Count} successful install{(successItems.Count == 1 ? "" : "s")}";
+                    message = $"{installedPackages.Count} successful install{(installedPackages.Count == 1 ? "" : "s")}";
                     
-                    details["success_count"] = successItems.Count;
+                    details["success_count"] = installedPackages.Count;
                     details["module_status"] = "success";
-                    details["successful_packages"] = successItems.Select(i => i.ItemName).Take(10).ToList();
+                    details["successful_packages"] = installedPackages.Take(10).ToList();
                     
                     _logger.LogInformation("Generated single SUCCESS event: {Message}", message);
                 }
