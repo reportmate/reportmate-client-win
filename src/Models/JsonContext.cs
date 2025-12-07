@@ -67,7 +67,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Modules.CimianEventData))]
 [JsonSerializable(typeof(List<Modules.CimianPackageItem>))]
 [JsonSerializable(typeof(List<Modules.CimianEventData>))]
-// CRITICAL: CimianInfo and nested types for proper Items serialization
+// CimianInfo and nested types for proper Items serialization
 [JsonSerializable(typeof(Modules.CimianInfo))]
 [JsonSerializable(typeof(Modules.CimianItem))]
 [JsonSerializable(typeof(Modules.CimianSession))]
