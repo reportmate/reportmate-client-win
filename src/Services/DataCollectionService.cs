@@ -112,7 +112,7 @@ public class DataCollectionService : IDataCollectionService
                 return true;
             }
 
-            // CRITICAL: DEVICE REGISTRATION CHECK AND AUTO-REGISTRATION
+            // DEVICE REGISTRATION CHECK AND AUTO-REGISTRATION
             // Check if device is registered, if not, register it via "new_client" event
             _logger.LogInformation("=== STEP 3: DEVICE REGISTRATION CHECK ===");
             _logger.LogInformation("Checking if device {DeviceId} is registered...", deviceId);

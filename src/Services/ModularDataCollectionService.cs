@@ -867,7 +867,7 @@ namespace ReportMate.WindowsClient.Services
 
         /// <summary>
         /// Extract device serial number from osquery results
-        /// CRITICAL: This method MUST return a hardware serial number only
+        /// This method MUST return a hardware serial number only
         /// NEVER returns hostname/computer_name - device registration will fail if no valid serial found
         /// </summary>
         private string ExtractSerialNumber(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
@@ -915,7 +915,7 @@ namespace ReportMate.WindowsClient.Services
                 }
             }
 
-            // CRITICAL: No valid hardware serial found - device cannot register with ReportMate
+            // No valid hardware serial found - device cannot register with ReportMate
             // We do NOT fall back to hostname/computer_name or any other identifier
             // This ensures database integrity - only devices with valid hardware serials can register
             _logger.LogError("FATAL: No valid hardware serial number found. Device cannot register with ReportMate.");
