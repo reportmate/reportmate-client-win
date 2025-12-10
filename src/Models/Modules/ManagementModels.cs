@@ -16,6 +16,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public UserState UserState { get; set; } = new();
         public SsoState SsoState { get; set; } = new();
         public DiagnosticData DiagnosticData { get; set; } = new();
+        public DomainTrust DomainTrust { get; set; } = new();
         public MdmEnrollmentInfo MdmEnrollment { get; set; } = new MdmEnrollmentInfo();
         public List<MdmProfile> Profiles { get; set; } = new List<MdmProfile>();
         public List<CompliancePolicy> CompliancePolicies { get; set; } = new List<CompliancePolicy>();
@@ -145,5 +146,51 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string ProxyServerList { get; set; } = string.Empty;
         public string ProxyBypassList { get; set; } = string.Empty;
         public string AccessType { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Domain trust relationship status for on-prem or hybrid joined machines
+    /// </summary>
+    public class DomainTrust
+    {
+        /// <summary>
+        /// Whether the secure channel to the domain controller is working
+        /// </summary>
+        public bool SecureChannelValid { get; set; }
+
+        /// <summary>
+        /// Domain name the computer is joined to
+        /// </summary>
+        public string DomainName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The domain controller used for authentication
+        /// </summary>
+        public string DomainController { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Overall trust status: "Healthy", "Broken", "Unknown", or "Not Applicable"
+        /// </summary>
+        public string TrustStatus { get; set; } = "Unknown";
+
+        /// <summary>
+        /// Last time the trust was verified
+        /// </summary>
+        public DateTime? LastChecked { get; set; }
+
+        /// <summary>
+        /// Error message if trust verification failed
+        /// </summary>
+        public string ErrorMessage { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Whether the computer account exists in AD
+        /// </summary>
+        public bool ComputerAccountExists { get; set; }
+
+        /// <summary>
+        /// Machine account password age in days (stale passwords can cause trust issues)
+        /// </summary>
+        public int? MachinePasswordAgeDays { get; set; }
     }
 }
