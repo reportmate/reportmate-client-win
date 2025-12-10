@@ -286,7 +286,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // CRITICAL: No valid hardware serial found - device cannot register with ReportMate
+            // No valid hardware serial found - device cannot register with ReportMate
             // We do NOT fall back to machine name or any other identifier
             _logger.LogError("FATAL: No valid hardware serial number found. Device cannot register with ReportMate.");
             throw new InvalidOperationException("No valid hardware serial number found. Device requires a valid BIOS/chassis serial to register with ReportMate.");
