@@ -146,11 +146,11 @@ HKLM\SOFTWARE\ReportMate\
 ```
 Task Scheduler\ReportMate\
 ├── ReportMate Hourly Collection               # Security-critical modules (1h interval)
-│   └── Modules: security, installs, profiles, system, network
+│   └── Modules: security, installs, profiles, system, network, management
 ├── ReportMate 4-Hourly Collection            # Moderate change modules (4h interval)
 │   └── Modules: applications, inventory
 ├── ReportMate Daily Collection               # Stable modules (24h interval)
-│   └── Modules: hardware, management, printers, displays
+│   └── Modules: hardware, printers, displays
 └── ReportMate Data Transmission              # Upload collected data (15min after collection)
 ```
 
@@ -182,9 +182,9 @@ All packages use automatic date-based versioning in `YYYY.MM.DD` format:
 ReportMate optimizes data collection with differentiated scheduling based on data change frequency:
 
 ### Hourly Collection (Security-Critical)
-- **Modules**: `security`, `installs`, `profiles`, `system`, `network`
+- **Modules**: `security`, `installs`, `profiles`, `system`, `network`, `management`
 - **Interval**: 60 minutes
-- **Purpose**: Frequent monitoring of security status, software changes, and configuration updates
+- **Purpose**: Frequent monitoring of security status, software changes, configuration updates, and MDM enrollment
 - **Staggered Start**: 5-minute offsets to distribute system load
 
 ### 4-Hourly Collection (Moderate Changes)  
@@ -194,9 +194,9 @@ ReportMate optimizes data collection with differentiated scheduling based on dat
 - **Optimized**: Balances data freshness with system resource usage
 
 ### Daily Collection (Stable Data)
-- **Modules**: `hardware`, `management`, `printers`, `displays`  
+- **Modules**: `hardware`, `printers`, `displays`  
 - **Interval**: 1440 minutes (24 hours)
-- **Purpose**: Physical hardware, device management status, and peripheral devices
+- **Purpose**: Physical hardware and peripheral devices
 - **Efficient**: Minimal system impact for rarely-changing data
 
 ### Data Transmission

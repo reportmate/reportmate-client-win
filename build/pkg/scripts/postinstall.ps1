@@ -229,9 +229,9 @@ try {
         Write-Warning "Module schedules configuration not found, using defaults"
         $scheduleConfig = @{
             schedules = @{
-                hourly = @{ interval = "PT1H"; modules = @("security", "installs", "profiles", "system", "network") }
+                hourly = @{ interval = "PT1H"; modules = @("security", "installs", "profiles", "system", "network", "management") }
                 every4hours = @{ interval = "PT4H"; modules = @("applications", "inventory") }
-                daily = @{ interval = "P1D"; modules = @("hardware", "management", "printers", "displays") }
+                daily = @{ interval = "P1D"; modules = @("hardware", "printers", "displays") }
                 all = @{ interval_minutes = 720; modules = "all" }
             }
         }

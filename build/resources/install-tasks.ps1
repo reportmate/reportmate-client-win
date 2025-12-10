@@ -67,7 +67,7 @@ try {
             schedules = @{
                 hourly = @{
                     interval = "PT1H"
-                    modules = @("security", "profiles", "network")
+                    modules = @("security", "profiles", "network", "management")
                 }
                 every4hours = @{
                     interval = "PT4H" 
@@ -75,7 +75,7 @@ try {
                 }
                 daily = @{
                     interval = "P1D"
-                    modules = @("hardware", "management", "printers", "displays")
+                    modules = @("hardware", "printers", "displays")
                 }
                 all = @{
                     interval_minutes = 720
