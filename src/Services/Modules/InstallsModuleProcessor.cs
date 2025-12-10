@@ -1218,18 +1218,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Id = GetDictValue(itemDict, "id"),
                         ItemName = GetDictValue(itemDict, "item_name"),
                         DisplayName = GetDictValue(itemDict, "display_name"),
-                        CurrentStatus = originalStatus,  // CRITICAL: Preserve original Cimian status
+                        CurrentStatus = originalStatus,  // Preserve original Cimian status
                         LatestVersion = GetDictValue(itemDict, "latest_version"),
                         InstalledVersion = GetDictValue(itemDict, "installed_version"),
                         LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session"),
-                        LastError = GetDictValue(itemDict, "last_error") ?? string.Empty, // CRITICAL: Error messages
-                        LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty // CRITICAL: Warning messages
+                        LastError = GetDictValue(itemDict, "last_error") ?? string.Empty, // Error messages
+                        LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty // Warning messages
                     };
 
                     // Clean status mapping for Cimian - PRIORITIZE FAILURE STATES
                     var mappedStatus = "Unknown";
                     
-                    // CRITICAL: Check failure states FIRST before version matching
+                    // Check failure states FIRST before version matching
                     // This creates a SIMPLIFIED status for filtering while preserving original in CurrentStatus
                     if (originalStatus?.Equals("Error", StringComparison.OrdinalIgnoreCase) == true ||
                         originalStatus?.Equals("Install Loop", StringComparison.OrdinalIgnoreCase) == true ||
@@ -2129,7 +2129,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         ItemName = itemName,
                         DisplayName = displayName,
                         ItemType = GetDictValue(item, "item_type"),
-                        CurrentStatus = originalCimianStatus ?? "Unknown", // CRITICAL: Store ORIGINAL Cimian status (Error, Install Loop, etc.)
+                        CurrentStatus = originalCimianStatus ?? "Unknown", // Store ORIGINAL Cimian status (Error, Install Loop, etc.)
                         MappedStatus = mappedStatus, // Store simplified status (Failed, Pending, Installed, etc.)
                         LatestVersion = extractedVersion, // Enhanced: Use version from recent_attempts
                         InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
@@ -2137,8 +2137,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
                         Type = GetDictValue(item, "type"),
-                        LastError = GetDictValue(item, "last_error") ?? string.Empty, // CRITICAL: Error messages for failed installs
-                        LastWarning = GetDictValue(item, "last_warning") ?? string.Empty // CRITICAL: Warning messages for install loops
+                        LastError = GetDictValue(item, "last_error") ?? string.Empty, // Error messages for failed installs
+                        LastWarning = GetDictValue(item, "last_warning") ?? string.Empty // Warning messages for install loops
                     };
 
                     // Parse timestamps
