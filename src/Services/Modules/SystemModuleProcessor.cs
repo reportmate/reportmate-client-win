@@ -468,10 +468,28 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}, Services: {ServiceCount}, ScheduledTasks: {TaskCount}", 
+            // Process Windows Activation status via WMI
+            try
+            {
+                data.OperatingSystem.Activation = GetWindowsActivationStatus();
+                _logger.LogDebug("Windows Activation status: {Status} (Code: {Code})", 
+                    data.OperatingSystem.Activation?.Status, data.OperatingSystem.Activation?.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to retrieve Windows activation status");
+                data.OperatingSystem.Activation = new ActivationInfo
+                {
+                    IsActivated = false,
+                    Status = "Unknown",
+                    StatusCode = -1
+                };
+            }
+
+            _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}, Activation: {Activation}, Services: {ServiceCount}, ScheduledTasks: {TaskCount}", 
                 data.OperatingSystem.Name, data.OperatingSystem.Version, data.OperatingSystem.Edition, 
                 data.OperatingSystem.DisplayVersion, data.OperatingSystem.Locale, data.OperatingSystem.TimeZone, 
-                data.UptimeString, data.Services.Count, data.ScheduledTasks.Count);
+                data.UptimeString, data.OperatingSystem.Activation?.Status ?? "Unknown", data.Services.Count, data.ScheduledTasks.Count);
 
             return Task.FromResult(data);
         }
@@ -524,6 +542,109 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
             
             return string.Join(", ", parts);
+        }
+
+        /// <summary>
+        /// Gets Windows activation status via PowerShell/CIM query
+        /// Uses PowerShell Get-CimInstance instead of direct WMI for better .NET 8 compatibility
+        /// </summary>
+        private ActivationInfo GetWindowsActivationStatus()
+        {
+            var activation = new ActivationInfo
+            {
+                IsActivated = false,
+                Status = "Unknown",
+                StatusCode = -1
+            };
+
+            string? tempScript = null;
+            try
+            {
+                // PowerShell script to query Windows activation via CIM with optimized WQL query
+                // ApplicationId "55c92734-d682-4d71-983e-d6ec3f16059f" is the Windows OS product
+                // Using WQL query directly is ~100x faster than filtering in PowerShell (0.2s vs 12s)
+                // Write to temp file to avoid command-line escaping issues
+                var scriptContent = @"
+$lic = Get-CimInstance -Query ""SELECT LicenseStatus, Name, PartialProductKey FROM SoftwareLicensingProduct WHERE ApplicationId='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL"" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($lic) {
+    Write-Output ""$($lic.LicenseStatus)|$($lic.Name)|$($lic.PartialProductKey)""
+} else {
+    Write-Output ""-1|Unknown|""
+}
+";
+                tempScript = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"rm_activation_{Guid.NewGuid():N}.ps1");
+                System.IO.File.WriteAllText(tempScript, scriptContent);
+
+                using var process = new System.Diagnostics.Process();
+                process.StartInfo.FileName = "powershell.exe";
+                process.StartInfo.Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{tempScript}\"";
+                process.StartInfo.UseShellExecute = false;
+                process.StartInfo.RedirectStandardOutput = true;
+                process.StartInfo.RedirectStandardError = true;
+                process.StartInfo.CreateNoWindow = true;
+
+                process.Start();
+
+                if (!process.WaitForExit(10000)) // 10 second timeout
+                {
+                    process.Kill();
+                    _logger.LogWarning("PowerShell activation query timed out");
+                    return activation;
+                }
+
+                var output = process.StandardOutput.ReadToEnd().Trim();
+                var error = process.StandardError.ReadToEnd();
+
+                if (!string.IsNullOrEmpty(error))
+                {
+                    _logger.LogDebug("PowerShell activation query had warnings: {Error}", error);
+                }
+
+                // Parse output: "LicenseStatus|Name|PartialProductKey"
+                var parts = output.Split('|');
+                if (parts.Length >= 3)
+                {
+                    if (int.TryParse(parts[0], out var licenseStatus))
+                    {
+                        activation.StatusCode = licenseStatus;
+                        activation.LicenseType = parts[1];
+                        activation.PartialProductKey = parts[2];
+
+                        // Map license status codes to readable strings
+                        activation.Status = licenseStatus switch
+                        {
+                            0 => "Unlicensed",
+                            1 => "Licensed",
+                            2 => "OOBGrace",      // Out-of-box grace period
+                            3 => "OOTGrace",      // Out-of-tolerance grace period  
+                            4 => "NonGenuineGrace", // Non-genuine grace period
+                            5 => "Notification",  // Notification mode
+                            6 => "ExtendedGrace", // Extended grace period
+                            _ => "Unknown"
+                        };
+
+                        // Licensed (1) means activated
+                        activation.IsActivated = licenseStatus == 1;
+                        
+                        _logger.LogDebug("Windows activation found: Status={Status}, Key=***{PartialKey}, Type={LicenseType}",
+                            activation.Status, activation.PartialProductKey, activation.LicenseType);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to query Windows activation status via PowerShell");
+            }
+            finally
+            {
+                // Clean up temp script
+                if (tempScript != null && System.IO.File.Exists(tempScript))
+                {
+                    try { System.IO.File.Delete(tempScript); } catch { }
+                }
+            }
+
+            return activation;
         }
 
         public override async Task<bool> ValidateModuleDataAsync(SystemData data)
