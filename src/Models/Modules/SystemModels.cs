@@ -67,6 +67,37 @@ namespace ReportMate.WindowsClient.Models.Modules
         
         [JsonPropertyOrder(15)]
         public string ActiveKeyboardLayout { get; set; } = string.Empty;
+        
+        [JsonPropertyOrder(16)]
+        public ActivationInfo? Activation { get; set; }
+    }
+
+    public class ActivationInfo
+    {
+        /// <summary>
+        /// Whether Windows is activated (Licensed)
+        /// </summary>
+        public bool IsActivated { get; set; }
+        
+        /// <summary>
+        /// License status: Licensed, Unlicensed, OOBGrace, OOTGrace, NonGenuineGrace, Notification, ExtendedGrace
+        /// </summary>
+        public string Status { get; set; } = string.Empty;
+        
+        /// <summary>
+        /// License status code: 0=Unlicensed, 1=Licensed, 2=OOBGrace, 3=OOTGrace, 4=NonGenuineGrace, 5=Notification, 6=ExtendedGrace
+        /// </summary>
+        public int StatusCode { get; set; }
+        
+        /// <summary>
+        /// Partial product key (last 5 characters)
+        /// </summary>
+        public string? PartialProductKey { get; set; }
+        
+        /// <summary>
+        /// License type/edition name from SoftwareLicensingProduct
+        /// </summary>
+        public string? LicenseType { get; set; }
     }
 
     public class SystemUpdate
