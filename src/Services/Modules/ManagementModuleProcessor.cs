@@ -446,7 +446,7 @@ try {
             }
         }
 
-        private Task ProcessLegacyMdmDataAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        private async Task ProcessLegacyMdmDataAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
         {
             _logger.LogDebug("Processing MDM data from osquery results");
             _logger.LogDebug($"Available osquery result keys: {string.Join(", ", osqueryResults.Keys)}");
@@ -667,9 +667,95 @@ try {
             // Process device identification from registry keys
             ProcessDeviceIdentificationAsync(osqueryResults, data);
 
+            // PowerShell-based MDM enrollment detection fallback (osquery registry queries may not work reliably)
+            if (!data.MdmEnrollment.IsEnrolled)
+            {
+                await DetectMdmEnrollmentViaPowerShellAsync(data);
+            }
+
             _logger.LogDebug("Processed MDM data from osquery - Enrollment Status: {IsEnrolled}, Provider: {Provider}, Metadata entries: {MetadataCount}", 
                 data.MdmEnrollment.IsEnrolled, data.MdmEnrollment.Provider, data.Metadata.Count);
-            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Detect MDM enrollment directly via PowerShell registry queries.
+        /// This is a fallback when osquery doesn't return expected results.
+        /// </summary>
+        private async Task DetectMdmEnrollmentViaPowerShellAsync(ManagementData data)
+        {
+            try
+            {
+                _logger.LogDebug("Detecting MDM enrollment via PowerShell registry query");
+
+                // PowerShell script to find MDM enrollment in registry
+                var script = @"
+$providers = @()
+Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Enrollments\*' -ErrorAction SilentlyContinue | ForEach-Object {
+    $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+    if ($props.ProviderID) {
+        $providers += [PSCustomObject]@{
+            ProviderID = $props.ProviderID
+            UPN = $props.UPN
+            EnrollmentState = $props.EnrollmentState
+            AADTenantID = $props.AADTenantID
+        }
+    }
+}
+$providers | ConvertTo-Json -Compress
+";
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                
+                if (string.IsNullOrEmpty(result) || result == "null")
+                {
+                    _logger.LogDebug("No MDM enrollment found via PowerShell");
+                    return;
+                }
+
+                // Parse the JSON result
+                _logger.LogDebug("MDM enrollment PowerShell result: {Result}", result);
+
+                // Check for Microsoft MDM providers
+                if (result.Contains("MS DM Server") || result.Contains("Microsoft Device Management") || result.Contains("Microsoft Intune"))
+                {
+                    data.MdmEnrollment.IsEnrolled = true;
+                    
+                    // Determine provider
+                    if (result.Contains("Microsoft Intune"))
+                    {
+                        data.MdmEnrollment.Provider = "Microsoft Intune";
+                    }
+                    else if (result.Contains("MS DM Server") || result.Contains("Microsoft Device Management"))
+                    {
+                        // MS DM Server or Microsoft Device Management typically means Intune/Co-managed
+                        data.MdmEnrollment.Provider = data.DeviceState.EntraJoined ? "Microsoft Intune" : "Microsoft Intune (Co-managed)";
+                    }
+                    
+                    data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
+                    
+                    // Try to extract UPN
+                    var upnMatch = System.Text.RegularExpressions.Regex.Match(result, @"""UPN""\s*:\s*""([^""]+)""");
+                    if (upnMatch.Success)
+                    {
+                        data.MdmEnrollment.UserPrincipalName = upnMatch.Groups[1].Value;
+                    }
+                    
+                    _logger.LogInformation("MDM enrollment detected via PowerShell - Provider: {Provider}, UPN: {UPN}", 
+                        data.MdmEnrollment.Provider, data.MdmEnrollment.UserPrincipalName);
+                }
+                else if (result.Contains("WMI_Bridge_SCCM_Server") || result.Contains("SCCM"))
+                {
+                    // SCCM-managed device
+                    data.MdmEnrollment.IsEnrolled = true;
+                    data.MdmEnrollment.Provider = "SCCM/ConfigMgr";
+                    data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
+                    
+                    _logger.LogInformation("SCCM enrollment detected via PowerShell");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to detect MDM enrollment via PowerShell");
+            }
         }
 
         /// <summary>
