@@ -468,15 +468,9 @@ try {
                             if (regData.Contains("Microsoft") || regData.Contains("MS DM"))
                             {
                                 data.MdmEnrollment.IsEnrolled = true;
-                                data.MdmEnrollment.Provider = regData;
+                                data.MdmEnrollment.Provider = NormalizeMdmProvider(regData);
                                 data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
-                                _logger.LogDebug("Set MDM enrollment to true based on Microsoft ProviderID");
-                                // If device is Entra joined and has Microsoft MDM provider, it's Intune
-                                if (data.DeviceState.EntraJoined)
-                                {
-                                    data.MdmEnrollment.Provider = "Microsoft Intune";
-                                    _logger.LogDebug("Updated provider to Microsoft Intune for Entra joined device");
-                                }
+                                _logger.LogDebug("Set MDM enrollment to true based on Microsoft ProviderID, normalized to: {Provider}", data.MdmEnrollment.Provider);
                             }
                             data.TenantDetails.TenantId = regData;
                             break;
@@ -949,20 +943,35 @@ $providers | ConvertTo-Json -Compress
         }
 
         /// <summary>
-        /// Determines enrollment type using modern Entra terminology
+        /// Normalizes Microsoft MDM provider names to "Microsoft Intune"
+        /// </summary>
+        private string NormalizeMdmProvider(string provider)
+        {
+            if (string.IsNullOrEmpty(provider))
+                return provider;
+
+            // Normalize all Microsoft MDM provider variations to "Microsoft Intune"
+            if (provider.Contains("Microsoft", StringComparison.OrdinalIgnoreCase) || 
+                provider.Contains("MS DM", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Microsoft Intune";
+            }
+
+            return provider;
+        }
+
+        /// <summary>
+        /// Determines enrollment type - simplified to Entra Joined (modern) or Domain Joined (legacy)
         /// </summary>
         private string DetermineEnrollmentType(DeviceState deviceState)
         {
-            if (deviceState.EntraJoined && deviceState.DomainJoined)
-                return "Hybrid Entra Join";
-            else if (deviceState.EntraJoined)
-                return "Entra Join";
-            else if (deviceState.EnterpriseJoined)
-                return "Enterprise Join";
+            // Simple logic: Entra Joined = modern cloud, Domain Joined = legacy on-prem
+            if (deviceState.EntraJoined)
+                return "Entra Joined";
             else if (deviceState.DomainJoined)
-                return "Domain Join";
+                return "Domain Joined";
             else
-                return "Workplace Join";
+                return "Unmanaged";
         }
 
         public override async Task<bool> ValidateModuleDataAsync(ManagementData data)
