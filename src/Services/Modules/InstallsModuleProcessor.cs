@@ -2356,44 +2356,76 @@ namespace ReportMate.WindowsClient.Services.Modules
                      e.Action.Contains("install", StringComparison.OrdinalIgnoreCase))
                 ).ToList();
                 
-                // Get unique failed packages from error events
-                var failedPackages = errorEvents
+                // Get unique failed items from error events
+                var failedItems = errorEvents
                     .Select(e => GetPackageFromEvent(e))
                     .Where(p => !string.IsNullOrEmpty(p))
                     .Distinct()
                     .ToList();
                 
-                // WARN level events = warnings (include verification_missing, etc.)
-                var warningEvents = sessionEvents.Where(e =>
-                    e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase) &&
-                    (e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) ||
-                     e.Action.Contains("install", StringComparison.OrdinalIgnoreCase) ||
-                     e.Action.Contains("verification", StringComparison.OrdinalIgnoreCase))
+                // Get all items so we can cross-reference package statuses
+                var allItems = data.Cimian?.Items ?? new List<CimianItem>();
+                
+                // Build set of known item names (for distinguishing item vs operational warnings)
+                var knownItemNames = allItems
+                    .Select(i => i.ItemName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                
+                // === CATEGORIZE WARNINGS ===
+                // 1. ITEM WARNINGS: WARN events that have a Package field matching a known managed item
+                //    These are warnings about installing/updating a specific item
+                // 2. OPERATIONAL WARNINGS: All other WARN events (preflight, manifest processing, etc.)
+                //    These are session-level warnings about Cimian's run itself
+                
+                var allWarningEvents = sessionEvents.Where(e =>
+                    e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase)
                 ).ToList();
                 
-                // Get unique packages with warnings
-                var warningPackages = warningEvents
-                    .Select(e => GetPackageFromEvent(e))
+                // Item warnings: have a Package field that matches a known managed item
+                var itemWarningEvents = allWarningEvents.Where(e =>
+                    !string.IsNullOrEmpty(e.Package) && 
+                    knownItemNames.Contains(e.Package) &&
+                    !IsExpectedWarning(e.Message) // Filter arch mismatch, etc.
+                ).ToList();
+                
+                // Operational warnings: everything else (no package, or package not in managed list)
+                var operationalWarningEvents = allWarningEvents.Where(e =>
+                    string.IsNullOrEmpty(e.Package) || 
+                    !knownItemNames.Contains(e.Package)
+                ).ToList();
+                
+                // Get unique items with ACTUAL item-level warnings
+                // Only flag as warning if: has warning AND is NOT already successfully installed
+                var installedItemNames = allItems
+                    .Where(i => i.CurrentStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase))
+                    .Select(i => i.ItemName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    
+                var warningItems = itemWarningEvents
+                    .Select(e => e.Package)
                     .Where(p => !string.IsNullOrEmpty(p))
                     .Distinct()
-                    .Where(p => !failedPackages.Contains(p, StringComparer.OrdinalIgnoreCase)) // Don't double-count failed packages
+                    .Where(p => !failedItems.Contains(p, StringComparer.OrdinalIgnoreCase)) // Don't double-count failed
+                    .Where(p => !installedItemNames.Contains(p)) // Successfully installed = not a warning
                     .ToList();
                 
-                // Get the total packages from items.json that are "Installed" (for success count)
-                // Only count packages that were NOT in failures or warnings this session
-                var allItems = data.Cimian?.Items ?? new List<CimianItem>();
-                var installedPackages = allItems
-                    .Where(i => 
-                        i.CurrentStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase) &&
-                        !failedPackages.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase) &&
-                        !warningPackages.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase))
-                    .Select(i => i.ItemName)
-                    .ToList();
+                // Get ACTUAL session activity counts from the latest session
+                // This is what happened in THIS run, not total items managed
+                var latestSessionForCounts = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
+                var sessionInstalls = latestSessionForCounts?.Installs ?? 0;
+                var sessionUpdates = latestSessionForCounts?.Updates ?? 0;
+                var sessionSuccesses = latestSessionForCounts?.Successes ?? 0;
+                var sessionActivityCount = sessionInstalls + sessionUpdates;
                 
-                _logger.LogInformation("Session event analysis - Errors: {ErrorCount} ({FailedPkgs}), Warnings: {WarningCount} ({WarnPkgs}), Installed: {InstalledCount}", 
-                    failedPackages.Count, string.Join(", ", failedPackages.Take(5)),
-                    warningPackages.Count, string.Join(", ", warningPackages.Take(5)),
-                    installedPackages.Count);
+                // Also track total managed items for context (but not for messaging)
+                var totalManagedItems = allItems.Count;
+                var totalInstalledItems = installedItemNames.Count;
+                
+                _logger.LogInformation("Session event analysis - Failed Items: {ErrorCount} ({FailedItems}), Item Warnings: {WarningCount} ({WarnItems}), Operational Warnings: {OpWarnCount}, Session Activity: {SessionActivity} (installs: {Installs}, updates: {Updates})", 
+                    failedItems.Count, string.Join(", ", failedItems.Take(5)),
+                    warningItems.Count, string.Join(", ", warningItems.Take(5)),
+                    operationalWarningEvents.Count,
+                    sessionActivityCount, sessionInstalls, sessionUpdates);
                 
                 // Build consolidated message and determine event type
                 string eventType;
@@ -2409,68 +2441,133 @@ namespace ReportMate.WindowsClient.Services.Modules
                     details["duration_seconds"] = latestSession.DurationSeconds;
                 }
                 
-                // PRIORITY 1: ERROR - If there are any failed packages in this session
-                if (failedPackages.Any())
+                // include operational warnings in details - these are session-level issues
+                // (preflight errors, manifest processing, fact key issues, etc.)
+                if (operationalWarningEvents.Any())
+                {
+                    details["operational_warning_count"] = operationalWarningEvents.Count;
+                    details["operational_warnings"] = operationalWarningEvents
+                        .Take(10)
+                        .Select(e => new Dictionary<string, object>
+                        {
+                            ["message"] = e.Message,
+                            ["action"] = e.Action,
+                            ["event_type"] = e.EventType,
+                            ["timestamp"] = e.Timestamp.ToString("O")
+                        })
+                        .ToList();
+                }
+                
+                // PRIORITY 1: ERROR - If there are any failed items in this session
+                if (failedItems.Any())
                 {
                     eventType = "error";
                     var messageParts = new List<string>();
                     
                     // Always mention failed installs first
-                    messageParts.Add($"{failedPackages.Count} failed install{(failedPackages.Count == 1 ? "" : "s")}");
+                    messageParts.Add($"{failedItems.Count} failed install{(failedItems.Count == 1 ? "" : "s")}");
                     
-                    // Add warnings if any
-                    if (warningPackages.Any())
-                        messageParts.Add($"{warningPackages.Count} warning{(warningPackages.Count == 1 ? "" : "s")}");
+                    // Add item warnings if any
+                    if (warningItems.Any())
+                        messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
                     
-                    // Add installed count if any
-                    if (installedPackages.Any())
-                        messageParts.Add($"{installedPackages.Count} successful install{(installedPackages.Count == 1 ? "" : "s")}");
+                    // Add operational warnings if any
+                    if (operationalWarningEvents.Any())
+                        messageParts.Add($"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    
+                    // Add session activity count if any actual installs/updates occurred
+                    if (sessionActivityCount > 0)
+                        messageParts.Add($"{sessionActivityCount} successful{(sessionActivityCount == 1 ? "" : "s")}");
                     
                     message = string.Join(", ", messageParts);
                     
-                    details["error_count"] = failedPackages.Count;
-                    details["warning_count"] = warningPackages.Count;
-                    details["success_count"] = installedPackages.Count;
+                    details["error_count"] = failedItems.Count;
+                    details["warning_count"] = warningItems.Count;
+                    details["session_installs"] = sessionInstalls;
+                    details["session_updates"] = sessionUpdates;
+                    details["session_successes"] = sessionSuccesses;
+                    details["total_managed_items"] = totalManagedItems;
                     details["module_status"] = "error";
-                    details["failed_packages"] = failedPackages.Take(10).ToList();
+                    details["failed_items"] = failedItems.Take(10).ToList();
                     
                     _logger.LogInformation("Generated single ERROR event: {Message}", message);
                 }
-                // PRIORITY 2: WARNING - If there are warnings but no errors
-                else if (warningPackages.Any())
+                // PRIORITY 2: WARNING - If there are item warnings but no errors
+                else if (warningItems.Any())
                 {
                     eventType = "warning";
                     var messageParts = new List<string>();
                     
-                    // Always mention warnings first
-                    messageParts.Add($"{warningPackages.Count} warning{(warningPackages.Count == 1 ? "" : "s")}");
+                    // Always mention item warnings first
+                    messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
                     
-                    // Add installed count if any
-                    if (installedPackages.Any())
-                        messageParts.Add($"{installedPackages.Count} successful install{(installedPackages.Count == 1 ? "" : "s")}");
+                    // Add operational warnings if any
+                    if (operationalWarningEvents.Any())
+                        messageParts.Add($"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    
+                    // Add session activity count if any actual installs/updates occurred
+                    if (sessionActivityCount > 0)
+                        messageParts.Add($"{sessionActivityCount} successful{(sessionActivityCount == 1 ? "" : "s")}");
                     
                     message = string.Join(", ", messageParts);
                     
-                    details["warning_count"] = warningPackages.Count;
-                    details["success_count"] = installedPackages.Count;
+                    details["warning_count"] = warningItems.Count;
+                    details["session_installs"] = sessionInstalls;
+                    details["session_updates"] = sessionUpdates;
+                    details["session_successes"] = sessionSuccesses;
+                    details["total_managed_items"] = totalManagedItems;
                     details["module_status"] = "warning";
-                    details["warning_packages"] = warningPackages.Take(10).ToList();
+                    details["warning_items"] = warningItems.Take(10).ToList();
                     
                     _logger.LogInformation("Generated single WARNING event: {Message}", message);
                 }
-                // PRIORITY 3: SUCCESS - Only if there are actual installed packages
-                else if (installedPackages.Any())
+                // PRIORITY 3: SUCCESS - if there was actual session activity (installs/updates)
+                else if (sessionActivityCount > 0)
                 {
+                    // If there are operational warnings, still report success but include them
                     eventType = "success";
-                    message = $"{installedPackages.Count} successful install{(installedPackages.Count == 1 ? "" : "s")}";
+                    var messageParts = new List<string>();
                     
-                    details["success_count"] = installedPackages.Count;
+                    // Report actual session activity
+                    if (sessionInstalls > 0 && sessionUpdates > 0)
+                        messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}, {sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
+                    else if (sessionInstalls > 0)
+                        messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}");
+                    else if (sessionUpdates > 0)
+                        messageParts.Add($"{sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
+                    
+                    if (operationalWarningEvents.Any())
+                        messageParts.Add($"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    
+                    message = string.Join(", ", messageParts);
+                    
+                    details["session_installs"] = sessionInstalls;
+                    details["session_updates"] = sessionUpdates;
+                    details["session_successes"] = sessionSuccesses;
+                    details["total_managed_items"] = totalManagedItems;
                     details["module_status"] = "success";
-                    details["successful_packages"] = installedPackages.Take(10).ToList();
                     
                     _logger.LogInformation("Generated single SUCCESS event: {Message}", message);
                 }
-                // NO ACTION TAKEN: Don't generate "operational" events if no installs occurred
+                // NO SESSION ACTIVITY but operational warnings exist
+                else if (operationalWarningEvents.Any())
+                {
+                    eventType = "warning";
+                    message = $"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}";
+                    details["total_managed_items"] = totalManagedItems;
+                    details["module_status"] = "warning";
+                    
+                    _logger.LogInformation("Generated single WARNING event (operational only): {Message}", message);
+                }
+                // NO SESSION ACTIVITY AND NO WARNINGS: All items are managed, nothing to do
+                else if (totalManagedItems > 0)
+                {
+                    // Don't generate events for "all managed" state - it's normal operation
+                    // The items are all accounted for in the items.json, no action needed
+                    _logger.LogInformation("All {TotalItems} managed items accounted for, no session activity - no event generated", totalManagedItems);
+                    return Task.FromResult(events); // Return empty list
+                }
+                // NO ITEMS AND NO ACTIVITY
                 else
                 {
                     // Only generate an event if Cimian is not installed (warning case)
@@ -2485,8 +2582,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                     else
                     {
-                        // Cimian is installed but no activity - don't generate any event
-                        _logger.LogInformation("No installs activity detected - no event generated (avoiding noise)");
+                        // Cimian is installed but no items configured - could be initial setup
+                        _logger.LogInformation("No managed items configured - no event generated");
                         return Task.FromResult(events); // Return empty list
                     }
                 }
@@ -2832,16 +2929,20 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         /// <summary>
         /// Determines if a warning message represents an expected/non-actionable condition
+        /// for PACKAGE-LEVEL warnings only. This does NOT apply to operational warnings.
         /// </summary>
         private static bool IsExpectedWarning(string message)
         {
             if (string.IsNullOrEmpty(message)) return false;
             
-            // Filter out architecture mismatch warnings - these are expected on ARM64 systems with x64 packages
+            // Filter out warnings that are expected for package operations
+            // These are normal, expected conditions - not problems
             var expectedWarnings = new[]
             {
+                // Architecture mismatch warnings - expected on ARM64 systems with x64 packages
                 "Architecture mismatch, skipping",
                 "architecture mismatch",
+                // Version downgrade prevention - expected behavior, not a problem
                 "Refusing downgrade; local version newer",
                 "refusing downgrade"
             };
