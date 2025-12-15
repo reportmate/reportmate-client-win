@@ -85,7 +85,7 @@ try {
         }
     }
 
-    $runnerExe = Join-Path $InstallPath "runner.exe"
+    $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
     
     # Create hourly collection task
     Write-Host "Creating hourly collection task..."

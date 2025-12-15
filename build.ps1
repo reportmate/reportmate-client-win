@@ -556,18 +556,18 @@ if (-not $SkipBuild) {
     
     if ($LASTEXITCODE -eq 0) {
         Write-Success "Build completed successfully"
-        $exeSize = (Get-Item "$PublishDir/runner.exe").Length / 1MB
+        $exeSize = (Get-Item "$PublishDir/managedreportsrunner.exe").Length / 1MB
         Write-Info "Executable size: $([math]::Round($exeSize, 2)) MB"
         
         # ─────────────── SIGN THE EXECUTABLE ───────────────
         if ($Sign) {
-            Write-Step "Signing runner.exe..."
+            Write-Step "Signing managedreportsrunner.exe..."
             try {
-                signPackage -FilePath "$PublishDir/runner.exe"
-                Write-Success "Signed runner.exe ✔"
+                signPackage -FilePath "$PublishDir/managedreportsrunner.exe"
+                Write-Success "Signed managedreportsrunner.exe"
             }
             catch {
-                Write-Error "Failed to sign runner.exe: $_"
+                Write-Error "Failed to sign managedreportsrunner.exe: $_"
                 exit 1
             }
         }
@@ -585,8 +585,8 @@ Write-Output ""
 Write-Step "Preparing package payload..."
 
 # Copy executable to payload root (will be installed to Program Files/ReportMate)
-Copy-Item (Join-Path $PublishDir "runner.exe") $ProgramFilesPayloadDir -Force
-Write-Verbose "Copied runner.exe to payload root"
+Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $ProgramFilesPayloadDir -Force
+Write-Verbose "Copied managedreportsrunner.exe to payload root"
 
 # Create version file in payload root
 $versionContent = @"
@@ -824,13 +824,13 @@ if (-not $SkipNUPKG) {
                 }
                 
                 # Clean up executable from payload after successful NUPKG creation
-                $payloadExe = Join-Path $ProgramFilesPayloadDir "runner.exe"
+                $payloadExe = Join-Path $ProgramFilesPayloadDir "managedreportsrunner.exe"
                 if (Test-Path $payloadExe) {
                     try {
                         Remove-Item $payloadExe -Force
-                        Write-Verbose "Cleaned up runner.exe from payload after successful build"
+                        Write-Verbose "Cleaned up managedreportsrunner.exe from payload after successful build"
                     } catch {
-                        Write-Warning "Could not remove runner.exe from payload: $_"
+                        Write-Warning "Could not remove managedreportsrunner.exe from payload: $_"
                     }
                 }
                 
@@ -864,8 +864,8 @@ if (-not $SkipPKG) {
     Write-Verbose "Preparing PKG payload..."
     
     # Copy executable to PKG payload (will be installed to Program Files/ReportMate)
-    Copy-Item (Join-Path $PublishDir "runner.exe") $PkgPayloadDir -Force
-    Write-Verbose "Copied runner.exe to PKG payload"
+    Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $PkgPayloadDir -Force
+    Write-Verbose "Copied managedreportsrunner.exe to PKG payload"
     
     # Copy configuration files to PKG payload
     Copy-Item (Join-Path $SrcDir "appsettings.yaml") $PkgPayloadDir -Force
@@ -1083,8 +1083,8 @@ if (-not $SkipMSI) {
             New-Item -ItemType Directory -Path $MsiStagingDir -Force | Out-Null
             
             # Copy binary files to staging
-            Copy-Item (Join-Path $PublishDir "runner.exe") (Join-Path $MsiStagingDir "runner.exe") -Force
-            Write-Verbose "Copied runner.exe to MSI staging"
+            Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") (Join-Path $MsiStagingDir "managedreportsrunner.exe") -Force
+            Write-Verbose "Copied managedreportsrunner.exe to MSI staging"
             
             # Copy configuration files to staging
             Copy-Item (Join-Path $SrcDir "appsettings.json") (Join-Path $MsiStagingDir "appsettings.json") -Force
@@ -1221,10 +1221,16 @@ REM Copy files
 xcopy /E /Y /Q "Program Files\*" "C:\Program Files\" >nul
 xcopy /E /Y /Q "ProgramData\*" "C:\ProgramData\" >nul
 
-REM Run configuration
+REM Remove old runner.exe if migrating from older version
 if exist "C:\Program Files\ReportMate\runner.exe" (
+    echo Removing old runner.exe binary...
+    del /F /Q "C:\Program Files\ReportMate\runner.exe"
+)
+
+REM Run configuration
+if exist "C:\Program Files\ReportMate\managedreportsrunner.exe" (
     echo Configuring ReportMate...
-    "C:\Program Files\ReportMate\runner.exe" install
+    "C:\Program Files\ReportMate\managedreportsrunner.exe" install
     echo Installation completed successfully
 ) else (
     echo ERROR: Installation failed

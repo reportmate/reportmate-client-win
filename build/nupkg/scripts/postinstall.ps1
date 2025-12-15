@@ -71,6 +71,20 @@ Write-Host "Comprehensive checklist verified - all duties covered!"
 
 $ErrorActionPreference = "Continue"
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# MIGRATION: Remove old runner.exe binary (renamed to managedreportsrunner.exe)
+# ═══════════════════════════════════════════════════════════════════════════════
+$OldBinaryPath = "C:\Program Files\ReportMate\runner.exe"
+if (Test-Path $OldBinaryPath) {
+    Write-Host "Migration: Removing old runner.exe binary..."
+    try {
+        Remove-Item $OldBinaryPath -Force -ErrorAction Stop
+        Write-Host "Old runner.exe binary removed successfully"
+    } catch {
+        Write-Warning "Could not remove old runner.exe: $_"
+    }
+}
+
 function Enable-ReportMateKernelProcessLog {
     param(
         [string[]]$LogNames = @(
@@ -292,7 +306,7 @@ try {
         }
     }
 
-    $runnerExe = Join-Path $InstallPath "runner.exe"
+    $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
     
     # Create hourly collection task
     Write-Host "Creating hourly collection task..."
@@ -431,7 +445,7 @@ if (-not (Test-Path $osqueryPath)) {
 }
 
 # VALIDATION & TESTING
-$TestResult = & "C:\Program Files\ReportMate\runner.exe" info 2>&1
+$TestResult = & "C:\Program Files\ReportMate\managedreportsrunner.exe" info 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Installation test successful"
 } else {
@@ -458,8 +472,18 @@ Write-Host "  REPORTMATE_AUTO_CONFIGURE - Override auto-configuration setting"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
-Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
-Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"
+Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' test"
+Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' run"
+
+
+
+
+
+
+
+
+
+
 
 
 

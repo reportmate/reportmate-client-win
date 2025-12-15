@@ -31,12 +31,22 @@ try {
     Write-Host ".NET runtime not detected (using self-contained executable)"
 }
 
-# Stop any existing ReportMate processes
-$ReportMateProcesses = Get-Process -Name "runner" -ErrorAction SilentlyContinue
+# Stop any existing ReportMate processes (both old runner.exe and new managedreportsrunner.exe)
+$OldProcesses = Get-Process -Name "runner" -ErrorAction SilentlyContinue
+$NewProcesses = Get-Process -Name "managedreportsrunner" -ErrorAction SilentlyContinue
+$ReportMateProcesses = @($OldProcesses) + @($NewProcesses) | Where-Object { $_ }
 if ($ReportMateProcesses) {
     Write-Host "Stopping existing ReportMate processes..."
     $ReportMateProcesses | Stop-Process -Force
     Start-Sleep -Seconds 2
+}
+
+# Migration: Remove old runner.exe binary if it exists (renamed to managedreportsrunner.exe)
+$OldBinaryPath = "C:\Program Files\ReportMate\runner.exe"
+if (Test-Path $OldBinaryPath) {
+    Write-Host "Migration: Removing old runner.exe binary..."
+    Remove-Item $OldBinaryPath -Force -ErrorAction SilentlyContinue
+    Write-Host "Old binary removed successfully"
 }
 
 # Check available disk space

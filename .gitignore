@@ -6,6 +6,7 @@ TestResults/
 
 # Build results
 nupkg/payload/runner.exe
+nupkg/payload/managedreportsrunner.exe
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
@@ -399,6 +400,7 @@ appsettings.Local.json
 # Build artifacts specific to this project 
 # Keep build/ source directory in version control, but exclude generated artifacts
 build/nupkg/payload/Program Files/ReportMate/runner.exe
+build/nupkg/payload/Program Files/ReportMate/managedreportsrunner.exe
 build/nupkg/payload/Program Files/ReportMate/version.txt
 build/nupkg/payload/data/
 build/nupkg/payload/osquery/
@@ -414,6 +416,7 @@ installer/
 
 # Package payload (generated during build - legacy paths)
 nupkg/payload/Program Files/ReportMate/runner.exe
+nupkg/payload/Program Files/ReportMate/managedreportsrunner.exe
 nupkg/payload/Program Files/ReportMate/version.txt
 
 # Runtime generated files
