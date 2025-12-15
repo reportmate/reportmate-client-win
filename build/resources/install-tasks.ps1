@@ -138,6 +138,40 @@ try {
         Write-Warning "Kernel process telemetry log could not be enabled automatically. Usage tracking may be limited."
     }
     
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # ADD REPORTMATE TO SYSTEM PATH
+    # ═══════════════════════════════════════════════════════════════════════════════
+    $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    
+    if ($CurrentPath -notlike "*$InstallPath*") {
+        try {
+            $NewPath = "$CurrentPath;$InstallPath"
+            [Environment]::SetEnvironmentVariable("Path", $NewPath, "Machine")
+            Write-Host "✅ Added ReportMate to system PATH"
+            
+            # Broadcast WM_SETTINGCHANGE so new terminals pick up the PATH change
+            Add-Type -TypeDefinition @"
+                using System;
+                using System.Runtime.InteropServices;
+                public class Win32 {
+                    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+                    public static extern IntPtr SendMessageTimeout(
+                        IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+                        uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+                }
+"@
+            $HWND_BROADCAST = [IntPtr]0xffff
+            $WM_SETTINGCHANGE = 0x1a
+            $result = [UIntPtr]::Zero
+            [Win32]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result) | Out-Null
+            Write-Host "✅ Environment change broadcast sent"
+        } catch {
+            Write-Warning "Failed to add ReportMate to PATH: $_"
+        }
+    } else {
+        Write-Host "ReportMate already in system PATH"
+    }
+    
 } catch {
     Write-Error "Failed to create scheduled tasks: $_"
     exit 1

@@ -794,9 +794,13 @@ if (-not $SkipNUPKG) {
             
             # Use Start-Process to properly handle output and avoid redirection issues
             $envFile = Join-Path $NupkgDir ".env"
+            
+            # Build arguments - only include -env if file exists (it's optional, keys can be set by separate package)
+            $cimipkgArgs = if (Test-Path $envFile) { "-env `"$envFile`" ." } else { "." }
+            
             $startInfo = New-Object System.Diagnostics.ProcessStartInfo
             $startInfo.FileName = $cimipkgPath
-            $startInfo.Arguments = "-env `"$envFile`" ."
+            $startInfo.Arguments = $cimipkgArgs
             $startInfo.WorkingDirectory = $NupkgDir
             $startInfo.UseShellExecute = $false
             $startInfo.CreateNoWindow = $true
@@ -966,7 +970,13 @@ Commit: $env:GITHUB_SHA
             # Build PKG using cimipkg (default format is .pkg, not .nupkg)
             # cimipkg reads version from build-info.yaml, no -v flag needed
             $envFile = Join-Path $PkgDir ".env"
-            $pkgArgs = @("-verbose", "-env", $envFile, ".")  # verbose flag, env file, and current directory
+            
+            # Build arguments - only include -env if file exists (it's optional, keys can be set by separate package)
+            $pkgArgs = @("-verbose")
+            if (Test-Path $envFile) {
+                $pkgArgs += @("-env", $envFile)
+            }
+            $pkgArgs += "."
             
             Write-Verbose "Running cimipkg with args: $($pkgArgs -join ' ')"
             
