@@ -115,6 +115,7 @@ namespace ReportMate.WindowsClient.Models.Modules
     {
         public string SessionId { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
+        public string Publisher { get; set; } = string.Empty;
         public string Path { get; set; } = string.Empty;
         public int ProcessId { get; set; }
         public string User { get; set; } = string.Empty;
