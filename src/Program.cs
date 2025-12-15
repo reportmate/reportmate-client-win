@@ -474,6 +474,9 @@ public class Program
         services.AddScoped<ModularOsQueryService>();
         services.AddScoped<IModularDataCollectionService, ModularDataCollectionService>();
         
+        // Register application usage tracking service
+        services.AddScoped<ApplicationUsageService>();
+        
         // Register module processors
         services.AddScoped<IModuleProcessorFactory, ModuleProcessorFactory>();
         services.AddScoped<ApplicationsModuleProcessor>();

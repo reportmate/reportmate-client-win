@@ -6,25 +6,31 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
+using ReportMate.WindowsClient.Services;
 using ReportMate.WindowsClient.Services.Modules;
 
 namespace ReportMate.WindowsClient.Services.Modules
 {
     /// <summary>
     /// Applications module processor - Software inventory and management
+    /// Includes usage tracking via Windows Kernel Process telemetry
     /// </summary>
     public class ApplicationsModuleProcessor : BaseModuleProcessor<ApplicationsData>
     {
         private readonly ILogger<ApplicationsModuleProcessor> _logger;
+        private readonly ApplicationUsageService _usageService;
 
         public override string ModuleId => "applications";
 
-        public ApplicationsModuleProcessor(ILogger<ApplicationsModuleProcessor> logger)
+        public ApplicationsModuleProcessor(
+            ILogger<ApplicationsModuleProcessor> logger,
+            ApplicationUsageService usageService)
         {
             _logger = logger;
+            _usageService = usageService;
         }
 
-        public override Task<ApplicationsData> ProcessModuleAsync(
+        public override async Task<ApplicationsData> ProcessModuleAsync(
             Dictionary<string, List<Dictionary<string, object>>> osqueryResults, 
             string deviceId)
         {
@@ -142,7 +148,33 @@ namespace ReportMate.WindowsClient.Services.Modules
             data.TotalApplications = data.InstalledApplications.Count;
             data.LastInventoryUpdate = DateTime.UtcNow;
 
-            return Task.FromResult(data);
+            // Collect application usage data from kernel process telemetry
+            // This runs every 4 hours (matching the applications module schedule)
+            _logger.LogDebug("Collecting application usage data from kernel process telemetry...");
+            try
+            {
+                data.Usage = await _usageService.CollectUsageDataAsync(data.InstalledApplications, lookbackHours: 4);
+                
+                if (data.Usage.IsCaptureEnabled)
+                {
+                    _logger.LogInformation(
+                        "Usage tracking complete: {SessionCount} sessions, {ActiveCount} active, {AppsWithUsage} apps with usage data",
+                        data.Usage.TotalLaunches,
+                        data.Usage.ActiveSessions.Count,
+                        data.ApplicationsWithUsage);
+                }
+                else
+                {
+                    _logger.LogWarning("Usage tracking unavailable: {Status}", data.Usage.Status);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to collect application usage data");
+                data.Usage = ApplicationUsageSnapshot.CreateUnavailable($"Collection error: {ex.Message}");
+            }
+
+            return data;
         }
 
         public override async Task<bool> ValidateModuleDataAsync(ApplicationsData data)
