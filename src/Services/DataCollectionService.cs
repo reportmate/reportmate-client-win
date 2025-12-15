@@ -313,7 +313,7 @@ public class DataCollectionService : IDataCollectionService
             ClientVersion = modularPayload.Metadata.ClientVersion,
             CollectionType = "modular",
             ManagedInstallsSystem = "Cimian",
-            Source = "runner.exe"
+            Source = "managedreportsrunner.exe"
         };
 
         // Add modular data to OsQuery section
