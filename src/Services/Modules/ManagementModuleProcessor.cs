@@ -961,12 +961,17 @@ $providers | ConvertTo-Json -Compress
         }
 
         /// <summary>
-        /// Determines enrollment type - simplified to Entra Joined (modern) or Domain Joined (legacy)
+        /// Determines enrollment type based on device join state.
+        /// Hybrid Entra Join = both Entra AND Domain joined (must check first!)
+        /// Entra Joined = cloud-only modern management
+        /// Domain Joined = legacy on-prem only
         /// </summary>
         private string DetermineEnrollmentType(DeviceState deviceState)
         {
-            // Simple logic: Entra Joined = modern cloud, Domain Joined = legacy on-prem
-            if (deviceState.EntraJoined)
+            // IMPORTANT: Check Hybrid first - these devices have BOTH EntraJoined AND DomainJoined = true
+            if (deviceState.EntraJoined && deviceState.DomainJoined)
+                return "Hybrid Entra Join";
+            else if (deviceState.EntraJoined)
                 return "Entra Joined";
             else if (deviceState.DomainJoined)
                 return "Domain Joined";
