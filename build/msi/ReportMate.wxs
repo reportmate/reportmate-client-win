@@ -52,7 +52,7 @@
       <!-- Main Executable -->
       <Component Id="ReportMateExe" Guid="*">
         <File Id="ReportMateExe" 
-              Source="$(var.SourceDir)\runner.exe" 
+              Source="$(var.SourceDir)\managedreportsrunner.exe" 
               KeyPath="yes" />
       </Component>
       

@@ -201,7 +201,7 @@ jobs:
           dist/*.nupkg
           dist/*.zip
           dist/*.msi
-          .publish/runner.exe
+          .publish/managedreportsrunner.exe
         retention-days: 30
         
     - name: List build artifacts for verification
@@ -310,7 +310,7 @@ jobs:
           
           # Check for required files
           $requiredFiles = @(
-            "payload/Program Files/ReportMate/runner.exe",
+            "payload/Program Files/ReportMate/managedreportsrunner.exe",
             "payload/ProgramData/ManagedReports/appsettings.yaml",
             "payload/ProgramData/ManagedReports/queries.json"
           )
