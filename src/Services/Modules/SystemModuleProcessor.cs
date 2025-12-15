@@ -817,7 +817,7 @@ if ($lic) {
 
         /// <summary>
         /// Clean up duplicated directory paths in scheduled task action fields (workaround for osquery bug)
-        /// Example: "C:\Program Files\ReportMate C:\Program Files\ReportMate\runner.exe" -> "C:\Program Files\ReportMate\runner.exe"
+        /// Example: "C:\Program Files\ReportMate C:\Program Files\ReportMate\managedreportsrunner.exe" -> "C:\Program Files\ReportMate\managedreportsrunner.exe"
         /// </summary>
         private static string CleanDuplicatedPaths(string action)
         {

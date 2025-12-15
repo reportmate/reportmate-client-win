@@ -7,7 +7,7 @@
     <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <PublishTrimmed>true</PublishTrimmed>
-    <AssemblyName>runner</AssemblyName>
+    <AssemblyName>managedreportsrunner</AssemblyName>
     <AssemblyTitle>ReportMate</AssemblyTitle>
     <AssemblyDescription>Windows client for ReportMate device management and security monitoring</AssemblyDescription>
     <AssemblyCompany>ReportMate</AssemblyCompany>
