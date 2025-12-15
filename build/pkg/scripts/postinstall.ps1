@@ -171,6 +171,44 @@ try {
     Write-Warning "Failed to set permissions on data directory: $_"
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADD REPORTMATE TO SYSTEM PATH
+# ═══════════════════════════════════════════════════════════════════════════════
+$ReportMatePath = "C:\Program Files\ReportMate"
+$CurrentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+
+if ($CurrentPath -notlike "*$ReportMatePath*") {
+    try {
+        $NewPath = "$CurrentPath;$ReportMatePath"
+        [Environment]::SetEnvironmentVariable("Path", $NewPath, "Machine")
+        Write-Host "Added ReportMate to system PATH"
+        
+        # Broadcast WM_SETTINGCHANGE so new terminals pick up the PATH change
+        Add-Type -TypeDefinition @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class Win32 {
+                [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+                public static extern IntPtr SendMessageTimeout(
+                    IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+                    uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+            }
+"@
+        $HWND_BROADCAST = [IntPtr]0xffff
+        $WM_SETTINGCHANGE = 0x1a
+        $result = [UIntPtr]::Zero
+        [Win32]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result) | Out-Null
+        Write-Host "Environment change broadcast sent"
+        
+        # Also update current session PATH
+        $env:Path = "$env:Path;$ReportMatePath"
+    } catch {
+        Write-Warning "Failed to add ReportMate to PATH: $_"
+    }
+} else {
+    Write-Host "ReportMate already in system PATH"
+}
+
 # Copy configuration files to ProgramData (they should be in payload root since PKG uses install_location)
 $configFiles = @(
     @{ Source = "C:\Program Files\ReportMate\appsettings.yaml"; Destination = "C:\ProgramData\ManagedReports\appsettings.yaml" },
@@ -237,7 +275,7 @@ try {
         }
     }
 
-    $runnerExe = Join-Path $InstallPath "runner.exe"
+    $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
     
     # Create hourly collection task
     Write-Host "Creating hourly collection task..."
@@ -373,7 +411,7 @@ if (-not (Test-Path $osqueryPath)) {
 }
 
 # VALIDATION & TESTING
-$TestResult = & "C:\Program Files\ReportMate\runner.exe" info 2>&1
+$TestResult = & "C:\Program Files\ReportMate\managedreportsrunner.exe" info 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Installation test successful"
 } else {
@@ -400,5 +438,5 @@ Write-Host "  REPORTMATE_AUTO_CONFIGURE - Override auto-configuration setting"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
-Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\runner.exe' test"
-Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\runner.exe' run"
+Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' test"
+Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' run"
