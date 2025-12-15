@@ -49,7 +49,7 @@
 #   - Continue installation even if osquery is missing (with warnings)
 #
 # VALIDATION & TESTING:
-#   - Test installation by running 'runner.exe info'
+#   - Test installation by running 'managedreportsrunner.exe info'
 #   - Verify exit codes and handle test failures
 #   - Provide comprehensive installation summary
 #   - Display configuration status and registry locations
@@ -241,6 +241,44 @@ try {
     Write-Host "Set permissions on data directory"
 } catch {
     Write-Warning "Failed to set permissions on data directory: $_"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ADD REPORTMATE TO SYSTEM PATH
+# ═══════════════════════════════════════════════════════════════════════════════
+$ReportMatePath = "C:\Program Files\ReportMate"
+$CurrentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+
+if ($CurrentPath -notlike "*$ReportMatePath*") {
+    try {
+        $NewPath = "$CurrentPath;$ReportMatePath"
+        [Environment]::SetEnvironmentVariable("Path", $NewPath, "Machine")
+        Write-Host "Added ReportMate to system PATH"
+        
+        # Broadcast WM_SETTINGCHANGE so new terminals pick up the PATH change
+        Add-Type -TypeDefinition @"
+            using System;
+            using System.Runtime.InteropServices;
+            public class Win32 {
+                [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+                public static extern IntPtr SendMessageTimeout(
+                    IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam,
+                    uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+            }
+"@
+        $HWND_BROADCAST = [IntPtr]0xffff
+        $WM_SETTINGCHANGE = 0x1a
+        $result = [UIntPtr]::Zero
+        [Win32]::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result) | Out-Null
+        Write-Host "Environment change broadcast sent"
+        
+        # Also update current session PATH
+        $env:Path = "$env:Path;$ReportMatePath"
+    } catch {
+        Write-Warning "Failed to add ReportMate to PATH: $_"
+    }
+} else {
+    Write-Host "ReportMate already in system PATH"
 }
 
 # Copy ProgramData files from payload to correct location
@@ -474,63 +512,6 @@ Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' run"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
