@@ -547,6 +547,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// <summary>
         /// Gets Windows activation status via PowerShell/CIM query
         /// Uses PowerShell Get-CimInstance instead of direct WMI for better .NET 8 compatibility
+        /// Also detects firmware-embedded (OA3/UEFI) license capability for Entra migration planning
         /// </summary>
         private ActivationInfo GetWindowsActivationStatus()
         {
@@ -554,7 +555,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 IsActivated = false,
                 Status = "Unknown",
-                StatusCode = -1
+                StatusCode = -1,
+                HasFirmwareLicense = false,
+                LicenseSource = "Unknown"
             };
 
             string? tempScript = null;
@@ -563,13 +566,24 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // PowerShell script to query Windows activation via CIM with optimized WQL query
                 // ApplicationId "55c92734-d682-4d71-983e-d6ec3f16059f" is the Windows OS product
                 // Using WQL query directly is ~100x faster than filtering in PowerShell (0.2s vs 12s)
+                // Also queries SoftwareLicensingService for OA3xOriginalProductKey (firmware-embedded license)
                 // Write to temp file to avoid command-line escaping issues
                 var scriptContent = @"
-$lic = Get-CimInstance -Query ""SELECT LicenseStatus, Name, PartialProductKey FROM SoftwareLicensingProduct WHERE ApplicationId='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL"" -ErrorAction SilentlyContinue | Select-Object -First 1
+$lic = Get-CimInstance -Query ""SELECT LicenseStatus, Name, PartialProductKey, Description FROM SoftwareLicensingProduct WHERE ApplicationId='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL"" -ErrorAction SilentlyContinue | Select-Object -First 1
+$svc = Get-CimInstance -ClassName SoftwareLicensingService -ErrorAction SilentlyContinue
+$hasFirmware = if ($svc.OA3xOriginalProductKey) { 'true' } else { 'false' }
+$licSource = 'Unknown'
+if ($lic.Description) {
+    if ($lic.Description -match 'OEM|DM channel|UEFI|firmware') { $licSource = 'Firmware' }
+    elseif ($lic.Description -match 'KMS') { $licSource = 'KMS' }
+    elseif ($lic.Description -match 'MAK|Multiple Activation') { $licSource = 'MAK' }
+    elseif ($lic.Description -match 'RETAIL') { $licSource = 'Retail' }
+    elseif ($lic.Description -match 'VOLUME') { $licSource = 'Volume' }
+}
 if ($lic) {
-    Write-Output ""$($lic.LicenseStatus)|$($lic.Name)|$($lic.PartialProductKey)""
+    Write-Output ""$($lic.LicenseStatus)|$($lic.Name)|$($lic.PartialProductKey)|$hasFirmware|$licSource""
 } else {
-    Write-Output ""-1|Unknown|""
+    Write-Output ""-1|Unknown||$hasFirmware|$licSource""
 }
 ";
                 tempScript = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"rm_activation_{Guid.NewGuid():N}.ps1");
@@ -600,7 +614,7 @@ if ($lic) {
                     _logger.LogDebug("PowerShell activation query had warnings: {Error}", error);
                 }
 
-                // Parse output: "LicenseStatus|Name|PartialProductKey"
+                // Parse output: "LicenseStatus|Name|PartialProductKey|HasFirmware|LicenseSource"
                 var parts = output.Split('|');
                 if (parts.Length >= 3)
                 {
@@ -609,6 +623,18 @@ if ($lic) {
                         activation.StatusCode = licenseStatus;
                         activation.LicenseType = parts[1];
                         activation.PartialProductKey = parts[2];
+                        
+                        // Parse firmware license detection (parts[3])
+                        if (parts.Length >= 4)
+                        {
+                            activation.HasFirmwareLicense = string.Equals(parts[3], "true", StringComparison.OrdinalIgnoreCase);
+                        }
+                        
+                        // Parse license source (parts[4])
+                        if (parts.Length >= 5 && !string.IsNullOrEmpty(parts[4]))
+                        {
+                            activation.LicenseSource = parts[4];
+                        }
 
                         // Map license status codes to readable strings
                         activation.Status = licenseStatus switch
@@ -626,8 +652,8 @@ if ($lic) {
                         // Licensed (1) means activated
                         activation.IsActivated = licenseStatus == 1;
                         
-                        _logger.LogDebug("Windows activation found: Status={Status}, Key=***{PartialKey}, Type={LicenseType}",
-                            activation.Status, activation.PartialProductKey, activation.LicenseType);
+                        _logger.LogDebug("Windows activation found: Status={Status}, Key=***{PartialKey}, Type={LicenseType}, FirmwareLicense={HasFirmware}, Source={Source}",
+                            activation.Status, activation.PartialProductKey, activation.LicenseType, activation.HasFirmwareLicense, activation.LicenseSource);
                     }
                 }
             }
