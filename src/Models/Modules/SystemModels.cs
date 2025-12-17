@@ -98,6 +98,19 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// License type/edition name from SoftwareLicensingProduct
         /// </summary>
         public string? LicenseType { get; set; }
+        
+        /// <summary>
+        /// Whether the device has a firmware-embedded (UEFI/BIOS OA3) Windows license key.
+        /// Devices with firmware licenses retain activation when migrating from AD to Entra ID.
+        /// Devices without firmware licenses may lose activation when unbound from on-prem AD/KMS.
+        /// </summary>
+        public bool HasFirmwareLicense { get; set; }
+        
+        /// <summary>
+        /// License source: Firmware (OA3/UEFI embedded), KMS (Key Management Service), 
+        /// MAK (Multiple Activation Key), Retail, Volume, or Unknown
+        /// </summary>
+        public string? LicenseSource { get; set; }
     }
 
     public class SystemUpdate
