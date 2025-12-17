@@ -121,8 +121,8 @@ Avoid:
 
 ```powershell
 # Client will include passphrase from configuration
-sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --collect-only"
-sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --transmit-only"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsrunner.exe' -vv --collect-only"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsrunner.exe' -vv --transmit-only"
 ```
 
 ### Verify in Logs
