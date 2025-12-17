@@ -146,7 +146,7 @@ dist/
 └── ReportMate-{version}.zip     # ZIP archive
 
 .publish/
-└── managedreportsmanagedreportsrunner.exe                   # Self-contained executable
+└── managedreportsrunner.exe                   # Self-contained executable
 ```
 
 ## Package Contents
@@ -155,7 +155,7 @@ All packages deploy the same file structure:
 
 ```text
 C:\Program Files\ReportMate\
-├── managedreportsmanagedreportsrunner.exe                   # Main executable
+├── managedreportsrunner.exe                   # Main executable
 └── version.txt                  # Version information
 
 C:\ProgramData\ManagedReports\
@@ -212,7 +212,7 @@ winget install Microsoft.PowerShell
 
 ```powershell
 # Test executable
-& "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" --help
+& "C:\Program Files\ReportMate\managedreportsrunner.exe" --help
 
 # Check configuration deployment
 Test-Path "C:\ProgramData\ManagedReports\appsettings.yaml"
