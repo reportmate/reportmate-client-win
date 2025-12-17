@@ -91,7 +91,7 @@ clients/windows/
 │   ├── ReportMate-2025.08.03.msi              # MSI installer
 │   ├── ReportMate-2025.08.03.nupkg            # Chocolatey package
 │   ├── ReportMate-2025.08.03.zip              # ZIP archive
-│   └── runner.exe                              # Standalone executable
+│   └── managedreportsmanagedreportsrunner.exe                              # Standalone executable
 └── .publish/                                   # Temporary build artifacts
 ```
 
@@ -102,7 +102,7 @@ The MSI installer deploys ReportMate to the following Windows system locations:
 ### Program Files Installation Tree
 ```
 C:\Program Files\ReportMate\
-├── runner.exe                                  # Main executable (code-signed)
+├── managedreportsmanagedreportsrunner.exe                                  # Main executable (code-signed)
 ├── appsettings.json                            # Application configuration
 ├── appsettings.yaml                            # YAML configuration template
 ├── module-schedules.json                       # Task scheduling configuration

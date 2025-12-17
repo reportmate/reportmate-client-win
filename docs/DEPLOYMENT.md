@@ -4,7 +4,7 @@ This guide provides instructions for deploying the ReportMate Windows client acr
 
 ## Overview
 
-The ReportMate Windows client (`runner.exe`) collects system information using osquery and transmits it to the ReportMate API. The client is a self-contained .NET 8 executable that can be deployed via:
+The ReportMate Windows client (`managedreportsmanagedreportsrunner.exe`) collects system information using osquery and transmits it to the ReportMate API. The client is a self-contained .NET 8 executable that can be deployed via:
 
 - Chocolatey package (`.nupkg`) - Recommended for Cimian environments
 - MSI installer - Recommended for Group Policy/Intune deployment
@@ -96,7 +96,7 @@ New-Item -ItemType Directory -Path "C:\ProgramData\ManagedReports\cache" -Force
 Copy-Item "appsettings.yaml" "C:\ProgramData\ManagedReports\"
 
 # Create scheduled task
-$action = New-ScheduledTaskAction -Execute "C:\Program Files\ReportMate\runner.exe"
+$action = New-ScheduledTaskAction -Execute "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe"
 $trigger = New-ScheduledTaskTrigger -Daily -At "8:00AM"
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
 Register-ScheduledTask -TaskName "ReportMate Data Collection" -Action $action -Trigger $trigger -Principal $principal
@@ -169,13 +169,13 @@ After deployment, verify the installation:
 
 ```powershell
 # Check installation
-Test-Path "C:\Program Files\ReportMate\runner.exe"
+Test-Path "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe"
 
 # View version
-& "C:\Program Files\ReportMate\runner.exe" version
+& "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" version
 
 # Test collection (run as admin)
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' -vv --collect-only"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --collect-only"
 
 # Check scheduled task
 Get-ScheduledTask -TaskName "ReportMate Data Collection" | Get-ScheduledTaskInfo
