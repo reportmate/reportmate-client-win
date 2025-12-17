@@ -60,30 +60,30 @@ ReportMate:
 Or use the install command:
 
 ```powershell
-& 'C:\Program Files\ReportMate\runner.exe' install --api-url "https://reportmate.ecuad.ca"
+& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' install --api-url "https://reportmate.ecuad.ca"
 ```
 
 ### 4. Test the Installation
 
 ```powershell
 # View system information
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' info"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' info"
 
 # Collect data (without transmitting)
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' -vv --collect-only"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --collect-only"
 
 # Transmit cached data
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' -vv --transmit-only"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --transmit-only"
 ```
 
 ## Command Reference
 
-The `runner.exe` binary supports the following commands and options:
+The `managedreportsmanagedreportsrunner.exe` binary supports the following commands and options:
 
 ### Root Command (Default: Run Collection)
 
 ```powershell
-runner.exe [options]
+managedreportsmanagedreportsrunner.exe [options]
 ```
 
 **Options:**
@@ -100,19 +100,19 @@ runner.exe [options]
 
 ```powershell
 # Run data collection (same as default)
-runner.exe run [options]
+managedreportsmanagedreportsrunner.exe run [options]
 
 # Transmit cached data only
-runner.exe transmit
+managedreportsmanagedreportsrunner.exe transmit
 
 # Display system and configuration information
-runner.exe info
+managedreportsmanagedreportsrunner.exe info
 
 # Install and configure the client
-runner.exe install --api-url "https://reportmate.ecuad.ca"
+managedreportsmanagedreportsrunner.exe install --api-url "https://reportmate.ecuad.ca"
 
 # Display version information
-runner.exe version
+managedreportsmanagedreportsrunner.exe version
 ```
 
 ### Module Testing
@@ -121,13 +121,13 @@ Test individual modules during development:
 
 ```powershell
 # Test hardware module
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' -vv --run-module hardware"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --run-module hardware"
 
 # Test installs module
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' -vv --run-module installs"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --run-module installs"
 
 # Test multiple modules
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' -vv --run-modules hardware,security,network"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --run-modules hardware,security,network"
 ```
 
 ## Available Modules
@@ -155,7 +155,7 @@ The client collects data from these modules:
 
 ```
 C:\Program Files\ReportMate\
-  runner.exe         # Main executable
+  managedreportsmanagedreportsrunner.exe         # Main executable
   version.txt        # Build information
 ```
 
@@ -228,7 +228,7 @@ The client will continue to work without osquery but with reduced data collectio
 The client requires administrator privileges. Run PowerShell as Administrator or use `sudo`:
 
 ```powershell
-sudo pwsh -c "& 'C:\Program Files\ReportMate\runner.exe' -vv --collect-only"
+sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe' -vv --collect-only"
 ```
 
 ### Network Connectivity

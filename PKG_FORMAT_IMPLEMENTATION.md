@@ -35,7 +35,7 @@ Updated `build.ps1` with:
 The PKG includes:
 
 **Core Files:**
-- `runner.exe` (signed, ~23MB)
+- `managedreportsmanagedreportsrunner.exe` (signed, ~23MB)
 - `version.txt` with build metadata
 - Configuration files (`appsettings.yaml`, etc.)
 

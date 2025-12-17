@@ -53,7 +53,7 @@ reportmate-client-win/
 │   │   │   ├── Cimian/
 │   │   │   │   └── postflight.ps1     # Cimian integration
 │   │   │   └── ReportMate/
-│   │   │       ├── runner.exe         # Main executable
+│   │   │       ├── managedreportsmanagedreportsrunner.exe         # Main executable
 │   │   │       └── version.txt        # Build info
 │   │   └── ProgramData/
 │   │       └── ManagedReports/
@@ -72,7 +72,7 @@ After deployment, files are organized following Windows conventions:
 
 ### Binaries (`C:\Program Files\ReportMate\`)
 
-- `runner.exe` - Main ReportMate executable
+- `managedreportsmanagedreportsrunner.exe` - Main ReportMate executable
 - `version.txt` - Build and version information
 
 ### Working Data (`C:\ProgramData\ManagedReports\`)
@@ -114,7 +114,7 @@ After deployment, files are organized following Windows conventions:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Cimian Integration                           │
 ├─────────────────────────────────────────────────────────────────┤
-│  managedsoftwareupdate.exe → postflight.ps1 → runner.exe       │
+│  managedsoftwareupdate.exe → postflight.ps1 → managedreportsmanagedreportsrunner.exe       │
 │                                                                 │
 │  Simple postflight execution - no GUI status integration       │
 └─────────────────────────────────────────────────────────────────┘
@@ -207,9 +207,9 @@ All configuration files are stored in `ProgramData` (not `Program Files`) to ens
 **Validation Steps:**
 
 1. Verify registry values are created correctly
-2. Test API connectivity: `runner.exe test`
+2. Test API connectivity: `managedreportsmanagedreportsrunner.exe test`
 3. Check Windows Event Log for ReportMate entries
-4. Review configuration hierarchy: `runner.exe info`
+4. Review configuration hierarchy: `managedreportsmanagedreportsrunner.exe info`
 
 ## Building and Deployment
 
@@ -257,8 +257,8 @@ choco install reportmate-windows-client.nupkg
 
 ```powershell
 # Manual installation and setup
-.\runner.exe install --api-url "https://api.reportmate.com"
-.\runner.exe run
+.\managedreportsmanagedreportsrunner.exe install --api-url "https://api.reportmate.com"
+.\managedreportsmanagedreportsrunner.exe run
 ```
 
 ## Key Features
@@ -293,16 +293,16 @@ choco install reportmate-windows-client.nupkg
 
 ```powershell
 # Run data collection (default action)
-runner.exe run [--force] [--device-id ID] [--api-url URL]
+managedreportsmanagedreportsrunner.exe run [--force] [--device-id ID] [--api-url URL]
 
 # Test configuration and connectivity  
-runner.exe test [--verbose]
+managedreportsmanagedreportsrunner.exe test [--verbose]
 
 # Display system information
-runner.exe info
+managedreportsmanagedreportsrunner.exe info
 
 # Install and configure
-runner.exe install --api-url URL [--device-id ID] [--api-key KEY]
+managedreportsmanagedreportsrunner.exe install --api-url URL [--device-id ID] [--api-key KEY]
 ```
 
 ## Requirements
@@ -329,20 +329,20 @@ The included `postflight.ps1` script automatically executes ReportMate after Cim
 
 ```powershell
 # Located at: C:\Program Files\Cimian\postflight.ps1
-& "C:\Program Files\ReportMate\runner.exe" run --force
+& "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" run --force
 ```
 
 ### Deploy via startup script or scheduled task
 
 ```powershell
-schtasks /create /tn "ReportMate Data Collection" /tr "C:\Program Files\ReportMate\runner.exe run" /sc daily /st 09:00
+schtasks /create /tn "ReportMate Data Collection" /tr "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe run" /sc daily /st 09:00
 ```
 
 ### Manual Integration
 
 ```powershell
 # Run from any automation system
-C:\Program Files\ReportMate\runner.exe run
+C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe run
 ```
 
 The `nupkg/` directory serves as the canonical package structure that all build processes populate and reference.
@@ -353,7 +353,7 @@ The `nupkg/` directory serves as the canonical package structure that all build 
 
 ```pwsh
 C:\Program Files\ReportMate\
-├── runner.exe                    # Main ReportMate executable
+├── managedreportsmanagedreportsrunner.exe                    # Main ReportMate executable
 ├── appsettings.yaml              # Default configuration template
 ├── osquery-queries.json          # osquery query definitions
 └── version.txt                   # Version information
@@ -417,7 +417,7 @@ All packages deploy to the same standardized locations:
 
 ```
 C:\Program Files\ReportMate\          # Binaries and executable files
-├── runner.exe                       # Main ReportMate executable
+├── managedreportsmanagedreportsrunner.exe                       # Main ReportMate executable
 ├── appsettings.yaml                  # Template configuration
 └── version.txt                      # Build version information
 
@@ -472,7 +472,7 @@ cd reportmate-client-win
 ```
 
 This creates:
-- Self-contained executable at `build/publish/runner.exe`
+- Self-contained executable at `build/publish/managedreportsmanagedreportsrunner.exe`
 - Properly structured nupkg payload at `nupkg/payload/`
 - ZIP deployment package at `build/output/`
 
@@ -583,7 +583,7 @@ Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https:
 @echo off
 REM MDM configuration or SCCM deployment
 msiexec /i "ReportMate-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"
-"C:\Program Files\ReportMate\runner.exe" install --api-url "https://your-api.azurewebsites.net"
+"C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" install --api-url "https://your-api.azurewebsites.net"
 ```
 
 #### 3. PowerShell DSC
@@ -779,10 +779,10 @@ Write-Host "Configuration will take effect on the next ReportMate run."
 Get-ItemProperty -Path "HKLM:\SOFTWARE\Config\ReportMate" -ErrorAction SilentlyContinue
 
 # Test ReportMate configuration
-& "C:\Program Files\ReportMate\runner.exe" test --verbose
+& "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" test --verbose
 
 # View current configuration
-& "C:\Program Files\ReportMate\runner.exe" info
+& "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" info
 ```
 
 **Monitor Configuration Application:**
@@ -802,9 +802,9 @@ Get-WinEvent -LogName Application -Source "ReportMate" -MaxEvents 10
 **Validation Steps:**
 
 1. Verify registry values are created correctly
-2. Test API connectivity: `runner.exe test`
+2. Test API connectivity: `managedreportsmanagedreportsrunner.exe test`
 3. Check Windows Event Log for ReportMate entries
-4. Review configuration hierarchy: `runner.exe info`
+4. Review configuration hierarchy: `managedreportsmanagedreportsrunner.exe info`
 
 #### Security Considerations
 
@@ -821,7 +821,7 @@ Get-WinEvent -LogName Application -Source "ReportMate" -MaxEvents 10
 1. **"API URL not configured"**
    ```pwsh
    # Set the API URL
-   & "C:\Program Files\ReportMate\runner.exe" install --api-url "https://your-api.azurewebsites.net"
+   & "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" install --api-url "https://your-api.azurewebsites.net"
    ```
 
 2. **"osquery not found"**
@@ -836,13 +836,13 @@ Get-WinEvent -LogName Application -Source "ReportMate" -MaxEvents 10
    Test-NetConnection -ComputerName "your-reportmate-api.azurewebsites.net" -Port 443
    
    # Test with verbose logging
-   & "C:\Program Files\ReportMate\runner.exe" test --verbose
+   & "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" test --verbose
    ```
 
 4. **"Access denied" errors**
    ```pwsh
    # Run as administrator
-   Start-Process -FilePath "C:\Program Files\ReportMate\runner.exe" -Verb RunAs -ArgumentList "run", "--force"
+   Start-Process -FilePath "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" -Verb RunAs -ArgumentList "run", "--force"
    ```
 
 ### Debug Mode
@@ -850,7 +850,7 @@ Get-WinEvent -LogName Application -Source "ReportMate" -MaxEvents 10
 Enable detailed logging:
 ```pwsh
 Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "LogLevel" -Value "DEBUG"
-& "C:\Program Files\ReportMate\runner.exe" --debug
+& "C:\Program Files\ReportMate\managedreportsmanagedreportsrunner.exe" --debug
 ```
 
 ## Building from Source
@@ -909,7 +909,7 @@ reportmate-client-win/
 │   │   │   ├── Cimian/
 │   │   │   │   └── postflight.ps1    # Cimian postflight integration
 │   │   │   └── ReportMate/
-│   │   │       ├── runner.exe         # Main executable (populated by build)
+│   │   │       ├── managedreportsmanagedreportsrunner.exe         # Main executable (populated by build)
 │   │   │       ├── appsettings.yaml   # Template configuration
 │   │   │       └── version.txt        # Version information
 │   │   └── ProgramData/
@@ -981,6 +981,6 @@ This structure ensures ReportMate integrates cleanly with enterprise management 
 If you encounter issues:
 
 1. **Check logs** first - they contain detailed error information
-2. **Verify configuration** with `runner.exe info`
-3. **Test connectivity** with `runner.exe test --verbose`
+2. **Verify configuration** with `managedreportsmanagedreportsrunner.exe info`
+3. **Test connectivity** with `managedreportsmanagedreportsrunner.exe test --verbose`
 4. **Review the implementation documentation** for advanced scenarios
