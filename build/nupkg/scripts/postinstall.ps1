@@ -72,6 +72,27 @@ Write-Host "Comprehensive checklist verified - all duties covered!"
 $ErrorActionPreference = "Continue"
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ADD TO SYSTEM PATH: Make managedreportsrunner.exe accessible from anywhere
+# ═══════════════════════════════════════════════════════════════════════════════
+$InstallDir = "C:\Program Files\ReportMate"
+Write-Host "Adding ReportMate to system PATH..."
+
+try {
+    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
+    if ($currentPath -notlike "*$InstallDir*") {
+        $newPath = $currentPath.TrimEnd(';') + ";$InstallDir"
+        [Environment]::SetEnvironmentVariable("PATH", $newPath, "Machine")
+        Write-Host "Added '$InstallDir' to system PATH"
+        Write-Host "  NOTE: New terminal sessions will have access to managedreportsrunner.exe"
+    } else {
+        Write-Host "ReportMate already in system PATH"
+    }
+} catch {
+    Write-Warning "Could not add to PATH: $_"
+    Write-Host "  You can manually add '$InstallDir' to your system PATH"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MIGRATION: Remove old runner.exe binary (renamed to managedreportsrunner.exe)
 # ═══════════════════════════════════════════════════════════════════════════════
 $OldBinaryPath = "C:\Program Files\ReportMate\runner.exe"
@@ -244,12 +265,10 @@ try {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ADD REPORTMATE TO SYSTEM PATH
+# ADD REPORTMATE TO SYSTEM PATH (handled at top of script - this is legacy/duplicate)
 # ═══════════════════════════════════════════════════════════════════════════════
-$ReportMatePath = "C:\Program Files\ReportMate"
-$CurrentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-
-if ($CurrentPath -notlike "*$ReportMatePath*") {
+# PATH addition already handled above - skip duplicate section
+if ($false) {  # Disabled - duplicate of earlier PATH addition
     try {
         $NewPath = "$CurrentPath;$ReportMatePath"
         [Environment]::SetEnvironmentVariable("Path", $NewPath, "Machine")
@@ -512,6 +531,15 @@ Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' run"
+
+
+
+
+
+
+
+
+
 
 
 

@@ -56,6 +56,14 @@
               KeyPath="yes" />
       </Component>
       
+      <!-- Add to System PATH (matches proven Cimian WiX pattern) -->
+      <!-- Registry values track install location; Environment adds to PATH -->
+      <Component Id="PathEnvironment" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+        <RegistryValue Root="HKLM" Key="Software\ReportMate" Name="InstallPath" Value="[INSTALLFOLDER]" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\ReportMate" Name="Version" Value="$(var.ProductVersion)" Type="string" />
+        <Environment Id="UpdatePath" Name="PATH" Value="[INSTALLFOLDER]" Permanent="no" Part="last" Action="set" Separator=";" System="yes" />
+      </Component>
+      
       <!-- Configuration Files -->
       <Component Id="ConfigFiles" Guid="8B6C2E3F-9A7D-4891-B0C2-D4E5F6071829">
         <File Id="AppSettingsJson" Source="$(var.SourceDir)\appsettings.json" />
