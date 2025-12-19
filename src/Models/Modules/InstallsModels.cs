@@ -249,9 +249,16 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("total_actions")]
         public int TotalActions { get; set; }
         
+        [JsonPropertyName("total_packages_managed")]
         public int TotalPackagesManaged { get; set; }
+        
+        [JsonPropertyName("packages_installed")]
         public int PackagesInstalled { get; set; }
+        
+        [JsonPropertyName("packages_pending")]
         public int PackagesPending { get; set; }
+        
+        [JsonPropertyName("packages_failed")]
         public int PackagesFailed { get; set; }
         
         [JsonPropertyName("installs")]
@@ -274,6 +281,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("duration_seconds")]
         public int DurationSeconds { get; set; }
         
+        [JsonPropertyName("cache_size_mb")]
         public double CacheSizeMb { get; set; }
         
         [JsonPropertyName("hostname")]
@@ -302,11 +310,22 @@ namespace ReportMate.WindowsClient.Models.Modules
         public Dictionary<string, object> Summary { get; set; } = new(); // totalPackagesManaged, packagesInstalled, etc
         
         // Enhanced logging improvements data
+        [JsonPropertyName("system_info")]
         public Dictionary<string, object> SystemInfo { get; set; } = new(); // System context from enhanced logging
+        
+        [JsonPropertyName("flags")]
         public Dictionary<string, bool> Flags { get; set; } = new(); // Command flags and options
+        
+        [JsonPropertyName("batch_operations")]
         public List<BatchOperation> BatchOperations { get; set; } = new(); // Batch install/uninstall operations
+        
+        [JsonPropertyName("performance_metrics")]
         public Dictionary<string, object> PerformanceMetrics { get; set; } = new(); // Timing and performance data
+        
+        [JsonPropertyName("failed_items")]
         public List<string> FailedItems { get; set; } = new(); // Failed package names for troubleshooting
+        
+        [JsonPropertyName("blocking_applications")]
         public Dictionary<string, List<string>> BlockingApplications { get; set; } = new(); // Package -> blocking apps mapping
     }
 

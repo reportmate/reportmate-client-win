@@ -1709,7 +1709,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         if (summaryProp.TryGetProperty("cache_size_mb", out var cacheSizeProp))
                             session.CacheSizeMb = cacheSizeProp.GetDouble();
                         
-                        // Legacy fields for backwards compatibility
+                        // Legacy fields - try summary first, then top-level for backwards compatibility
                         if (summaryProp.TryGetProperty("total_actions", out var totalActionsProp))
                             session.TotalActions = totalActionsProp.GetInt32();
                         if (summaryProp.TryGetProperty("installs", out var installsProp))
