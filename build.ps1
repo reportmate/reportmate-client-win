@@ -1548,3 +1548,6 @@ Write-Success "All payload directories cleaned up"
 
 Write-Output ""
 Write-Success "Build completed successfully!"
+
+# Explicitly exit with success code to prevent stale exit codes from propagating
+exit 0
