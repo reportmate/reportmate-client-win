@@ -595,37 +595,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
             
-            // Then try physical_disk_performance - but only for additional storage discovery if needed
+            // Skip physical_disk_performance - it doesn't have capacity data and creates ghost drives with 0 capacity
+            // We already have comprehensive storage info from logical_drives_extended and disk_info
             if (osqueryResults.TryGetValue("physical_disk_performance", out var physicalDisks))
             {
-                _logger.LogDebug("Processing {Count} storage devices from physical_disk_performance", physicalDisks.Count);
-                
-                foreach (var disk in physicalDisks)
-                {
-                    var diskName = GetStringValue(disk, "name");
-                    var diskKey = $"{diskName}_physical";
-                    
-                    if (!processedDisks.Contains(diskKey))
-                    {
-                        var storage = new StorageDevice
-                        {
-                            Name = diskName,
-                            Type = "Physical Disk",
-                            Capacity = 0, // physical_disk_performance doesn't have disk_size column
-                            Interface = "Unknown",
-                            Health = "Good"
-                        };
-
-                        // Only add if we don't have this disk already and if it has meaningful data
-                        if (!string.IsNullOrEmpty(diskName) && !diskName.Equals("_Total", StringComparison.OrdinalIgnoreCase))
-                        {
-                            data.Storage.Add(storage);
-                            processedDisks.Add(diskKey);
-                            _logger.LogDebug("Added storage device from physical_disk_performance - Name: {Name}", 
-                                storage.Name);
-                        }
-                    }
-                }
+                _logger.LogDebug("Skipping {Count} entries from physical_disk_performance (no capacity data - creates ghost drives)", physicalDisks.Count);
             }
             
             // Finally try WMI disk drives as fallback
@@ -1029,6 +1003,29 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Format with appropriate precision
             return $"{len:0.##} {sizes[order]}";
+        }
+
+        /// <summary>
+        /// Calculate percentage of drive, clamped to valid range (0-100%)
+        /// Returns 0 if capacity is invalid, and caps at 100% to prevent impossible values
+        /// caused by measurement errors or double-counting (e.g., junction points)
+        /// </summary>
+        private double CalculatePercentageOfDrive(long size, long capacity)
+        {
+            if (capacity <= 0 || size <= 0) return 0;
+            
+            double percentage = (double)size / capacity * 100;
+            
+            // Cap at 100% - any value over 100% indicates measurement error
+            // (e.g., junction points causing double-counting)
+            if (percentage > 100)
+            {
+                _logger.LogWarning("Calculated percentage {Percentage:F2}% exceeds 100%, capping to 100% (size: {Size}, capacity: {Capacity})", 
+                    percentage, size, capacity);
+                return 100.0;
+            }
+            
+            return percentage;
         }
 
         /// <summary>
@@ -2691,10 +2688,7 @@ try {
                     {
                         directoryInfo.Category = DirectoryCategory.Other;
                         directoryInfo.FormattedSize = FormatDirectorySize(directoryInfo.Size);
-                        if (storage.Capacity > 0)
-                        {
-                            directoryInfo.PercentageOfDrive = (double)directoryInfo.Size / storage.Capacity * 100;
-                        }
+                        directoryInfo.PercentageOfDrive = CalculatePercentageOfDrive(directoryInfo.Size, storage.Capacity);
                         
                         // Add each directory as a separate subdirectory under "Other"
                         rootDirectory.Subdirectories.Add(directoryInfo);
@@ -2771,10 +2765,7 @@ try {
 
             // Format the size and calculate drive percentage
             rootDirectory.FormattedSize = FormatStorageSize(totalSize);
-            if (storage.Capacity > 0)
-            {
-                rootDirectory.PercentageOfDrive = (double)totalSize / storage.Capacity * 100;
-            }
+            rootDirectory.PercentageOfDrive = CalculatePercentageOfDrive(totalSize, storage.Capacity);
 
             // Sort subdirectories by size (descending)
             rootDirectory.Subdirectories = rootDirectory.Subdirectories.OrderByDescending(d => d.Size).ToList();
@@ -2798,10 +2789,7 @@ try {
                 }
                 
                 subdir.FormattedSize = FormatDirectorySize(subdir.Size);
-                if (storage.Capacity > 0)
-                {
-                    subdir.PercentageOfDrive = (double)subdir.Size / storage.Capacity * 100;
-                }
+                subdir.PercentageOfDrive = CalculatePercentageOfDrive(subdir.Size, storage.Capacity);
             }
 
             // Only add the root directory if it has meaningful content
@@ -2872,6 +2860,8 @@ try {
 
         /// <summary>
         /// Calculate directory size using PowerShell as a fallback when osquery fails
+        /// IMPORTANT: This script explicitly excludes junction points and symbolic links to prevent
+        /// double-counting (e.g., C:\Users\All Users -> C:\ProgramData, C:\Users\Default User -> C:\Users\Default)
         /// </summary>
         private long CalculateDirectorySizeWithPowerShell(string directoryPath)
         {
@@ -2880,14 +2870,22 @@ try {
                 // _logger.LogInformation("   Calculating directory size: {Directory} (this may take a few minutes for large directories)", directoryPath);
 
                 // Users directory needs -Force flag to include hidden user profile files
-                var useForceFlag = directoryPath.Equals(@"C:\Users", StringComparison.OrdinalIgnoreCase);
+                var useForceFlag = directoryPath.Equals(@"C:\Users", StringComparison.OrdinalIgnoreCase) || 
+                                   directoryPath.StartsWith(@"C:\Users\", StringComparison.OrdinalIgnoreCase);
                 var forceParameter = useForceFlag ? "-Force " : "";
 
+                // PowerShell script that:
+                // 1. Excludes junction points and symbolic links (ReparsePoint attribute)
+                // 2. Uses -Force for Users directories to include hidden files
+                // 3. Handles errors gracefully
                 var script = $@"
                     try {{
                         $path = '{directoryPath.Replace("'", "''")}'
                         if (Test-Path $path) {{
-                            $size = (Get-ChildItem -Path $path -Recurse -File {forceParameter}-ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                            # Get all files recursively, excluding junction points and symbolic links
+                            $files = Get-ChildItem -Path $path -Recurse -File {forceParameter}-ErrorAction SilentlyContinue | 
+                                Where-Object {{ -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }}
+                            $size = ($files | Measure-Object -Property Length -Sum).Sum
                             if ($size -eq $null) {{ $size = 0 }}
                             Write-Output $size
                         }} else {{
@@ -3122,17 +3120,29 @@ try {
             {
                 _logger.LogInformation("Manually discovering additional directories at C:\\ root (this may take 30-60 seconds)...");
 
+                // PowerShell script that excludes:
+                // 1. Known directories (Program Files, Users, Windows, ProgramData)
+                // 2. Junction points and symbolic links (ReparsePoint attribute)
+                // 3. Directories smaller than 10MB
                 var script = @"
-                    $excludedDirs = @('Program Files', 'Program Files (x86)', 'Users', 'Windows', 'ProgramData')
-                    Get-ChildItem -Path 'C:\' -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin $excludedDirs } | ForEach-Object {
-                        try {
-                            $size = (Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-                            if ($size -eq $null) { $size = 0 }
-                            if ($size -gt 10485760) {
-                                Write-Output ($_.Name + '|' + $_.FullName + '|' + $size)
-                            }
-                        } catch {}
-                    }
+                    $excludedDirs = @('Program Files', 'Program Files (x86)', 'Users', 'Windows', 'ProgramData', '$Recycle.Bin', 'System Volume Information')
+                    Get-ChildItem -Path 'C:\' -Directory -Force -ErrorAction SilentlyContinue | 
+                        Where-Object { 
+                            $_.Name -notin $excludedDirs -and 
+                            -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
+                        } | 
+                        ForEach-Object {
+                            try {
+                                # Exclude junction points and symbolic links when calculating size
+                                $files = Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | 
+                                    Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+                                $size = ($files | Measure-Object -Property Length -Sum).Sum
+                                if ($size -eq $null) { $size = 0 }
+                                if ($size -gt 10485760) {
+                                    Write-Output ($_.Name + '|' + $_.FullName + '|' + $size)
+                                }
+                            } catch {}
+                        }
                 ";
 
                 using var process = new System.Diagnostics.Process();
@@ -3214,10 +3224,7 @@ try {
                     };
 
                     otherRootDirectory.FormattedSize = FormatDirectorySize(otherRootDirectory.Size);
-                    if (storage.Capacity > 0)
-                    {
-                        otherRootDirectory.PercentageOfDrive = (double)otherRootDirectory.Size / storage.Capacity * 100;
-                    }
+                    otherRootDirectory.PercentageOfDrive = CalculatePercentageOfDrive(otherRootDirectory.Size, storage.Capacity);
 
                     storage.RootDirectories.Add(otherRootDirectory);
                     var totalSizeGB = otherRootDirectory.Size / 1024.0 / 1024.0 / 1024.0;
@@ -3237,6 +3244,7 @@ try {
 
         /// <summary>
         /// PowerShell fallback to collect ProgramData subdirectories when osquery fails
+        /// IMPORTANT: Excludes junction points and symbolic links to prevent double-counting
         /// </summary>
         private async Task ProcessProgramDataWithPowerShellFallback(StorageDevice storage)
         {
@@ -3249,12 +3257,17 @@ try {
                     $programDataPath = 'C:\ProgramData'
                     
                     # Get subdirectories of ProgramData with size calculation
-                    $directories = Get-ChildItem -Path $programDataPath -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                    # Exclude junction points and symbolic links
+                    $directories = Get-ChildItem -Path $programDataPath -Directory -Force -ErrorAction SilentlyContinue | 
+                        Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
+                        ForEach-Object {
                         try {
-                            # Calculate directory size with timeout
+                            # Calculate directory size with timeout, excluding junction points
                             $job = Start-Job -ScriptBlock {
                                 param($path)
-                                $size = (Get-ChildItem -Path $path -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                                $files = Get-ChildItem -Path $path -Recurse -File -Force -ErrorAction SilentlyContinue | 
+                                    Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+                                $size = ($files | Measure-Object -Property Length -Sum).Sum
                                 if ($size -eq $null) { $size = 0 }
                                 return $size
                             } -ArgumentList $_.FullName
@@ -3365,10 +3378,7 @@ try {
                     };
 
                     programDataRootDirectory.FormattedSize = FormatDirectorySize(programDataRootDirectory.Size);
-                    if (storage.Capacity > 0)
-                    {
-                        programDataRootDirectory.PercentageOfDrive = (double)programDataRootDirectory.Size / storage.Capacity * 100;
-                    }
+                    programDataRootDirectory.PercentageOfDrive = CalculatePercentageOfDrive(programDataRootDirectory.Size, storage.Capacity);
 
                     storage.RootDirectories.Add(programDataRootDirectory);
                     var totalSizeGB = programDataRootDirectory.Size / 1024.0 / 1024.0 / 1024.0;
