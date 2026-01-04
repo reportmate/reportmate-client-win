@@ -412,7 +412,7 @@ namespace ReportMate.WindowsClient.Services
                 var json = JsonSerializer.Serialize(data, actualType, new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                     TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
@@ -439,7 +439,7 @@ namespace ReportMate.WindowsClient.Services
                 var json = JsonSerializer.Serialize((object)data, new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                     TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
@@ -527,7 +527,7 @@ namespace ReportMate.WindowsClient.Services
                         // JSON options for deserialization
                         var jsonOptions = new JsonSerializerOptions
                         {
-                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
                             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                         };
@@ -1002,7 +1002,7 @@ namespace ReportMate.WindowsClient.Services
                 var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                     TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
