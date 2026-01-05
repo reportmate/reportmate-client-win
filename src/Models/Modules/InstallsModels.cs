@@ -12,7 +12,6 @@ namespace ReportMate.WindowsClient.Models.Modules
     public class InstallsData : BaseModuleData
     {
         public CimianInfo? Cimian { get; set; }
-        public MunkiInfo? Munki { get; set; }
         public DateTime? LastCheckIn { get; set; }
         public bool BootstrapModeActive { get; set; }
         public Dictionary<string, object> CacheStatus { get; set; } = new();
@@ -374,16 +373,6 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<string> RelatedPackages { get; set; } = new(); // Dependencies or related packages
         public Dictionary<string, string> PerformanceCounters { get; set; } = new(); // CPU, memory, disk usage
         public bool CheckOnlyMode { get; set; } // Whether this was a check-only operation
-    }
-
-    public class MunkiInfo
-    {
-        public bool IsInstalled { get; set; }
-        public string Version { get; set; } = string.Empty;
-        public DateTime? LastRun { get; set; }
-        public string Status { get; set; } = string.Empty;
-        public List<string> PendingPackages { get; set; } = new();
-        public List<string> Logs { get; set; } = new();
     }
 
     public class ManagedInstall
