@@ -748,7 +748,12 @@ namespace ReportMate.WindowsClient.Services
                         session.Publisher = matchedApp.Publisher;
                         sessions.Add(session);
                     }
-                    // If no match found, skip this session - we only care about inventory applications
+                    else
+                    {
+                        // Log unmatched sessions at debug level to help diagnose missing app tracking
+                        _logger.LogDebug("Session not matched to installed app - Path: {Path}, Process: {ProcessName}", 
+                            session.Path, start.ProcessName);
+                    }
                 }
             }
 
@@ -805,6 +810,25 @@ namespace ReportMate.WindowsClient.Services
                 }
             }
 
+            // Strategy 4: App name word matches process filename (reverse of Strategy 3)
+            // Handles cases like "Google Chrome" where we look for "chrome" in the process path
+            if (!string.IsNullOrEmpty(app.Name))
+            {
+                var appNameWords = app.Name.ToLowerInvariant()
+                    .Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Where(w => w.Length >= 4)
+                    .Where(w => !IsCommonWord(w));
+                    
+                foreach (var word in appNameWords)
+                {
+                    // Check if app name word appears in process filename or path
+                    if (processFileName.Contains(word) || normalizedProcessPath.Contains(word))
+                    {
+                        return true;
+                    }
+                }
+            }
+
             return false;
         }
 
@@ -844,6 +868,8 @@ namespace ReportMate.WindowsClient.Services
 
         /// <summary>
         /// Common path words that should be ignored during matching.
+        /// NOTE: Vendor names (microsoft, google, apple, adobe) are intentionally NOT filtered
+        /// because they are critical for matching apps like Chrome, VS Code, Teams, etc.
         /// </summary>
         private static bool IsCommonPathWord(string word)
         {
@@ -854,12 +880,13 @@ namespace ReportMate.WindowsClient.Services
                 "bin", "exe", "dll", "common", "shared", "resources", "lib", "usr", "local",
                 "windowsapps", "appdata", "roaming", "users", "programdata",
                 // Version/architecture patterns
-                "win32", "win64", "amd64", "arm64", "x64", "x86",
-                // Too-common company/brand names that cause false matches
-                "microsoft", "google", "apple", "adobe", "mozilla", "oracle", "intel", "nvidia",
-                "sdks", "azure", "cli2", "cli", "tools", "sdk",
-                // OS-related words that are too common
-                "windows", "kits", "system", "system32", "syswow64"
+                "win32", "win64", "amd64", "arm64",
+                // SDK/Tool paths (not vendor names)
+                "sdks", "cli2", "cli", "tools", "sdk", "kits",
+                // OS-related paths
+                "windows", "system", "system32", "syswow64"
+                // NOTE: Do NOT filter vendor names like microsoft, google, apple, adobe, mozilla, etc.
+                // These are essential for matching apps like "Google Chrome", "Microsoft Teams", etc.
             };
             return commonWords.Contains(word);
         }
@@ -867,6 +894,8 @@ namespace ReportMate.WindowsClient.Services
         /// <summary>
         /// Common words in app names/publishers that should be ignored during matching.
         /// These words are too generic to reliably identify an application.
+        /// NOTE: Vendor names (microsoft, google, etc.) are intentionally NOT filtered
+        /// because they help match apps like "Google Chrome", "Microsoft Teams".
         /// </summary>
         private static bool IsCommonWord(string word)
         {
@@ -874,12 +903,12 @@ namespace ReportMate.WindowsClient.Services
             {
                 // Generic business suffixes
                 "inc", "llc", "ltd", "corp", "corporation", "software", "technologies",
-                // Common app name words
+                // Common generic app name words
                 "the", "for", "and", "pro", "free", "edition", "version", "update",
-                // Too-common prefixes that cause over-matching
-                "microsoft", "google", "apple", "adobe", "mozilla", "oracle",
                 // OS-related generic words
-                "windows", "macos", "linux", "desktop", "runtime"
+                "desktop", "runtime", "client", "installer", "setup"
+                // NOTE: Do NOT filter vendor names like microsoft, google, apple, adobe, etc.
+                // These are essential for matching apps by their full names.
             };
             return commonWords.Contains(word);
         }
