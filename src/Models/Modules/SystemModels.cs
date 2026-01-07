@@ -100,11 +100,20 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string? LicenseType { get; set; }
         
         /// <summary>
-        /// Whether the device has a firmware-embedded (UEFI/BIOS OA3) Windows license key.
-        /// Devices with firmware licenses retain activation when migrating from AD to Entra ID.
-        /// Devices without firmware licenses may lose activation when unbound from on-prem AD/KMS.
+        /// Whether the device has a firmware-embedded (UEFI/BIOS OA3) Windows license key
+        /// that is usable for domain/Entra ID joined devices (Pro, Enterprise, Education).
+        /// Windows Home firmware licenses don't count as they can't join domains.
+        /// Devices with Pro/Enterprise firmware licenses retain activation when migrating from AD to Entra ID.
+        /// Devices without usable firmware licenses may lose activation when unbound from on-prem AD/KMS.
         /// </summary>
         public bool HasFirmwareLicense { get; set; }
+        
+        /// <summary>
+        /// The Windows edition embedded in firmware (OA3xOriginalProductKeyDescription).
+        /// Examples: "Professional OEM:DM", "Core OEM:DM" (Core = Home), "Enterprise OEM:DM"
+        /// This indicates what license the device can fall back to if KMS/MAK activation fails.
+        /// </summary>
+        public string? FirmwareEdition { get; set; }
         
         /// <summary>
         /// License source: Firmware (OA3/UEFI embedded), KMS (Key Management Service), 
