@@ -566,25 +566,66 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // PowerShell script to query Windows activation via CIM with optimized WQL query
                 // ApplicationId "55c92734-d682-4d71-983e-d6ec3f16059f" is the Windows OS product
                 // Using WQL query directly is ~100x faster than filtering in PowerShell (0.2s vs 12s)
-                // Also queries SoftwareLicensingService for OA3xOriginalProductKey (firmware-embedded license)
+                // OA3xOriginalProductKeyDescription tells us the EDITION of the firmware license
+                // Windows Home (Core) licenses can't join domains, so they don't count for Entra migration
+                // Only Professional, Enterprise, Education firmware licenses are usable
                 // Write to temp file to avoid command-line escaping issues
+                // Uses hybrid approach: fast OA3 check via CIM + reliable slmgr for activation status
                 var scriptContent = @"
-$lic = Get-CimInstance -Query ""SELECT LicenseStatus, Name, PartialProductKey, Description FROM SoftwareLicensingProduct WHERE ApplicationId='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL"" -ErrorAction SilentlyContinue | Select-Object -First 1
+# Fast: Get OA3 firmware key and description (usually instant)
 $svc = Get-CimInstance -ClassName SoftwareLicensingService -ErrorAction SilentlyContinue
-$hasFirmware = if ($svc.OA3xOriginalProductKey) { 'true' } else { 'false' }
+
+# Check firmware-embedded (OA3) license key AND edition
+# OA3xOriginalProductKey = the key itself
+# OA3xOriginalProductKeyDescription = the edition, e.g. '[4.0] Professional OEM:DM' or '[4.0] Core OEM:DM'
+$oa3Key = $svc.OA3xOriginalProductKey
+$oa3Desc = $svc.OA3xOriginalProductKeyDescription
+$hasFirmware = 'false'
+$firmwareEdition = ''
+
+if ($oa3Key -and $oa3Key.Trim().Length -ge 25 -and $oa3Key -match '^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$') {
+    $firmwareEdition = $oa3Desc
+    # Only count as usable firmware license if it's Pro, Enterprise, or Education
+    # 'Core' = Windows Home which can't join domains/Entra
+    if ($oa3Desc -match 'Professional|Enterprise|Education|Pro') {
+        $hasFirmware = 'true'
+    }
+}
+
+# Reliable: Get license info via slmgr (faster and more reliable than SoftwareLicensingProduct CIM query)
+$slmgrOutput = cscript //nologo C:\Windows\System32\slmgr.vbs /dli 2>&1
+$licStatus = -1
+$licName = 'Unknown'
+$partialKey = ''
 $licSource = 'Unknown'
-if ($lic.Description) {
-    if ($lic.Description -match 'OEM|DM channel|UEFI|firmware') { $licSource = 'Firmware' }
-    elseif ($lic.Description -match 'KMS') { $licSource = 'KMS' }
-    elseif ($lic.Description -match 'MAK|Multiple Activation') { $licSource = 'MAK' }
-    elseif ($lic.Description -match 'RETAIL') { $licSource = 'Retail' }
-    elseif ($lic.Description -match 'VOLUME') { $licSource = 'Volume' }
+
+foreach ($line in $slmgrOutput -split ""`n"") {
+    if ($line -match '^Name:\s*(.+)$') { $licName = $Matches[1].Trim() }
+    elseif ($line -match '^Partial Product Key:\s*(.+)$') { $partialKey = $Matches[1].Trim() }
+    elseif ($line -match '^License Status:\s*(.+)$') {
+        $statusText = $Matches[1].Trim()
+        $licStatus = switch -Regex ($statusText) {
+            'Licensed' { 1 }
+            'Unlicensed' { 0 }
+            'OOB' { 2 }
+            'OOT' { 3 }
+            'Non-Genuine' { 4 }
+            'Notification' { 5 }
+            'Extended' { 6 }
+            default { -1 }
+        }
+    }
+    elseif ($line -match '^Description:\s*(.+)$') {
+        $desc = $Matches[1].Trim()
+        if ($desc -match 'OEM|DM channel|UEFI|firmware') { $licSource = 'Firmware' }
+        elseif ($desc -match 'KMS') { $licSource = 'KMS' }
+        elseif ($desc -match 'MAK|Multiple Activation') { $licSource = 'MAK' }
+        elseif ($desc -match 'RETAIL') { $licSource = 'Retail' }
+        elseif ($desc -match 'VOLUME') { $licSource = 'Volume' }
+    }
 }
-if ($lic) {
-    Write-Output ""$($lic.LicenseStatus)|$($lic.Name)|$($lic.PartialProductKey)|$hasFirmware|$licSource""
-} else {
-    Write-Output ""-1|Unknown||$hasFirmware|$licSource""
-}
+
+Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmwareEdition""
 ";
                 tempScript = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"rm_activation_{Guid.NewGuid():N}.ps1");
                 System.IO.File.WriteAllText(tempScript, scriptContent);
@@ -599,10 +640,10 @@ if ($lic) {
 
                 process.Start();
 
-                if (!process.WaitForExit(10000)) // 10 second timeout
+                if (!process.WaitForExit(30000)) // 30 second timeout (some devices have slow CIM queries)
                 {
                     process.Kill();
-                    _logger.LogWarning("PowerShell activation query timed out");
+                    _logger.LogWarning("PowerShell activation query timed out after 30 seconds");
                     return activation;
                 }
 
@@ -614,7 +655,7 @@ if ($lic) {
                     _logger.LogDebug("PowerShell activation query had warnings: {Error}", error);
                 }
 
-                // Parse output: "LicenseStatus|Name|PartialProductKey|HasFirmware|LicenseSource"
+                // Parse output: "LicenseStatus|Name|PartialProductKey|HasFirmware|LicenseSource|FirmwareEdition"
                 var parts = output.Split('|');
                 if (parts.Length >= 3)
                 {
@@ -625,6 +666,7 @@ if ($lic) {
                         activation.PartialProductKey = parts[2];
                         
                         // Parse firmware license detection (parts[3])
+                        // Only true if firmware has Pro/Enterprise/Education (not Home/Core)
                         if (parts.Length >= 4)
                         {
                             activation.HasFirmwareLicense = string.Equals(parts[3], "true", StringComparison.OrdinalIgnoreCase);
@@ -634,6 +676,13 @@ if ($lic) {
                         if (parts.Length >= 5 && !string.IsNullOrEmpty(parts[4]))
                         {
                             activation.LicenseSource = parts[4];
+                        }
+                        
+                        // Parse firmware edition description (parts[5])
+                        // e.g., "[4.0] Professional OEM:DM" or "[4.0] Core OEM:DM" (Core = Home)
+                        if (parts.Length >= 6 && !string.IsNullOrEmpty(parts[5]))
+                        {
+                            activation.FirmwareEdition = parts[5];
                         }
 
                         // Map license status codes to readable strings
@@ -652,8 +701,8 @@ if ($lic) {
                         // Licensed (1) means activated
                         activation.IsActivated = licenseStatus == 1;
                         
-                        _logger.LogDebug("Windows activation found: Status={Status}, Key=***{PartialKey}, Type={LicenseType}, FirmwareLicense={HasFirmware}, Source={Source}",
-                            activation.Status, activation.PartialProductKey, activation.LicenseType, activation.HasFirmwareLicense, activation.LicenseSource);
+                        _logger.LogDebug("Windows activation found: Status={Status}, Key=***{PartialKey}, Type={LicenseType}, FirmwareLicense={HasFirmware}, FirmwareEdition={FirmwareEdition}, Source={Source}",
+                            activation.Status, activation.PartialProductKey, activation.LicenseType, activation.HasFirmwareLicense, activation.FirmwareEdition, activation.LicenseSource);
                     }
                 }
             }
