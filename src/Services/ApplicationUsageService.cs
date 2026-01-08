@@ -814,12 +814,12 @@ namespace ReportMate.WindowsClient.Services
             // Handles cases like "Google Chrome" where we look for "chrome" in the process path
             if (!string.IsNullOrEmpty(app.Name))
             {
-                var appNameWords = app.Name.ToLowerInvariant()
+                var nameWords = app.Name.ToLowerInvariant()
                     .Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries)
                     .Where(w => w.Length >= 4)
                     .Where(w => !IsCommonWord(w));
                     
-                foreach (var word in appNameWords)
+                foreach (var word in nameWords)
                 {
                     // Check if app name word appears in process filename or path
                     if (processFileName.Contains(word) || normalizedProcessPath.Contains(word))
