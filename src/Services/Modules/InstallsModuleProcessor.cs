@@ -2473,7 +2473,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     // Add operational warnings if any
                     if (operationalWarningEvents.Any())
-                        messageParts.Add($"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
                     
                     // Add session activity count if any actual installs/updates occurred
                     if (sessionActivityCount > 0)
@@ -2503,7 +2503,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     // Add operational warnings if any
                     if (operationalWarningEvents.Any())
-                        messageParts.Add($"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
                     
                     // Add session activity count if any actual installs/updates occurred
                     if (sessionActivityCount > 0)
@@ -2537,7 +2537,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         messageParts.Add($"{sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
                     
                     if (operationalWarningEvents.Any())
-                        messageParts.Add($"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
                     
                     message = string.Join(", ", messageParts);
                     
@@ -2553,7 +2553,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 else if (operationalWarningEvents.Any())
                 {
                     eventType = "warning";
-                    message = $"{operationalWarningEvents.Count} operational warning{(operationalWarningEvents.Count == 1 ? "" : "s")}";
+                    message = $"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}";
                     details["total_managed_items"] = totalManagedItems;
                     details["module_status"] = "warning";
                     
