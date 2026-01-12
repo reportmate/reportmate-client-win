@@ -99,10 +99,22 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Path { get; set; } = string.Empty;
         public string Publisher { get; set; } = string.Empty;
         public DateTime? FirstSeen { get; set; }
-        public DateTime? LastLaunchTime { get; set; }
+
+        /// <summary>
+        /// Last time the application was used (renamed from LastLaunchTime for frontend compatibility)
+        /// </summary>
+        [JsonPropertyName("lastUsed")]
+        public DateTime? LastUsed { get; set; }
+
         public DateTime? LastExitTime { get; set; }
         public long LaunchCount { get; set; }
-        public double TotalUsageSeconds { get; set; }
+
+        /// <summary>
+        /// Total usage time in seconds (renamed from TotalUsageSeconds for frontend compatibility)
+        /// </summary>
+        [JsonPropertyName("totalSeconds")]
+        public double TotalSeconds { get; set; }
+
         public double ActiveUsageSeconds { get; set; }
         public double AverageSessionSeconds { get; set; }
         public int ActiveSessionCount { get; set; }

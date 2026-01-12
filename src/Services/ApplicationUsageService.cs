@@ -1007,15 +1007,15 @@ namespace ReportMate.WindowsClient.Services
                     Path = firstSession.Path,
                     Publisher = matchedApp?.Publisher ?? string.Empty,
                     FirstSeen = firstSession.StartTime,
-                    LastLaunchTime = lastSession.StartTime,
+                    LastUsed = lastSession.StartTime,
                     LastExitTime = appSessions.Where(s => s.EndTime.HasValue)
                         .OrderByDescending(s => s.EndTime)
                         .FirstOrDefault()?.EndTime,
                     LaunchCount = appSessions.Count,
-                    TotalUsageSeconds = appSessions.Sum(s => s.DurationSeconds),
+                    TotalSeconds = appSessions.Sum(s => s.DurationSeconds),
                     ActiveUsageSeconds = appSessions.Sum(s => s.DurationSeconds), // Same for now, could track foreground time later
-                    AverageSessionSeconds = appSessions.Count > 0 
-                        ? appSessions.Average(s => s.DurationSeconds) 
+                    AverageSessionSeconds = appSessions.Count > 0
+                        ? appSessions.Average(s => s.DurationSeconds)
                         : 0,
                     ActiveSessionCount = appSessions.Count(s => s.IsActive),
                     UniqueUserCount = users.Count,
@@ -1029,7 +1029,7 @@ namespace ReportMate.WindowsClient.Services
                 summaries.Add(summary);
             }
 
-            return summaries.OrderByDescending(s => s.TotalUsageSeconds).ToList();
+            return summaries.OrderByDescending(s => s.TotalSeconds).ToList();
         }
 
         /// <summary>
