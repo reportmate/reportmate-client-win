@@ -2320,8 +2320,8 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// Priority: Error > Warning > Success (only generate one event per device)
-        /// FIXED: Now counts from the latest session's events.jsonl, not cumulative items.json
-        /// This ensures we report only what happened in the LAST run, not historical failures
+        /// FIXED: Now counts from items.json current_status to match what Items table displays
+        /// This ensures event message counts match the items table filter counts
         /// </summary>
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(InstallsData data)
         {
@@ -2331,83 +2331,64 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogInformation("Starting consolidated event generation for device {DeviceId}", data.DeviceId);
                 
-                // Get events from the latest session's events.jsonl (NOT from items.json)
-                // This gives us accurate counts of what happened in the LAST run only
+                // Get session events for operational warnings (non-item-specific warnings)
                 var sessionEvents = data.Cimian?.Events ?? new List<CimianEvent>();
                 
-                // Helper function to get package name from event (Package field or context.item)
-                string GetPackageFromEvent(CimianEvent e)
-                {
-                    if (!string.IsNullOrEmpty(e.Package))
-                        return e.Package;
-                    
-                    // Fallback to context.item for warnings
-                    if (e.Context.TryGetValue("item", out var itemValue))
-                        return itemValue?.ToString() ?? "";
-                    
-                    return "";
-                }
+                // Get all items from items.json - this is the SOURCE OF TRUTH for counts
+                // The Items table displays items based on their current_status from items.json
+                // Event message counts MUST match what the Items table shows
+                var allItems = data.Cimian?.Items ?? new List<CimianItem>();
                 
-                // Count install-related events by level from the session events
-                // ERROR level events from install operations = failed installs
-                var errorEvents = sessionEvents.Where(e =>
-                    e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase) &&
-                    (e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) ||
-                     e.Action.Contains("install", StringComparison.OrdinalIgnoreCase))
-                ).ToList();
-                
-                // Get unique failed items from error events
-                var failedItems = errorEvents
-                    .Select(e => GetPackageFromEvent(e))
-                    .Where(p => !string.IsNullOrEmpty(p))
+                // Count FAILED items from items.json current_status
+                // These are the items that will show as "Error" in the Items table
+                var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
+                var failedItems = allItems
+                    .Where(i => failedItemStatuses.Any(s => 
+                        i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
+                        (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)))
+                    .Select(i => i.ItemName)
+                    .Where(n => !string.IsNullOrEmpty(n))
                     .Distinct()
                     .ToList();
                 
-                // Get all items so we can cross-reference package statuses
-                var allItems = data.Cimian?.Items ?? new List<CimianItem>();
+                // Count WARNING items from items.json current_status
+                // These are the items that will show as "Warning" in the Items table
+                var warningItemStatuses = new[] { "Warning", "Not Available" };
+                var warningItems = allItems
+                    .Where(i => warningItemStatuses.Any(s => 
+                        i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
+                        (i.MappedStatus?.Equals("Warning", StringComparison.OrdinalIgnoreCase) == true)))
+                    .Where(i => !failedItems.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase)) // Don't double-count
+                    .Select(i => i.ItemName)
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .Distinct()
+                    .ToList();
                 
-                // Build set of known item names (for distinguishing item vs operational warnings)
+                // Build set of known item names (for distinguishing operational warnings)
                 var knownItemNames = allItems
                     .Select(i => i.ItemName)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 
-                // === CATEGORIZE WARNINGS ===
-                // 1. ITEM WARNINGS: WARN events that have a Package field matching a known managed item
-                //    These are warnings about installing/updating a specific item
-                // 2. OPERATIONAL WARNINGS: All other WARN events (preflight, manifest processing, etc.)
-                //    These are session-level warnings about Cimian's run itself
+                // === CATEGORIZE OPERATIONAL WARNINGS (session-level, not item-specific) ===
+                // These are warnings about Cimian's run itself (preflight, manifest processing, etc.)
+                // They don't map to specific items in the Items table
                 
                 var allWarningEvents = sessionEvents.Where(e =>
                     e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase)
                 ).ToList();
                 
-                // Item warnings: have a Package field that matches a known managed item
-                var itemWarningEvents = allWarningEvents.Where(e =>
-                    !string.IsNullOrEmpty(e.Package) && 
-                    knownItemNames.Contains(e.Package) &&
-                    !IsExpectedWarning(e.Message) // Filter arch mismatch, etc.
-                ).ToList();
-                
-                // Operational warnings: everything else (no package, or package not in managed list)
+                // Operational warnings: events without a package, or package not in managed list
                 var operationalWarningEvents = allWarningEvents.Where(e =>
                     string.IsNullOrEmpty(e.Package) || 
                     !knownItemNames.Contains(e.Package)
                 ).ToList();
                 
-                // Get unique items with ACTUAL item-level warnings
-                // Only flag as warning if: has warning AND is NOT already successfully installed
+                // Get installed item names for context
                 var installedItemNames = allItems
-                    .Where(i => i.CurrentStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase))
+                    .Where(i => i.CurrentStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase) ||
+                               i.MappedStatus?.Equals("Installed", StringComparison.OrdinalIgnoreCase) == true)
                     .Select(i => i.ItemName)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    
-                var warningItems = itemWarningEvents
-                    .Select(e => e.Package)
-                    .Where(p => !string.IsNullOrEmpty(p))
-                    .Distinct()
-                    .Where(p => !failedItems.Contains(p, StringComparer.OrdinalIgnoreCase)) // Don't double-count failed
-                    .Where(p => !installedItemNames.Contains(p)) // Successfully installed = not a warning
-                    .ToList();
                 
                 // Get ACTUAL session activity counts from the latest session
                 // This is what happened in THIS run, not total items managed
@@ -2421,9 +2402,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var totalManagedItems = allItems.Count;
                 var totalInstalledItems = installedItemNames.Count;
                 
-                _logger.LogInformation("Session event analysis - Failed Items: {ErrorCount} ({FailedItems}), Item Warnings: {WarningCount} ({WarnItems}), Operational Warnings: {OpWarnCount}, Session Activity: {SessionActivity} (installs: {Installs}, updates: {Updates})", 
+                _logger.LogInformation("Event count analysis from items.json - Failed Items: {ErrorCount} ({FailedItems}), Warning Items: {WarningCount} ({WarnItems}), Installed: {InstalledCount}, Operational Warnings: {OpWarnCount}, Session Activity: {SessionActivity} (installs: {Installs}, updates: {Updates})", 
                     failedItems.Count, string.Join(", ", failedItems.Take(5)),
                     warningItems.Count, string.Join(", ", warningItems.Take(5)),
+                    totalInstalledItems,
                     operationalWarningEvents.Count,
                     sessionActivityCount, sessionInstalls, sessionUpdates);
                 
