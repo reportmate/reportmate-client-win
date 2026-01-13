@@ -62,6 +62,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Secure Shell information
             await ProcessSecureShellInfo(data);
 
+            // Process Remote Desktop (RDP) information
+            await ProcessRdpInfo(data);
+
             // Process security updates
             ProcessSecurityUpdates(osqueryResults, data);
 
@@ -1431,6 +1434,132 @@ try {
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to collect Secure Shell status");
+            }
+        }
+
+        private async Task ProcessRdpInfo(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Remote Desktop (RDP) status via Registry/WMI");
+
+                var script = @"
+                    $result = @{
+                        IsEnabled = $false
+                        Port = 3389
+                        NlaEnabled = $false
+                        SecurityLayer = 'Unknown'
+                        AllowRemoteConnections = $false
+                    }
+
+                    try {
+                        # Check if RDP is enabled via Registry
+                        $tsKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+                        $fDenyTSConnections = Get-ItemProperty -Path $tsKey -Name 'fDenyTSConnections' -ErrorAction SilentlyContinue
+                        
+                        if ($fDenyTSConnections -and $fDenyTSConnections.fDenyTSConnections -eq 0) {
+                            $result.IsEnabled = $true
+                            $result.AllowRemoteConnections = $true
+                        }
+
+                        # Get RDP port
+                        $rdpTcpKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+                        $portNumber = Get-ItemProperty -Path $rdpTcpKey -Name 'PortNumber' -ErrorAction SilentlyContinue
+                        if ($portNumber) {
+                            $result.Port = $portNumber.PortNumber
+                        }
+
+                        # Check NLA (Network Level Authentication) setting
+                        $nlaValue = Get-ItemProperty -Path $rdpTcpKey -Name 'UserAuthentication' -ErrorAction SilentlyContinue
+                        if ($nlaValue -and $nlaValue.UserAuthentication -eq 1) {
+                            $result.NlaEnabled = $true
+                        }
+
+                        # Check Security Layer
+                        $secLayer = Get-ItemProperty -Path $rdpTcpKey -Name 'SecurityLayer' -ErrorAction SilentlyContinue
+                        if ($secLayer) {
+                            switch ($secLayer.SecurityLayer) {
+                                0 { $result.SecurityLayer = 'RDP' }
+                                1 { $result.SecurityLayer = 'Negotiate' }
+                                2 { $result.SecurityLayer = 'TLS' }
+                                default { $result.SecurityLayer = 'Unknown' }
+                            }
+                        }
+                    } catch {
+                        # Silently handle errors - result will contain defaults
+                    }
+
+                    $result | ConvertTo-Json -Compress
+                ";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('{');
+                    if (jsonStart < 0)
+                    {
+                        _logger.LogDebug("No JSON object found in RDP result");
+                        return;
+                    }
+                    
+                    var jsonContent = trimmedResult.Substring(jsonStart);
+                    
+                    using var document = JsonDocument.Parse(jsonContent);
+                    var root = document.RootElement;
+                    
+                    if (root.ValueKind == JsonValueKind.Object)
+                    {
+                        // Helper to safely get bool property
+                        bool GetBoolProp(JsonElement element, string propName)
+                        {
+                            if (element.TryGetProperty(propName, out var prop))
+                            {
+                                if (prop.ValueKind == JsonValueKind.True) return true;
+                                if (prop.ValueKind == JsonValueKind.False) return false;
+                            }
+                            return false;
+                        }
+
+                        // Helper to safely get int property
+                        int GetIntProp(JsonElement element, string propName, int defaultValue)
+                        {
+                            if (element.TryGetProperty(propName, out var prop))
+                            {
+                                if (prop.ValueKind == JsonValueKind.Number)
+                                    return prop.GetInt32();
+                            }
+                            return defaultValue;
+                        }
+
+                        // Helper to safely get string property
+                        string GetStringProp(JsonElement element, string propName)
+                        {
+                            if (element.TryGetProperty(propName, out var prop))
+                            {
+                                return prop.GetString() ?? string.Empty;
+                            }
+                            return string.Empty;
+                        }
+
+                        data.Rdp.IsEnabled = GetBoolProp(root, "IsEnabled");
+                        data.Rdp.Port = GetIntProp(root, "Port", 3389);
+                        data.Rdp.NlaEnabled = GetBoolProp(root, "NlaEnabled");
+                        data.Rdp.SecurityLayer = GetStringProp(root, "SecurityLayer");
+                        data.Rdp.AllowRemoteConnections = GetBoolProp(root, "AllowRemoteConnections");
+
+                        // Compute status display
+                        data.Rdp.StatusDisplay = data.Rdp.IsEnabled ? "Enabled" : "Disabled";
+
+                        _logger.LogInformation("RDP status: {Status}, Port: {Port}, NLA: {NlaEnabled}", 
+                            data.Rdp.StatusDisplay, data.Rdp.Port, data.Rdp.NlaEnabled);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect RDP status");
             }
         }
     }
