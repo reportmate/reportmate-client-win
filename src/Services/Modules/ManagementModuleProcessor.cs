@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -52,14 +53,23 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Check domain trust for domain-joined or hybrid-joined machines
             await ProcessDomainTrustAsync(data);
 
+            // Process MDM configuration profiles (policy areas applied to device)
+            await ProcessMdmConfigurationProfilesAsync(osqueryResults, data);
+
+            // Process managed applications (Win32, MSI apps deployed via Intune)
+            await ProcessManagedAppsAsync(osqueryResults, data);
+
+            // Process compliance policies
+            await ProcessCompliancePoliciesAsync(osqueryResults, data);
+
             // Set last sync time
             if (data.DeviceState.EntraJoined || data.DeviceState.EnterpriseJoined || data.DeviceState.DomainJoined)
             {
                 data.LastSync = DateTime.UtcNow;
             }
 
-            _logger.LogInformation("Management module processed - Status: {Status}, Entra: {Entra}, Enterprise: {Enterprise}, Domain: {Domain}, DomainTrust: {TrustStatus}", 
-                data.DeviceState.Status, data.DeviceState.EntraJoined, data.DeviceState.EnterpriseJoined, data.DeviceState.DomainJoined, data.DomainTrust.TrustStatus);
+            _logger.LogInformation("Management module processed - Status: {Status}, Entra: {Entra}, Enterprise: {Enterprise}, Domain: {Domain}, DomainTrust: {TrustStatus}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, CompliancePolicies: {PolicyCount}", 
+                data.DeviceState.Status, data.DeviceState.EntraJoined, data.DeviceState.EnterpriseJoined, data.DeviceState.DomainJoined, data.DomainTrust.TrustStatus, data.Profiles.Count, data.ManagedApps.Count, data.CompliancePolicies.Count);
 
             return data;
         }
@@ -1037,6 +1047,331 @@ $providers | ConvertTo-Json -Compress
             {
                 _logger.LogError(ex, "Error extracting Intune Device ID from certificates");
             }
+        }
+
+        /// <summary>
+        /// Process MDM configuration profiles from PolicyManager registry
+        /// These are the policy areas that MDM has applied to the device
+        /// </summary>
+        private async Task ProcessMdmConfigurationProfilesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            _logger.LogDebug("Processing MDM configuration profiles");
+            
+            try
+            {
+                // Simple PowerShell to get policy area names - avoids complex operations that might hang
+                var script = @"
+$policyPath = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device'
+if (Test-Path $policyPath) {
+    $areas = Get-ChildItem -Path $policyPath -Name -ErrorAction SilentlyContinue
+    $areas -join ','
+} else { '' }
+";
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var result = await ExecuteWithTimeoutAsync(() => _wmiHelperService.ExecutePowerShellCommandAsync(script), cts.Token);
+                
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var areas = result.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    _logger.LogDebug("Found {Count} MDM policy areas", areas.Length);
+                    
+                    foreach (var area in areas)
+                    {
+                        var trimmedArea = area.Trim();
+                        if (!string.IsNullOrEmpty(trimmedArea))
+                        {
+                            data.Profiles.Add(new ManagementData.MdmProfile
+                            {
+                                Name = FormatPolicyAreaName(trimmedArea),
+                                Identifier = trimmedArea,
+                                Type = DeterminePolicyType(trimmedArea),
+                                Status = "Applied",
+                                Provider = "MDM",
+                                SettingCount = 0
+                            });
+                        }
+                    }
+                }
+                
+                _logger.LogInformation("Processed {ProfileCount} MDM configuration profiles", data.Profiles.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("MDM configuration profiles collection timed out");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to process MDM configuration profiles");
+            }
+        }
+
+        /// <summary>
+        /// Process managed applications deployed via Intune (Win32, MSI)
+        /// </summary>
+        private async Task ProcessManagedAppsAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            _logger.LogDebug("Processing managed applications");
+            
+            try
+            {
+                // Simplified script - just get app names from registry
+                var script = @"
+$apps = @()
+$win32Path = 'HKLM:\SOFTWARE\Microsoft\IntuneManagementExtension\Win32Apps'
+if (Test-Path $win32Path) {
+    Get-ChildItem $win32Path -ErrorAction SilentlyContinue | ForEach-Object {
+        Get-ChildItem $_.PSPath -ErrorAction SilentlyContinue | ForEach-Object {
+            $p = Get-ItemProperty $_.PSPath -Name ComplianceStateMessage -ErrorAction SilentlyContinue
+            if ($p.ComplianceStateMessage) {
+                try { 
+                    $j = $p.ComplianceStateMessage | ConvertFrom-Json
+                    if ($j.ApplicationName) { 
+                        $name = $j.ApplicationName
+                        $install = $j.InstallState
+                        $target = $j.TargetType
+                        $apps += ('{0}~{1}~{2}' -f $name, $install, $target)
+                    }
+                } catch {}
+            }
+        }
+    }
+}
+$apps -join '|'
+";
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                var result = await ExecuteWithTimeoutAsync(() => _wmiHelperService.ExecutePowerShellCommandAsync(script), cts.Token);
+                
+                if (!string.IsNullOrEmpty(result))
+                {
+                    // Format is: name~installState~targetType|name~installState~targetType
+                    var appEntries = result.Split('|', StringSplitOptions.RemoveEmptyEntries);
+                    _logger.LogDebug("Found {Count} managed apps", appEntries.Length);
+                    
+                    foreach (var entry in appEntries)
+                    {
+                        var parts = entry.Split('~');
+                        if (parts.Length >= 1 && !string.IsNullOrEmpty(parts[0]))
+                        {
+                            var installState = parts.Length > 1 ? parts[1] : "0";
+                            var targetType = parts.Length > 2 ? parts[2] : "0";
+                            
+                            data.ManagedApps.Add(new ManagementData.ManagedApp
+                            {
+                                Name = parts[0],
+                                AppType = "Win32",
+                                InstallState = installState switch { "1" => "Installed", "2" => "Not Installed", "3" => "Failed", "4" => "Installing", _ => "Unknown" },
+                                TargetType = targetType switch { "1" => "Required", "2" => "Available", _ => "Unknown" }
+                            });
+                        }
+                    }
+                }
+                
+                _logger.LogInformation("Processed {AppCount} managed applications", data.ManagedApps.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Managed applications collection timed out");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to process managed applications");
+            }
+        }
+
+        /// <summary>
+        /// Process compliance policies from Intune Management Extension
+        /// </summary>
+        private async Task ProcessCompliancePoliciesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            _logger.LogDebug("Processing compliance policies");
+            
+            try
+            {
+                // Simplified - just get DeviceCompliance policy area settings
+                var script = @"
+$path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\DeviceCompliance'
+if (Test-Path $path) {
+    $props = Get-ItemProperty $path -ErrorAction SilentlyContinue
+    $names = $props.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and $_.Name -notlike '*_*' } | Select-Object -ExpandProperty Name
+    $names -join ','
+} else { '' }
+";
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var result = await ExecuteWithTimeoutAsync(() => _wmiHelperService.ExecutePowerShellCommandAsync(script), cts.Token);
+                
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var policyNames = result.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                    _logger.LogDebug("Found {Count} compliance policy settings", policyNames.Length);
+                    
+                    foreach (var name in policyNames)
+                    {
+                        var trimmedName = name.Trim();
+                        if (!string.IsNullOrEmpty(trimmedName))
+                        {
+                            // Format the name for display (add spaces before capitals)
+                            var formattedName = System.Text.RegularExpressions.Regex.Replace(trimmedName, "([a-z])([A-Z])", "$1 $2");
+                            
+                            data.CompliancePolicies.Add(new ManagementData.CompliancePolicy
+                            {
+                                Name = formattedName,
+                                PolicyId = $"DeviceCompliance_{trimmedName}",
+                                Status = "Applied",
+                                LastEvaluated = DateTime.UtcNow
+                            });
+                        }
+                    }
+                }
+                
+                _logger.LogInformation("Processed {PolicyCount} compliance policies", data.CompliancePolicies.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Compliance policies collection timed out");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to process compliance policies");
+            }
+        }
+
+        /// <summary>
+        /// Execute an async task with a timeout
+        /// </summary>
+        private async Task<T?> ExecuteWithTimeoutAsync<T>(Func<Task<T?>> taskFunc, CancellationToken cancellationToken)
+        {
+            var task = taskFunc();
+            var completedTask = await Task.WhenAny(task, Task.Delay(Timeout.Infinite, cancellationToken));
+            
+            if (completedTask == task)
+            {
+                return await task;
+            }
+            
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        /// <summary>
+        /// Format a policy area name to be more human-readable
+        /// </summary>
+        private string FormatPolicyAreaName(string policyArea)
+        {
+            // Add spaces before capital letters and handle common abbreviations
+            var formatted = System.Text.RegularExpressions.Regex.Replace(policyArea, "([a-z])([A-Z])", "$1 $2");
+            
+            // Handle specific policy area names for better display
+            return policyArea switch
+            {
+                "WiFi" => "Wi-Fi Configuration",
+                "VPN" => "VPN Configuration",
+                "ADMX" => "Administrative Templates",
+                "AppVirtualization" => "App Virtualization",
+                "ApplicationControl" => "Application Control",
+                "ApplicationManagement" => "Application Management",
+                "AttestationService" => "Attestation Service",
+                "Authentication" => "Authentication",
+                "Autoplay" => "Autoplay Settings",
+                "BitLocker" => "BitLocker Encryption",
+                "Bluetooth" => "Bluetooth Settings",
+                "Browser" => "Browser Configuration",
+                "Camera" => "Camera Settings",
+                "Cellular" => "Cellular Settings",
+                "Connectivity" => "Connectivity",
+                "ControlPolicyConflict" => "Policy Conflict Control",
+                "CredentialProviders" => "Credential Providers",
+                "CredentialsUI" => "Credentials UI",
+                "Cryptography" => "Cryptography",
+                "DataProtection" => "Data Protection (WIP)",
+                "DataUsage" => "Data Usage",
+                "Defender" => "Windows Defender",
+                "DeliveryOptimization" => "Delivery Optimization",
+                "Desktop" => "Desktop Settings",
+                "DeviceGuard" => "Device Guard",
+                "DeviceHealthMonitoring" => "Device Health Monitoring",
+                "DeviceInstallation" => "Device Installation",
+                "DeviceLock" => "Device Lock & Password",
+                "Display" => "Display Settings",
+                "DmaGuard" => "DMA Guard",
+                "Education" => "Education Settings",
+                "EnterpriseCloudPrint" => "Enterprise Cloud Print",
+                "ErrorReporting" => "Error Reporting",
+                "EventLogService" => "Event Log Service",
+                "Experience" => "Windows Experience",
+                "ExploitGuard" => "Exploit Guard",
+                "FileExplorer" => "File Explorer",
+                "Firewall" => "Windows Firewall",
+                "Games" => "Games Settings",
+                "Handwriting" => "Handwriting Settings",
+                "InternetExplorer" => "Internet Explorer",
+                "Kerberos" => "Kerberos Authentication",
+                "KioskBrowser" => "Kiosk Browser",
+                "LanmanWorkstation" => "LAN Manager Workstation",
+                "Licensing" => "Licensing",
+                "LocalPoliciesSecurityOptions" => "Local Security Options",
+                "LocalSecurityAuthority" => "Local Security Authority",
+                "LocalUsersAndGroups" => "Local Users and Groups",
+                "Messaging" => "Messaging Settings",
+                "MixedReality" => "Mixed Reality",
+                "NetworkIsolation" => "Network Isolation",
+                "Notifications" => "Notification Settings",
+                "Power" => "Power Settings",
+                "Printers" => "Printer Settings",
+                "Privacy" => "Privacy Settings",
+                "RemoteAssistance" => "Remote Assistance",
+                "RemoteDesktop" => "Remote Desktop",
+                "RemoteDesktopServices" => "Remote Desktop Services",
+                "RemoteManagement" => "Remote Management",
+                "RemoteProcedureCall" => "Remote Procedure Call",
+                "RemoteShell" => "Remote Shell",
+                "RestrictedGroups" => "Restricted Groups",
+                "Search" => "Search Settings",
+                "Security" => "Security Settings",
+                "ServiceControlManager" => "Service Control Manager",
+                "Settings" => "Settings App",
+                "SmartScreen" => "SmartScreen",
+                "Speech" => "Speech Settings",
+                "Start" => "Start Menu",
+                "Storage" => "Storage Settings",
+                "Sync" => "Sync Settings",
+                "System" => "System Settings",
+                "SystemServices" => "System Services",
+                "TaskManager" => "Task Manager",
+                "TaskScheduler" => "Task Scheduler",
+                "TextInput" => "Text Input",
+                "TimeLanguageSettings" => "Time & Language",
+                "Update" => "Windows Update",
+                "UserRights" => "User Rights Assignment",
+                "Wifi" => "Wi-Fi Configuration",
+                "WindowsConnectionManager" => "Connection Manager",
+                "WindowsDefenderSecurityCenter" => "Windows Security Center",
+                "WindowsHelloForBusiness" => "Windows Hello for Business",
+                "WindowsInkWorkspace" => "Windows Ink Workspace",
+                "WindowsLogon" => "Windows Logon",
+                "WindowsPowerShell" => "PowerShell Settings",
+                "WindowsSandbox" => "Windows Sandbox",
+                "WirelessDisplay" => "Wireless Display",
+                _ => formatted
+            };
+        }
+
+        /// <summary>
+        /// Determine the policy type based on the policy area name
+        /// </summary>
+        private string DeterminePolicyType(string policyArea)
+        {
+            return policyArea.ToLower() switch
+            {
+                var s when s.Contains("security") || s.Contains("defender") || s.Contains("firewall") || 
+                           s.Contains("bitlocker") || s.Contains("guard") || s.Contains("smartscreen") => "Security",
+                var s when s.Contains("wifi") || s.Contains("vpn") || s.Contains("network") || 
+                           s.Contains("bluetooth") || s.Contains("cellular") => "Network",
+                var s when s.Contains("app") || s.Contains("browser") || s.Contains("store") => "Application",
+                var s when s.Contains("update") || s.Contains("delivery") => "Updates",
+                var s when s.Contains("device") || s.Contains("lock") || s.Contains("password") => "Device Configuration",
+                var s when s.Contains("privacy") || s.Contains("data") => "Privacy",
+                var s when s.Contains("user") || s.Contains("authentication") || s.Contains("credential") => "Identity",
+                _ => "Configuration"
+            };
         }
     }
 }

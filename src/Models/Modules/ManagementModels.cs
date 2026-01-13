@@ -20,6 +20,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public MdmEnrollmentInfo MdmEnrollment { get; set; } = new MdmEnrollmentInfo();
         public List<MdmProfile> Profiles { get; set; } = new List<MdmProfile>();
         public List<CompliancePolicy> CompliancePolicies { get; set; } = new List<CompliancePolicy>();
+        public List<ManagedApp> ManagedApps { get; set; } = new List<ManagedApp>();
         public Dictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
         public string OwnershipType { get; set; } = string.Empty; // Corporate, Personal, etc.
         public DateTime? LastSync { get; set; }
@@ -42,6 +43,8 @@ namespace ReportMate.WindowsClient.Models.Modules
             public string? Identifier { get; set; }
             public string? Type { get; set; }
             public string? Status { get; set; }
+            public string? Provider { get; set; }
+            public int SettingCount { get; set; }
         }
 
         public class CompliancePolicy
@@ -49,6 +52,25 @@ namespace ReportMate.WindowsClient.Models.Modules
             public string? Name { get; set; }
             public string? Status { get; set; }
             public DateTime? LastEvaluated { get; set; }
+            public string? PolicyId { get; set; }
+            public string? ErrorCode { get; set; }
+        }
+
+        /// <summary>
+        /// Represents a managed/required application deployed via MDM (Intune)
+        /// </summary>
+        public class ManagedApp
+        {
+            public string? Name { get; set; }
+            public string? AppId { get; set; }
+            public string? Version { get; set; }
+            public string? InstallState { get; set; }
+            public string? ComplianceState { get; set; }
+            public string? EnforcementState { get; set; }
+            public string? AppType { get; set; } // Win32, MSI, Store, etc.
+            public string? ErrorCode { get; set; }
+            public DateTime? LastInstallAttempt { get; set; }
+            public string? TargetType { get; set; } // Required, Available, Uninstall
         }
     }
 
