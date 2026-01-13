@@ -15,6 +15,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public TpmInfo Tpm { get; set; } = new();
         public WindowsHelloInfo WindowsHello { get; set; } = new();
         public SecureShellInfo SecureShell { get; set; } = new();
+        public RdpInfo Rdp { get; set; } = new();
         public List<SecurityUpdate> SecurityUpdates { get; set; } = new();
         public List<SecurityEvent> SecurityEvents { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
@@ -248,5 +249,20 @@ namespace ReportMate.WindowsClient.Models.Modules
         
         // Computed status fields for UI display
         public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled", "Partially Configured"
+    }
+
+    /// <summary>
+    /// Remote Desktop Protocol (RDP) information
+    /// </summary>
+    public class RdpInfo
+    {
+        public bool IsEnabled { get; set; }
+        public int Port { get; set; } = 3389;
+        public bool NlaEnabled { get; set; } // Network Level Authentication
+        public string SecurityLayer { get; set; } = string.Empty; // RDP, TLS, Negotiate
+        public bool AllowRemoteConnections { get; set; }
+        
+        // Computed status fields for UI display
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled"
     }
 }
