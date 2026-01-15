@@ -2657,6 +2657,14 @@ try {
                 return;
             }
             
+            // Special handling for Users: Use PowerShell to get detailed user folder breakdown
+            if (queryKey == "storage_users_analysis")
+            {
+                _logger.LogInformation("Using PowerShell analysis for Users directory with user folder breakdown...");
+                await ProcessUsersWithFolderBreakdown(storage);
+                return;
+            }
+            
             if (!osqueryResults.TryGetValue(queryKey, out var queryResults) || queryResults.Count == 0)
             {
                 _logger.LogDebug("No results found for query: {QueryKey}", queryKey);
@@ -3394,6 +3402,270 @@ try {
             {
                 _logger.LogError(ex, "Error in PowerShell ProgramData fallback analysis");
             }
+        }
+
+        /// <summary>
+        /// Process Users directory with detailed user folder breakdown (Desktop, Documents, Downloads, Pictures, etc.)
+        /// IMPORTANT: Excludes junction points and symbolic links to prevent double-counting
+        /// </summary>
+        private async Task ProcessUsersWithFolderBreakdown(StorageDevice storage)
+        {
+            try
+            {
+                _logger.LogDebug("Starting PowerShell-based Users directory analysis with folder breakdown...");
+
+                // PowerShell script to:
+                // 1. Get all user profile folders
+                // 2. For each user, get sizes of standard folders (Desktop, Documents, Downloads, Pictures, Videos, Music, etc.)
+                // 3. Exclude junction points and symbolic links
+                var powershellScript = @"
+                try {
+                    $usersPath = 'C:\Users'
+                    $results = @()
+                    
+                    # Standard Windows user folders to analyze
+                    $standardFolders = @('Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'AppData', 'OneDrive', 'Favorites', 'Saved Games', '.nuget', '.vscode')
+                    
+                    # Exclude system users and junction points
+                    $excludedUsers = @('Default', 'Default User', 'Public', 'All Users')
+                    
+                    # Get all user directories
+                    $userDirs = Get-ChildItem -Path $usersPath -Directory -Force -ErrorAction SilentlyContinue | 
+                        Where-Object { 
+                            $_.Name -notin $excludedUsers -and 
+                            -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+                            -not $_.Name.StartsWith('.')
+                        }
+                    
+                    foreach ($userDir in $userDirs) {
+                        $userName = $userDir.Name
+                        $userPath = $userDir.FullName
+                        
+                        # Calculate total user folder size first
+                        $totalUserSize = 0
+                        try {
+                            $files = Get-ChildItem -Path $userPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
+                                Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+                            $totalUserSize = ($files | Measure-Object -Property Length -Sum).Sum
+                            if ($totalUserSize -eq $null) { $totalUserSize = 0 }
+                        } catch { }
+                        
+                        # Output user entry marker
+                        ""USER|$userName|$userPath|$totalUserSize""
+                        
+                        # Get sizes for each standard folder
+                        foreach ($folderName in $standardFolders) {
+                            $folderPath = Join-Path -Path $userPath -ChildPath $folderName
+                            
+                            if (Test-Path -Path $folderPath -PathType Container) {
+                                # Skip if it's a junction point
+                                $folderItem = Get-Item -Path $folderPath -Force -ErrorAction SilentlyContinue
+                                if ($folderItem -and -not ($folderItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                                    try {
+                                        $files = Get-ChildItem -Path $folderPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
+                                            Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+                                        $size = ($files | Measure-Object -Property Length -Sum).Sum
+                                        if ($size -eq $null) { $size = 0 }
+                                        
+                                        # Only include if size > 1MB
+                                        if ($size -gt 1048576) {
+                                            ""FOLDER|$userName|$folderName|$folderPath|$size""
+                                        }
+                                    } catch { }
+                                }
+                            }
+                        }
+                        
+                        # Also check for large hidden folders like .cache, .npm, .cargo
+                        $hiddenFolders = @('.cache', '.npm', '.cargo', '.gradle', '.m2', '.docker', '.local')
+                        foreach ($folderName in $hiddenFolders) {
+                            $folderPath = Join-Path -Path $userPath -ChildPath $folderName
+                            
+                            if (Test-Path -Path $folderPath -PathType Container) {
+                                try {
+                                    $files = Get-ChildItem -Path $folderPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
+                                        Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+                                    $size = ($files | Measure-Object -Property Length -Sum).Sum
+                                    if ($size -eq $null) { $size = 0 }
+                                    
+                                    # Only include if size > 100MB (hidden folders with significant cache)
+                                    if ($size -gt 104857600) {
+                                        $displayName = $folderName.TrimStart('.')
+                                        ""FOLDER|$userName|$displayName (cache)|$folderPath|$size""
+                                    }
+                                } catch { }
+                            }
+                        }
+                    }
+                    
+                    # Also get Public folder size
+                    $publicPath = 'C:\Users\Public'
+                    if (Test-Path -Path $publicPath) {
+                        try {
+                            $files = Get-ChildItem -Path $publicPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
+                                Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+                            $size = ($files | Measure-Object -Property Length -Sum).Sum
+                            if ($size -eq $null) { $size = 0 }
+                            ""USER|Public|$publicPath|$size""
+                        } catch { }
+                    }
+                } catch {
+                    Write-Error ""Users analysis failed: $($_.Exception.Message)""
+                }";
+
+                var powershellOutput = await ExecutePowerShellScriptAsync(powershellScript);
+
+                if (string.IsNullOrWhiteSpace(powershellOutput))
+                {
+                    _logger.LogWarning("PowerShell Users analysis returned no results");
+                    return;
+                }
+
+                var userDirectories = new Dictionary<string, DirectoryInformation>();
+                var lines = powershellOutput.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var line in lines)
+                {
+                    if (line.StartsWith("WARNING:") || line.StartsWith("ERROR:") || string.IsNullOrWhiteSpace(line))
+                        continue;
+
+                    var parts = line.Split('|');
+                    if (parts.Length < 4)
+                        continue;
+
+                    var entryType = parts[0].Trim();
+                    var userName = parts[1].Trim();
+
+                    if (entryType == "USER")
+                    {
+                        var userPath = parts[2].Trim();
+                        if (long.TryParse(parts[3].Trim(), out var userSize))
+                        {
+                            var userDir = new DirectoryInformation
+                            {
+                                Name = userName,
+                                Path = userPath,
+                                Category = DirectoryCategory.Users,
+                                DriveRoot = "C:",
+                                Depth = 2,
+                                Size = userSize,
+                                FormattedSize = FormatDirectorySize(userSize),
+                                FileCount = 0,
+                                SubdirectoryCount = 0,
+                                PercentageOfDrive = storage.Capacity > 0 ? (double)userSize / storage.Capacity * 100 : 0,
+                                LastModified = DateTime.UtcNow,
+                                Subdirectories = new List<DirectoryInformation>()
+                            };
+
+                            userDirectories[userName] = userDir;
+                            var sizeGB = userSize / 1024.0 / 1024.0 / 1024.0;
+                            _logger.LogInformation("   [*] Found user directory: {Name} = {SizeGB:F2} GB", userName, sizeGB);
+                        }
+                    }
+                    else if (entryType == "FOLDER" && parts.Length >= 5)
+                    {
+                        var folderName = parts[2].Trim();
+                        var folderPath = parts[3].Trim();
+                        if (long.TryParse(parts[4].Trim(), out var folderSize) && userDirectories.ContainsKey(userName))
+                        {
+                            var category = DetermineUserFolderCategory(folderName);
+                            var folderDir = new DirectoryInformation
+                            {
+                                Name = folderName,
+                                Path = folderPath,
+                                Category = category,
+                                DriveRoot = "C:",
+                                Depth = 3,
+                                Size = folderSize,
+                                FormattedSize = FormatDirectorySize(folderSize),
+                                FileCount = 0,
+                                SubdirectoryCount = 0,
+                                PercentageOfDrive = storage.Capacity > 0 ? (double)folderSize / storage.Capacity * 100 : 0,
+                                LastModified = DateTime.UtcNow,
+                                Subdirectories = new List<DirectoryInformation>()
+                            };
+
+                            userDirectories[userName].Subdirectories.Add(folderDir);
+                            userDirectories[userName].SubdirectoryCount++;
+                            
+                            var sizeMB = folderSize / 1024.0 / 1024.0;
+                            _logger.LogDebug("      [>] {UserName}/{FolderName} = {SizeMB:F1} MB", userName, folderName, sizeMB);
+                        }
+                    }
+                }
+
+                if (userDirectories.Count > 0)
+                {
+                    // Calculate total Users directory size
+                    var totalUsersSize = CalculateDirectorySizeWithPowerShell("C:\\Users");
+                    
+                    // Sort subdirectories by size for each user
+                    foreach (var userDir in userDirectories.Values)
+                    {
+                        userDir.Subdirectories = userDir.Subdirectories.OrderByDescending(d => d.Size).ToList();
+                    }
+                    
+                    var usersRootDirectory = new DirectoryInformation
+                    {
+                        Name = "Users",
+                        Path = "C:\\Users",
+                        Category = DirectoryCategory.Users,
+                        DriveRoot = "C:",
+                        Depth = 2,
+                        Size = totalUsersSize > 0 ? totalUsersSize : userDirectories.Values.Sum(d => d.Size),
+                        FileCount = 0,
+                        SubdirectoryCount = userDirectories.Count,
+                        LastModified = DateTime.UtcNow,
+                        Subdirectories = userDirectories.Values.OrderByDescending(d => d.Size).ToList()
+                    };
+
+                    usersRootDirectory.FormattedSize = FormatDirectorySize(usersRootDirectory.Size);
+                    usersRootDirectory.PercentageOfDrive = CalculatePercentageOfDrive(usersRootDirectory.Size, storage.Capacity);
+
+                    storage.RootDirectories.Add(usersRootDirectory);
+                    var totalSizeGB = usersRootDirectory.Size / 1024.0 / 1024.0 / 1024.0;
+                    _logger.LogInformation("   [x] Added Users with {Count} user directories totaling {SizeGB:F1} GB with folder breakdown", 
+                        userDirectories.Count, totalSizeGB);
+                }
+                else
+                {
+                    _logger.LogWarning("No user directories found using PowerShell analysis");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in PowerShell Users folder breakdown analysis");
+            }
+        }
+
+        /// <summary>
+        /// Determine the category for a user folder based on its name
+        /// </summary>
+        private DirectoryCategory DetermineUserFolderCategory(string folderName)
+        {
+            var lowerName = folderName.ToLowerInvariant();
+            
+            if (lowerName.Contains("document") || lowerName.Contains("download") || 
+                lowerName.Contains("desktop") || lowerName.Contains("favorite"))
+                return DirectoryCategory.Documents;
+            
+            if (lowerName.Contains("picture") || lowerName.Contains("video") || 
+                lowerName.Contains("music") || lowerName.Contains("media"))
+                return DirectoryCategory.Media;
+            
+            if (lowerName.Contains("appdata") || lowerName.Contains("cache") || 
+                lowerName.Contains("temp") || lowerName.Contains("npm") || 
+                lowerName.Contains("nuget") || lowerName.Contains("cargo"))
+                return DirectoryCategory.Cache;
+            
+            if (lowerName.Contains("onedrive") || lowerName.Contains("dropbox") || 
+                lowerName.Contains("google"))
+                return DirectoryCategory.Documents;
+            
+            if (lowerName.Contains("saved game"))
+                return DirectoryCategory.Other;
+            
+            return DirectoryCategory.Users;
         }
     }
 }
