@@ -69,9 +69,9 @@
       "description": "Device encryption policy status"
     },
     "certificates": {
-      "query": "SELECT common_name, issuer, self_signed, not_valid_before, not_valid_after, signing_algorithm, key_algorithm, subject FROM certificates WHERE store_location = 'LocalMachine' AND store = 'My';",
+      "query": "SELECT common_name, issuer, self_signed, not_valid_before, not_valid_after, signing_algorithm, key_algorithm, key_strength, subject, serial, sha1 as thumbprint, store_location, store FROM certificates WHERE (store_location = 'LocalMachine' AND store IN ('My', 'Root', 'CA')) OR (store_location = 'CurrentUser' AND store = 'My') ORDER BY not_valid_after DESC;",
       "interval": 3600,
-      "description": "System certificates"
+      "description": "System and user certificates with validity information"
     },
     "security_events": {
       "query": "SELECT eventid, source, level, datetime, data FROM windows_events WHERE eventid IN (4624, 4625, 4648, 4719, 4720, 4722, 4723, 4724, 4725, 4726, 4727, 4728, 4729, 4730, 4731, 4732, 4733, 4734, 4735, 4737, 4738, 4739, 4740, 4741, 4742, 4743, 4756, 4757, 4758, 4764, 4765, 4766, 4767, 4768, 4769, 4770, 4771, 4772, 4776, 4777, 4778, 4779, 4781, 4793) AND datetime > datetime('now', '-24 hours');",

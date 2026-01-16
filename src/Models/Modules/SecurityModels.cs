@@ -18,7 +18,33 @@ namespace ReportMate.WindowsClient.Models.Modules
         public RdpInfo Rdp { get; set; } = new();
         public List<SecurityUpdate> SecurityUpdates { get; set; } = new();
         public List<SecurityEvent> SecurityEvents { get; set; } = new();
+        public List<CertificateInfo> Certificates { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
+    }
+
+    /// <summary>
+    /// Certificate information for system and user certificates
+    /// </summary>
+    public class CertificateInfo
+    {
+        public string CommonName { get; set; } = string.Empty;
+        public string Subject { get; set; } = string.Empty;
+        public string Issuer { get; set; } = string.Empty;
+        public string SerialNumber { get; set; } = string.Empty;
+        public string Thumbprint { get; set; } = string.Empty;
+        public string ThumbprintSha256 { get; set; } = string.Empty;
+        public string StoreLocation { get; set; } = string.Empty; // LocalMachine or CurrentUser
+        public string StoreName { get; set; } = string.Empty; // My, Root, CA, etc.
+        public DateTime? NotBefore { get; set; }
+        public DateTime? NotAfter { get; set; }
+        public string KeyAlgorithm { get; set; } = string.Empty;
+        public string SigningAlgorithm { get; set; } = string.Empty;
+        public int? KeyLength { get; set; }
+        public bool IsSelfSigned { get; set; }
+        public bool IsExpired { get; set; }
+        public bool IsExpiringSoon { get; set; } // Within 30 days
+        public int DaysUntilExpiry { get; set; }
+        public string Status { get; set; } = string.Empty; // Valid, Expired, ExpiringSoon
     }
 
     public class AntivirusInfo

@@ -71,8 +71,11 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process security events
             await ProcessSecurityEvents(osqueryResults, data);
 
-            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}", 
-                data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent);
+            // Process certificates
+            ProcessCertificates(osqueryResults, data);
+
+            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}, Certificates: {CertCount}", 
+                data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent, data.Certificates.Count);
 
             return data;
         }
@@ -1561,6 +1564,111 @@ try {
             {
                 _logger.LogWarning(ex, "Failed to collect RDP status");
             }
+        }
+
+        private void ProcessCertificates(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
+        {
+            if (!osqueryResults.TryGetValue("certificates", out var certificates) || certificates.Count == 0)
+            {
+                _logger.LogDebug("No certificate data available from osquery");
+                return;
+            }
+
+            _logger.LogDebug("Processing {Count} certificates", certificates.Count);
+
+            foreach (var cert in certificates)
+            {
+                try
+                {
+                    var certInfo = new CertificateInfo
+                    {
+                        CommonName = GetStringValue(cert, "common_name"),
+                        Subject = GetStringValue(cert, "subject"),
+                        Issuer = GetStringValue(cert, "issuer"),
+                        SerialNumber = GetStringValue(cert, "serial"),
+                        Thumbprint = GetStringValue(cert, "thumbprint"),
+                        StoreLocation = GetStringValue(cert, "store_location"),
+                        StoreName = GetStringValue(cert, "store"),
+                        KeyAlgorithm = GetStringValue(cert, "key_algorithm"),
+                        SigningAlgorithm = GetStringValue(cert, "signing_algorithm"),
+                        IsSelfSigned = GetStringValue(cert, "self_signed") == "1"
+                    };
+
+                    // Parse key strength
+                    var keyStrength = GetStringValue(cert, "key_strength");
+                    if (!string.IsNullOrEmpty(keyStrength) && int.TryParse(keyStrength, out var keyLen))
+                    {
+                        certInfo.KeyLength = keyLen;
+                    }
+
+                    // Parse dates - osquery returns Unix timestamps
+                    var notBefore = GetStringValue(cert, "not_valid_before");
+                    var notAfter = GetStringValue(cert, "not_valid_after");
+
+                    if (!string.IsNullOrEmpty(notBefore))
+                    {
+                        if (long.TryParse(notBefore, out var beforeTimestamp))
+                        {
+                            certInfo.NotBefore = DateTimeOffset.FromUnixTimeSeconds(beforeTimestamp).UtcDateTime;
+                        }
+                        else if (DateTime.TryParse(notBefore, out var beforeDate))
+                        {
+                            certInfo.NotBefore = beforeDate;
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(notAfter))
+                    {
+                        if (long.TryParse(notAfter, out var afterTimestamp))
+                        {
+                            certInfo.NotAfter = DateTimeOffset.FromUnixTimeSeconds(afterTimestamp).UtcDateTime;
+                        }
+                        else if (DateTime.TryParse(notAfter, out var afterDate))
+                        {
+                            certInfo.NotAfter = afterDate;
+                        }
+                    }
+
+                    // Calculate expiry status
+                    if (certInfo.NotAfter.HasValue)
+                    {
+                        var now = DateTime.UtcNow;
+                        var daysUntilExpiry = (certInfo.NotAfter.Value - now).Days;
+                        certInfo.DaysUntilExpiry = daysUntilExpiry;
+                        certInfo.IsExpired = daysUntilExpiry < 0;
+                        certInfo.IsExpiringSoon = daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
+
+                        if (certInfo.IsExpired)
+                        {
+                            certInfo.Status = "Expired";
+                        }
+                        else if (certInfo.IsExpiringSoon)
+                        {
+                            certInfo.Status = "ExpiringSoon";
+                        }
+                        else
+                        {
+                            certInfo.Status = "Valid";
+                        }
+                    }
+                    else
+                    {
+                        certInfo.Status = "Unknown";
+                    }
+
+                    data.Certificates.Add(certInfo);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to parse certificate");
+                }
+            }
+
+            _logger.LogInformation("Processed {Count} certificates - Expired: {Expired}, ExpiringSoon: {ExpiringSoon}, Valid: {Valid}",
+                data.Certificates.Count,
+                data.Certificates.Count(c => c.IsExpired),
+                data.Certificates.Count(c => c.IsExpiringSoon),
+                data.Certificates.Count(c => c.Status == "Valid"));
         }
     }
 }
