@@ -6,7 +6,9 @@ using System.Text.Json.Serialization;
 namespace ReportMate.WindowsClient.Models.Modules
 {
     /// <summary>
-    /// Base class for all peripheral module data
+    /// Base class for all peripheral module data - Full parity with macOS Swift implementation
+    /// Categories: USB, Input (keyboards/mice/trackpads/tablets), Audio, Bluetooth, Cameras, 
+    /// Thunderbolt, Printers, Scanners, External Storage, Serial Ports
     /// </summary>
     public class PeripheralsModuleData : BaseModuleData
     {
@@ -33,6 +35,15 @@ namespace ReportMate.WindowsClient.Models.Modules
 
         [JsonPropertyName("storageDevices")]
         public StorageDeviceInfo? StorageDevices { get; set; }
+
+        [JsonPropertyName("thunderboltDevices")]
+        public ThunderboltDeviceInfo? ThunderboltDevices { get; set; }
+
+        [JsonPropertyName("scanners")]
+        public ScannerDeviceInfo? Scanners { get; set; }
+
+        [JsonPropertyName("serialPorts")]
+        public SerialPortInfo? SerialPorts { get; set; }
     }
 
     /// <summary>
@@ -165,15 +176,12 @@ namespace ReportMate.WindowsClient.Models.Modules
     }
 
     /// <summary>
-    /// Printer device information
+    /// Printer device information - Enhanced to match macOS parity
     /// </summary>
     public class PeripheralPrinterInfo
     {
         [JsonPropertyName("installedPrinters")]
         public List<PeripheralInstalledPrinter>? InstalledPrinters { get; set; }
-
-        [JsonPropertyName("registryPrinters")]
-        public List<PeripheralRegistryPrinter>? RegistryPrinters { get; set; }
     }
 
     public class PeripheralInstalledPrinter
@@ -181,8 +189,23 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("name")]
         public string? Name { get; set; }
 
+        [JsonPropertyName("displayName")]
+        public string? DisplayName { get; set; }
+
+        [JsonPropertyName("manufacturer")]
+        public string? Manufacturer { get; set; }
+
+        [JsonPropertyName("model")]
+        public string? Model { get; set; }
+
         [JsonPropertyName("driver")]
         public string? Driver { get; set; }
+
+        [JsonPropertyName("driverVersion")]
+        public string? DriverVersion { get; set; }
+
+        [JsonPropertyName("portName")]
+        public string? PortName { get; set; }
 
         [JsonPropertyName("location")]
         public string? Location { get; set; }
@@ -193,20 +216,26 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("shareName")]
         public string? ShareName { get; set; }
 
-        [JsonPropertyName("attributes")]
-        public string? Attributes { get; set; }
-    }
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
 
-    public class PeripheralRegistryPrinter
-    {
-        [JsonPropertyName("path")]
-        public string? Path { get; set; }
+        [JsonPropertyName("isDefault")]
+        public bool IsDefault { get; set; }
 
-        [JsonPropertyName("name")]
-        public string? Name { get; set; }
+        [JsonPropertyName("isShared")]
+        public bool IsShared { get; set; }
 
-        [JsonPropertyName("data")]
-        public string? Data { get; set; }
+        [JsonPropertyName("isNetwork")]
+        public bool IsNetwork { get; set; }
+
+        [JsonPropertyName("serverName")]
+        public string? ServerName { get; set; }
+
+        [JsonPropertyName("comment")]
+        public string? Comment { get; set; }
+
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; } = "Printer";
     }
 
     /// <summary>
@@ -264,7 +293,7 @@ namespace ReportMate.WindowsClient.Models.Modules
     }
 
     /// <summary>
-    /// Input device information
+    /// Input device information - Enhanced to match macOS parity
     /// </summary>
     public class InputDeviceInfo
     {
@@ -274,14 +303,29 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("mice")]
         public List<InputDevice>? Mice { get; set; }
 
+        [JsonPropertyName("trackpads")]
+        public List<InputDevice>? Trackpads { get; set; }
+
+        [JsonPropertyName("tablets")]
+        public List<GraphicsTablet>? Tablets { get; set; }
+
         [JsonPropertyName("otherInput")]
         public List<InputDevice>? OtherInput { get; set; }
     }
 
     public class InputDevice
     {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
         [JsonPropertyName("description")]
         public string? Description { get; set; }
+
+        [JsonPropertyName("vendor")]
+        public string? Vendor { get; set; }
+
+        [JsonPropertyName("vendorId")]
+        public string? VendorId { get; set; }
 
         [JsonPropertyName("registryPath")]
         public string? RegistryPath { get; set; }
@@ -291,10 +335,16 @@ namespace ReportMate.WindowsClient.Models.Modules
 
         [JsonPropertyName("hidDeviceId")]
         public string? HidDeviceId { get; set; }
+
+        [JsonPropertyName("isBuiltIn")]
+        public bool IsBuiltIn { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
     }
 
     /// <summary>
-    /// Audio device information
+    /// Audio device information - Enhanced to match macOS parity
     /// </summary>
     public class AudioDeviceInfo
     {
@@ -307,18 +357,39 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("name")]
         public string? Name { get; set; }
 
-        [JsonPropertyName("data")]
-        public string? Data { get; set; }
+        [JsonPropertyName("manufacturer")]
+        public string? Manufacturer { get; set; }
+
+        [JsonPropertyName("type")]
+        public string? Type { get; set; }
+
+        [JsonPropertyName("isDefault")]
+        public bool IsDefault { get; set; }
+
+        [JsonPropertyName("isInput")]
+        public bool IsInput { get; set; }
+
+        [JsonPropertyName("isOutput")]
+        public bool IsOutput { get; set; }
+
+        [JsonPropertyName("isBuiltIn")]
+        public bool IsBuiltIn { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; } = "Audio Device";
+
+        [JsonPropertyName("status")]
+        public string? Status { get; set; }
 
         [JsonPropertyName("registryPath")]
         public string? RegistryPath { get; set; }
-
-        [JsonPropertyName("deviceType")]
-        public string? DeviceType { get; set; }
     }
 
     /// <summary>
-    /// Bluetooth device information
+    /// Bluetooth device information - Enhanced to match macOS parity
     /// </summary>
     public class BluetoothDeviceInfo
     {
@@ -337,17 +408,29 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("deviceType")]
         public string? DeviceType { get; set; }
 
-        [JsonPropertyName("connected")]
-        public bool Connected { get; set; }
+        [JsonPropertyName("deviceCategory")]
+        public string? DeviceCategory { get; set; }
+
+        [JsonPropertyName("isConnected")]
+        public bool IsConnected { get; set; }
+
+        [JsonPropertyName("isPaired")]
+        public bool IsPaired { get; set; }
+
+        [JsonPropertyName("manufacturer")]
+        public string? Manufacturer { get; set; }
+
+        [JsonPropertyName("lastSeen")]
+        public string? LastSeen { get; set; }
     }
 
     /// <summary>
-    /// Camera and imaging device information
+    /// Camera and imaging device information - Enhanced to match macOS parity
     /// </summary>
     public class CameraDeviceInfo
     {
-        [JsonPropertyName("imagingDevices")]
-        public List<CameraDevice>? ImagingDevices { get; set; }
+        [JsonPropertyName("cameras")]
+        public List<CameraDevice>? Cameras { get; set; }
     }
 
     public class CameraDevice
@@ -355,14 +438,26 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("name")]
         public string? Name { get; set; }
 
-        [JsonPropertyName("data")]
-        public string? Data { get; set; }
+        [JsonPropertyName("manufacturer")]
+        public string? Manufacturer { get; set; }
+
+        [JsonPropertyName("modelId")]
+        public string? ModelId { get; set; }
+
+        [JsonPropertyName("isBuiltIn")]
+        public bool IsBuiltIn { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; } = "Camera";
+
+        [JsonPropertyName("status")]
+        public string? Status { get; set; }
 
         [JsonPropertyName("registryPath")]
         public string? RegistryPath { get; set; }
-
-        [JsonPropertyName("deviceType")]
-        public string? DeviceType { get; set; }
     }
 
     /// <summary>
@@ -370,28 +465,157 @@ namespace ReportMate.WindowsClient.Models.Modules
     /// </summary>
     public class StorageDeviceInfo
     {
-        [JsonPropertyName("logicalDrives")]
-        public List<LogicalDrive>? LogicalDrives { get; set; }
+        [JsonPropertyName("externalDrives")]
+        public List<ExternalDrive>? ExternalDrives { get; set; }
     }
 
-    public class LogicalDrive
+    public class ExternalDrive
     {
-        [JsonPropertyName("device")]
-        public string? Device { get; set; }
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("devicePath")]
+        public string? DevicePath { get; set; }
+
+        [JsonPropertyName("volumeName")]
+        public string? VolumeName { get; set; }
+
+        [JsonPropertyName("fileSystem")]
+        public string? FileSystem { get; set; }
+
+        [JsonPropertyName("totalSize")]
+        public string? TotalSize { get; set; }
+
+        [JsonPropertyName("freeSpace")]
+        public string? FreeSpace { get; set; }
+
+        [JsonPropertyName("serialNumber")]
+        public string? SerialNumber { get; set; }
+
+        [JsonPropertyName("driveType")]
+        public string? DriveType { get; set; }
+
+        [JsonPropertyName("storageType")]
+        public string? StorageType { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; } = "External Storage";
+    }
+
+    /// <summary>
+    /// Thunderbolt device information
+    /// </summary>
+    public class ThunderboltDeviceInfo
+    {
+        [JsonPropertyName("devices")]
+        public List<ThunderboltDevice>? Devices { get; set; }
+    }
+
+    public class ThunderboltDevice
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("vendor")]
+        public string? Vendor { get; set; }
 
         [JsonPropertyName("deviceId")]
         public string? DeviceId { get; set; }
 
-        [JsonPropertyName("label")]
-        public string? Label { get; set; }
+        [JsonPropertyName("uid")]
+        public string? Uid { get; set; }
 
-        [JsonPropertyName("type")]
-        public string? Type { get; set; }
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; }
 
-        [JsonPropertyName("size")]
-        public long Size { get; set; }
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; } = "Thunderbolt";
+    }
 
-        [JsonPropertyName("encrypted")]
-        public bool Encrypted { get; set; }
+    /// <summary>
+    /// Scanner device information
+    /// </summary>
+    public class ScannerDeviceInfo
+    {
+        [JsonPropertyName("devices")]
+        public List<ScannerDevice>? Devices { get; set; }
+    }
+
+    public class ScannerDevice
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("manufacturer")]
+        public string? Manufacturer { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("status")]
+        public string? Status { get; set; }
+
+        [JsonPropertyName("scannerType")]
+        public string? ScannerType { get; set; }
+
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; } = "Scanner";
+    }
+
+    /// <summary>
+    /// Serial port information
+    /// </summary>
+    public class SerialPortInfo
+    {
+        [JsonPropertyName("ports")]
+        public List<SerialPort>? Ports { get; set; }
+    }
+
+    public class SerialPort
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("device")]
+        public string? Device { get; set; }
+
+        [JsonPropertyName("portType")]
+        public string? PortType { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; } = "Serial Port";
+    }
+
+    /// <summary>
+    /// Graphics tablet information (Wacom, Huion, XP-Pen)
+    /// </summary>
+    public class GraphicsTablet
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("vendor")]
+        public string? Vendor { get; set; }
+
+        [JsonPropertyName("vendorId")]
+        public string? VendorId { get; set; }
+
+        [JsonPropertyName("productId")]
+        public string? ProductId { get; set; }
+
+        [JsonPropertyName("connectionType")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("tabletType")]
+        public string? TabletType { get; set; }
+
+        [JsonPropertyName("deviceType")]
+        public string? DeviceType { get; set; } = "Graphics Tablet";
     }
 }
