@@ -1,77 +1,102 @@
 {
   "module": "peripherals",
-  "version": "1.0.0",
-  "description": "Comprehensive peripheral device information collection focusing on external monitors, printers, input devices, and USB devices for inventory purposes",
+  "version": "2.0.0",
+  "description": "Comprehensive peripheral device collection - Full parity with macOS Swift implementation",
   "queries": {
     "external_monitors_device_desc": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\', ''), '\\DeviceDesc', '') as pnp_device_id, data as friendly_name, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\%\\%\\DeviceDesc' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\', ''), '\\\\DeviceDesc', '') as pnp_device_id, data as friendly_name, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\%\\\\%\\\\DeviceDesc' AND data != '';",
       "interval": 3600,
       "description": "External monitor device descriptions with parsed PnP IDs"
     },
     "external_monitors_hardware_ids": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\', ''), '\\HardwareID', '') as pnp_device_id, data as hardware_id, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\%\\%\\HardwareID' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\', ''), '\\\\HardwareID', '') as pnp_device_id, data as hardware_id, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\%\\\\%\\\\HardwareID' AND data != '';",
       "interval": 3600,
       "description": "External monitor hardware IDs with parsed PnP IDs"
     },
     "external_monitors_class": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\', ''), '\\Class', '') as pnp_device_id, data as class, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\%\\%\\Class' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\', ''), '\\\\Class', '') as pnp_device_id, data as class, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\%\\\\%\\\\Class' AND data != '';",
       "interval": 3600,
       "description": "External monitor device class information with parsed PnP IDs"
     },
     "external_monitors_service": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\', ''), '\\Service', '') as pnp_device_id, data as service, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\%\\%\\Service' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\', ''), '\\\\Service', '') as pnp_device_id, data as service, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\DISPLAY\\\\%\\\\%\\\\Service' AND data != '';",
       "interval": 3600,
       "description": "External monitor service information with parsed PnP IDs"
     },
     "printers_registry": {
-      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\', '') as printer_name, 'PrinterName' as name, data as data, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%' AND name = 'Name' AND data NOT LIKE '%Microsoft Print to PDF%' AND data NOT LIKE '%Microsoft XPS Document Writer%' AND data NOT LIKE '%Fax%' AND data != '';",
+      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Print\\\\Printers\\\\', '') as printer_name, name, data, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Print\\\\Printers\\\\%' AND name IN ('Name', 'Printer Driver', 'Port', 'Share Name', 'Location', 'Description') AND data != '';",
       "interval": 3600,
-      "description": "Real printer names from registry (excluding virtual printers)"
-    },
-    "printers_drivers": {
-      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\', '') as printer_name, 'DriverName' as name, data as driver_name, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\%' AND name = 'Printer Driver' AND data != '';",
-      "interval": 3600,
-      "description": "Printer driver information from registry"
+      "description": "Printer information from registry"
     },
     "usb_device_registry": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USB\\', ''), '\\DeviceDesc', '') as usb_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USB\\%\\%\\DeviceDesc' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\', ''), '\\\\DeviceDesc', '') as usb_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\%\\\\%\\\\DeviceDesc' AND data != '';",
       "interval": 3600,
       "description": "USB device descriptions with parsed device IDs"
     },
     "usb_device_hardware_ids": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USB\\', ''), '\\HardwareID', '') as usb_device_id, data as hardware_id, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USB\\%\\%\\HardwareID' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\', ''), '\\\\HardwareID', '') as usb_device_id, data as hardware_id, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\%\\\\%\\\\HardwareID' AND data != '';",
       "interval": 3600,
       "description": "USB device hardware IDs with parsed device IDs"
     },
     "input_devices_keyboards": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\HID\\', ''), '\\DeviceDesc', '') as hid_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\HID\\%\\%\\DeviceDesc' AND LOWER(data) LIKE '%keyboard%' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\', ''), '\\\\DeviceDesc', '') as hid_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\%\\\\%\\\\DeviceDesc' AND LOWER(data) LIKE '%keyboard%' AND data != '';",
       "interval": 3600,
       "description": "Connected keyboard devices from HID enumeration"
     },
     "input_devices_mice": {
-      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\HID\\', ''), '\\DeviceDesc', '') as hid_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\HID\\%\\%\\DeviceDesc' AND LOWER(data) LIKE '%mouse%' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\', ''), '\\\\DeviceDesc', '') as hid_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\%\\\\%\\\\DeviceDesc' AND LOWER(data) LIKE '%mouse%' AND data != '';",
       "interval": 3600,
       "description": "Connected mouse and pointing devices from HID enumeration"
     },
-    "audio_devices": {
-      "query": "SELECT path, name, data as device_info FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\%' AND data != '';",
+    "input_devices_trackpads": {
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\', ''), '\\\\DeviceDesc', '') as hid_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\%\\\\%\\\\DeviceDesc' AND (LOWER(data) LIKE '%trackpad%' OR LOWER(data) LIKE '%touchpad%' OR LOWER(data) LIKE '%precision%') AND data != '';",
       "interval": 3600,
-      "description": "Audio input and output devices"
+      "description": "Connected trackpad and touchpad devices from HID enumeration"
+    },
+    "input_devices_tablets": {
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\', ''), '\\\\DeviceDesc', '') as hid_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\HID\\\\%\\\\%\\\\DeviceDesc' AND (LOWER(data) LIKE '%wacom%' OR LOWER(data) LIKE '%huion%' OR LOWER(data) LIKE '%xp-pen%' OR LOWER(data) LIKE '%intuos%' OR LOWER(data) LIKE '%cintiq%' OR LOWER(data) LIKE '%bamboo%') AND data != '';",
+      "interval": 3600,
+      "description": "Connected graphics tablets from HID enumeration"
+    },
+    "audio_devices_render": {
+      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\MMDevices\\\\Audio\\\\Render\\\\', '') as device_id, name, data as device_info, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\MMDevices\\\\Audio\\\\Render\\\\%\\\\Properties\\\\%' AND name LIKE '%FriendlyName%' AND data != '';",
+      "interval": 3600,
+      "description": "Audio output (render) devices"
+    },
+    "audio_devices_capture": {
+      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\MMDevices\\\\Audio\\\\Capture\\\\', '') as device_id, name, data as device_info, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\MMDevices\\\\Audio\\\\Capture\\\\%\\\\Properties\\\\%' AND name LIKE '%FriendlyName%' AND data != '';",
+      "interval": 3600,
+      "description": "Audio input (capture) devices"
     },
     "bluetooth_devices": {
-      "query": "SELECT path, name, data as device_info FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices\\%' AND data != '';",
+      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\BTHPORT\\\\Parameters\\\\Devices\\\\', '') as device_address, name, data as device_info, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Services\\\\BTHPORT\\\\Parameters\\\\Devices\\\\%' AND name IN ('Name', 'Manufacturer', 'ClassOfDevice') AND data != '';",
       "interval": 3600,
-      "description": "Paired Bluetooth devices"
+      "description": "Paired Bluetooth devices with name and manufacturer"
     },
     "camera_devices": {
-      "query": "SELECT path, name, data as device_info FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\DeviceClasses\\{65e8773d-8f56-11d0-a3b9-00a0c9223196}\\%' AND data != '';",
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\', ''), '\\\\DeviceDesc', '') as device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\%\\\\%\\\\DeviceDesc' AND (LOWER(data) LIKE '%camera%' OR LOWER(data) LIKE '%webcam%' OR LOWER(data) LIKE '%imaging%') AND data != '';",
       "interval": 3600,
-      "description": "Camera and imaging devices"
+      "description": "Camera and webcam devices from USB enumeration"
     },
-    "storage_devices": {
-      "query": "SELECT path, name, data as device_info FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\USBSTOR\\%\\%\\DeviceDesc' AND data != '';",
+    "storage_devices_usbstor": {
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USBSTOR\\\\', ''), '\\\\FriendlyName', '') as device_id, data as device_name, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USBSTOR\\\\%\\\\%\\\\FriendlyName' AND data != '';",
       "interval": 3600,
-      "description": "USB storage devices from registry enumeration"
+      "description": "USB storage devices from USBSTOR enumeration"
+    },
+    "thunderbolt_devices": {
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\PCI\\\\', ''), '\\\\DeviceDesc', '') as device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\PCI\\\\%\\\\%\\\\DeviceDesc' AND (LOWER(data) LIKE '%thunderbolt%' OR LOWER(data) LIKE '%usb4%') AND data != '';",
+      "interval": 3600,
+      "description": "Thunderbolt and USB4 devices from PCI enumeration"
+    },
+    "scanner_devices": {
+      "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\', ''), '\\\\DeviceDesc', '') as device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\%\\\\%\\\\DeviceDesc' AND (LOWER(data) LIKE '%scanner%' OR LOWER(data) LIKE '%mfp%' OR LOWER(data) LIKE '%multifunction%') AND data != '';",
+      "interval": 3600,
+      "description": "Scanner devices from USB enumeration"
+    },
+    "serial_ports": {
+      "query": "SELECT name as port_name, data as device_path, path as registry_path FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\\\HARDWARE\\\\DEVICEMAP\\\\SERIALCOMM' AND data != '';",
+      "interval": 3600,
+      "description": "Serial/COM ports from SERIALCOMM registry"
     }
   }
 }
