@@ -223,6 +223,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public bool HasInstallLoop { get; set; }
         public string LastError { get; set; } = string.Empty;
         public string LastWarning { get; set; } = string.Empty;
+        public string PendingReason { get; set; } = string.Empty;  // Why the package is pending (e.g., "Update available", "Not yet installed", "Skipped")
         public string InstallMethod { get; set; } = string.Empty;
         public string Type { get; set; } = string.Empty;
         public List<Dictionary<string, object>> RecentAttempts { get; set; } = new();
