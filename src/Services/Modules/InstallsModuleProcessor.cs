@@ -1081,19 +1081,32 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     foreach (var package in packages ?? new())
                     {
+                        var originalStatus = package.GetValueOrDefault("status", "Unknown").ToString() ?? "Unknown";
+                        var latestVersion = package.GetValueOrDefault("latestVersion", "Unknown").ToString() ?? "Unknown";
+                        var installedVersion = package.GetValueOrDefault("version", "Unknown").ToString() ?? "Unknown";
+                        
                         var item = new CimianItem
                         {
                             ItemName = package.GetValueOrDefault("name", "Unknown").ToString() ?? "Unknown",
-                            InstalledVersion = package.GetValueOrDefault("version", "Unknown").ToString() ?? "Unknown", 
-                            LatestVersion = package.GetValueOrDefault("latestVersion", "Unknown").ToString() ?? "Unknown",
-                            CurrentStatus = package.GetValueOrDefault("status", "Unknown").ToString() ?? "Unknown",
+                            InstalledVersion = installedVersion, 
+                            LatestVersion = latestVersion,
+                            CurrentStatus = originalStatus,
                             LastUpdate = package.ContainsKey("lastUpdate") && DateTime.TryParse(package["lastUpdate"].ToString(), out var lastUpdate) ? lastUpdate : DateTime.UtcNow,
                             InstallCount = 0,
                             UpdateCount = 0,
                             FailureCount = 0,
                             LastSeenInSession = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffK"),
-                            Type = "cimian"
+                            Type = "cimian",
+                            PendingReason = package.GetValueOrDefault("pendingReason", "").ToString() ?? ""
                         };
+                        
+                        // Derive PendingReason if status is Pending and reason not provided
+                        if ((originalStatus.Equals("Pending", StringComparison.OrdinalIgnoreCase) || 
+                             (latestVersion != installedVersion && installedVersion != "Unknown")) && 
+                            string.IsNullOrEmpty(item.PendingReason))
+                        {
+                            item.PendingReason = DerivePendingReason(item, originalStatus);
+                        }
                         
                         data.Cimian.Items.Add(item);
                     }
@@ -1223,7 +1236,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         InstalledVersion = GetDictValue(itemDict, "installed_version"),
                         LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session"),
                         LastError = GetDictValue(itemDict, "last_error") ?? string.Empty, // Error messages
-                        LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty // Warning messages
+                        LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty, // Warning messages
+                        PendingReason = GetDictValue(itemDict, "pending_reason") ?? string.Empty // Pending reason from Cimian
                     };
 
                     // Clean status mapping for Cimian - PRIORITIZE FAILURE STATES
@@ -1282,6 +1296,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                     // CRITICAL FIX: Store mapped status separately, preserve original CurrentStatus
                     item.MappedStatus = mappedStatus;  // Simplified for filtering: Failed/Pending/Warning/Installed/Unknown
                     // item.CurrentStatus already contains original: Error/Install Loop/Not Available/Warning/Pending/Installed
+                    
+                    // Derive PendingReason if not provided by Cimian and status is Pending
+                    if (mappedStatus == "Pending" && string.IsNullOrEmpty(item.PendingReason))
+                    {
+                        item.PendingReason = DerivePendingReason(item, originalStatus);
+                    }
+                    
                     data.Cimian.Items.Add(item);
                 }
 
@@ -1330,6 +1351,59 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Status should be: Installed (versions match), Pending (update available), or Error (current failures)
             // Historical warnings should not change a correctly "Installed" package to "Warning"
             return false;
+        }
+
+        /// <summary>
+        /// Derives a human-readable pending reason based on the item's status and version information.
+        /// This provides context for why a package is pending installation/update.
+        /// </summary>
+        private string DerivePendingReason(CimianItem item, string? originalStatus)
+        {
+            // Check if there's a version mismatch indicating an update
+            if (!string.IsNullOrEmpty(item.InstalledVersion) && !string.IsNullOrEmpty(item.LatestVersion))
+            {
+                if (item.InstalledVersion != item.LatestVersion)
+                {
+                    return $"Update available: {item.InstalledVersion} → {item.LatestVersion}";
+                }
+            }
+            
+            // Check original Cimian status for context
+            if (!string.IsNullOrEmpty(originalStatus))
+            {
+                switch (originalStatus.ToLowerInvariant())
+                {
+                    case "not available":
+                    case "not_available":
+                    case "notavailable":
+                        return "Package metadata not available on server";
+                    case "skipped":
+                        return "Installation was skipped";
+                    case "pending":
+                        if (string.IsNullOrEmpty(item.InstalledVersion))
+                            return "Not yet installed";
+                        return "Pending next run";
+                    case "downloading":
+                        return "Download in progress";
+                    case "queued":
+                        return "Queued for installation";
+                    case "scheduled":
+                        return "Scheduled for maintenance window";
+                    case "user deferred":
+                    case "userdeferred":
+                    case "user_deferred":
+                        return "User deferred installation";
+                }
+            }
+            
+            // If no installed version, it's a new install
+            if (string.IsNullOrEmpty(item.InstalledVersion))
+            {
+                return "Not yet installed";
+            }
+            
+            // Default reason
+            return "Awaiting next scheduled run";
         }
 
         private void ProcessCacheStatus(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
@@ -2138,8 +2212,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                         InstallMethod = GetDictValue(item, "install_method"),
                         Type = GetDictValue(item, "type"),
                         LastError = GetDictValue(item, "last_error") ?? string.Empty, // Error messages for failed installs
-                        LastWarning = GetDictValue(item, "last_warning") ?? string.Empty // Warning messages for install loops
+                        LastWarning = GetDictValue(item, "last_warning") ?? string.Empty, // Warning messages for install loops
+                        PendingReason = GetDictValue(item, "pending_reason") ?? string.Empty // Pending reason from Cimian
                     };
+                    
+                    // Derive PendingReason if not provided by Cimian and status is Pending
+                    if (mappedStatus == "Pending" && string.IsNullOrEmpty(cimianItem.PendingReason))
+                    {
+                        cimianItem.PendingReason = DerivePendingReason(cimianItem, originalCimianStatus);
+                    }
 
                     // Parse timestamps
                     if (item.TryGetValue("last_successful_time", out var lastSuccessObj) && 
