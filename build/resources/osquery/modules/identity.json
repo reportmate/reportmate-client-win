@@ -1,0 +1,97 @@
+{
+  "module": "identity",
+  "version": "1.0.0",
+  "description": "User accounts, groups, sessions, and login history",
+  "queries": {
+    "users": {
+      "query": "SELECT uid, gid, username, description, directory, shell, uuid, type FROM users WHERE uid >= 500 AND uid < 65534;",
+      "interval": 600,
+      "description": "Local user accounts (excluding system accounts)"
+    },
+    "users_extended": {
+      "query": "SELECT u.uid, u.gid, u.username, u.description, u.directory, u.shell, u.uuid, u.type, sid.sid as user_sid FROM users u LEFT JOIN user_sids sid ON u.uid = sid.uid WHERE u.uid >= 500 AND u.uid < 65534;",
+      "interval": 600,
+      "description": "Extended user information with SID"
+    },
+    "groups": {
+      "query": "SELECT gid, groupname, group_sid, comment FROM groups;",
+      "interval": 3600,
+      "description": "Local groups"
+    },
+    "user_groups": {
+      "query": "SELECT uid, gid FROM user_groups;",
+      "interval": 3600,
+      "description": "User to group membership mapping"
+    },
+    "logged_in_users": {
+      "query": "SELECT user, tty, host, time, pid, type FROM logged_in_users;",
+      "interval": 300,
+      "description": "Currently logged-in user sessions"
+    },
+    "logon_sessions": {
+      "query": "SELECT logon_id, user, logon_domain, authentication_package, logon_type, session_id, logon_time FROM logon_sessions WHERE user != '' AND user NOT LIKE '%$';",
+      "interval": 300,
+      "description": "Windows logon sessions"
+    },
+    "last_login": {
+      "query": "SELECT username, tty, pid, type, time FROM last WHERE username != '' AND username != 'reboot' AND username != 'shutdown' ORDER BY time DESC LIMIT 50;",
+      "interval": 1800,
+      "description": "Recent login history"
+    },
+    "admin_group_members": {
+      "query": "SELECT u.username, u.uid, g.groupname, g.gid FROM users u INNER JOIN user_groups ug ON u.uid = ug.uid INNER JOIN groups g ON ug.gid = g.gid WHERE g.groupname = 'Administrators' OR g.groupname = 'Domain Admins' OR g.groupname = 'Local Administrators';",
+      "interval": 3600,
+      "description": "Members of administrator groups"
+    },
+    "rdp_users": {
+      "query": "SELECT u.username, u.uid, g.groupname FROM users u INNER JOIN user_groups ug ON u.uid = ug.uid INNER JOIN groups g ON ug.gid = g.gid WHERE g.groupname = 'Remote Desktop Users';",
+      "interval": 3600,
+      "description": "Members of Remote Desktop Users group"
+    },
+    "user_sids": {
+      "query": "SELECT uid, username, uuid, sid FROM user_sids WHERE uid >= 500 AND uid < 65534;",
+      "interval": 3600,
+      "description": "User security identifiers"
+    },
+    "autologin_config": {
+      "query": "SELECT path, name, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' AND name IN ('AutoAdminLogon', 'DefaultUserName', 'DefaultDomainName');",
+      "interval": 3600,
+      "description": "Auto-login configuration"
+    },
+    "password_policy": {
+      "query": "SELECT path, name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters\\%' OR (path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\%' AND name IN ('PasswordExpiryWarning', 'CachedLogonsCount'));",
+      "interval": 3600,
+      "description": "Password policy settings"
+    },
+    "local_account_policy": {
+      "query": "SELECT path, name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SAM\\SAM\\Domains\\Account\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\%';",
+      "interval": 3600,
+      "description": "Local account policy settings"
+    },
+    "domain_join_status": {
+      "query": "SELECT path, name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\%' AND name IN ('Domain', 'Hostname', 'NV Domain', 'NV Hostname');",
+      "interval": 3600,
+      "description": "Domain join status"
+    },
+    "user_account_creation_events": {
+      "query": "SELECT eventid, datetime, source, data FROM windows_events WHERE eventid IN (4720, 4722, 4725, 4726, 4738, 4740) AND datetime > datetime('now', '-7 days') ORDER BY datetime DESC LIMIT 50;",
+      "interval": 1800,
+      "description": "Recent user account creation and modification events"
+    },
+    "logon_events": {
+      "query": "SELECT eventid, datetime, source, data FROM windows_events WHERE eventid IN (4624, 4625, 4634, 4647, 4648) AND datetime > datetime('now', '-24 hours') ORDER BY datetime DESC LIMIT 100;",
+      "interval": 900,
+      "description": "Recent logon and logoff events"
+    },
+    "failed_logon_events": {
+      "query": "SELECT eventid, datetime, source, data FROM windows_events WHERE eventid = 4625 AND datetime > datetime('now', '-7 days') ORDER BY datetime DESC LIMIT 50;",
+      "interval": 1800,
+      "description": "Failed logon attempts in last 7 days"
+    },
+    "special_logon_events": {
+      "query": "SELECT eventid, datetime, source, data FROM windows_events WHERE eventid IN (4672, 4673, 4674) AND datetime > datetime('now', '-24 hours') ORDER BY datetime DESC LIMIT 50;",
+      "interval": 1800,
+      "description": "Special privilege logon events"
+    }
+  }
+}
