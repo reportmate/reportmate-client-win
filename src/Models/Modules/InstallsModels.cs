@@ -226,6 +226,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string PendingReason { get; set; } = string.Empty;  // Why the package is pending (e.g., "Update available", "Not yet installed", "Skipped")
         public string InstallMethod { get; set; } = string.Empty;
         public string Type { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;       // Category from pkgsinfo (e.g., "Management", "Drivers", "Utilities")
+        public string Developer { get; set; } = string.Empty;      // Developer from pkgsinfo
         public List<Dictionary<string, object>> RecentAttempts { get; set; } = new();
     }
 

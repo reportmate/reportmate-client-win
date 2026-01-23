@@ -2213,7 +2213,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Type = GetDictValue(item, "type"),
                         LastError = GetDictValue(item, "last_error") ?? string.Empty, // Error messages for failed installs
                         LastWarning = GetDictValue(item, "last_warning") ?? string.Empty, // Warning messages for install loops
-                        PendingReason = GetDictValue(item, "pending_reason") ?? string.Empty // Pending reason from Cimian
+                        PendingReason = GetDictValue(item, "pending_reason") ?? string.Empty, // Pending reason from Cimian
+                        Category = GetDictValue(item, "category") ?? string.Empty, // Category from pkgsinfo
+                        Developer = GetDictValue(item, "developer") ?? string.Empty // Developer from pkgsinfo
                     };
                     
                     // Derive PendingReason if not provided by Cimian and status is Pending
