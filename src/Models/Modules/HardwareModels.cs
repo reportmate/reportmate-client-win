@@ -62,6 +62,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public long FreeSpace { get; set; } // bytes
         public string Interface { get; set; } = string.Empty; // SATA, PCIe, etc.
         public string Health { get; set; } = string.Empty;
+        public bool IsInternal { get; set; } = true; // Internal vs external/removable drive
         
         // Storage Management - Directory-level analysis
         public List<DirectoryInformation> RootDirectories { get; set; } = new();
