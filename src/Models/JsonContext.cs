@@ -85,6 +85,27 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(ProfilesData))]
 [JsonSerializable(typeof(SecurityData), TypeInfoPropertyName = "ModularSecurityData")]
 [JsonSerializable(typeof(SystemData))]
+// Identity module types
+[JsonSerializable(typeof(IdentityData))]
+[JsonSerializable(typeof(Modules.UserAccount))]
+[JsonSerializable(typeof(Modules.GroupInfo))]
+[JsonSerializable(typeof(Modules.LoggedInUser))]
+[JsonSerializable(typeof(Modules.LoginHistoryEntry))]
+[JsonSerializable(typeof(Modules.DirectoryServicesInfo))]
+[JsonSerializable(typeof(Modules.ActiveDirectoryInfo))]
+[JsonSerializable(typeof(Modules.AzureAdInfo))]
+[JsonSerializable(typeof(Modules.IdentitySummary))]
+[JsonSerializable(typeof(List<Modules.UserAccount>))]
+[JsonSerializable(typeof(List<Modules.GroupInfo>))]
+[JsonSerializable(typeof(List<Modules.LoggedInUser>))]
+[JsonSerializable(typeof(List<Modules.LoginHistoryEntry>))]
+// Security module certificate types
+[JsonSerializable(typeof(Modules.CertificateInfo))]
+[JsonSerializable(typeof(List<Modules.CertificateInfo>))]
+// Security module SecureBoot/UEFI types
+[JsonSerializable(typeof(Modules.SecureBootInfo))]
+[JsonSerializable(typeof(Modules.UefiCertificateInfo))]
+[JsonSerializable(typeof(List<Modules.UefiCertificateInfo>))]
 // Individual modular model types (to resolve conflicts)
 [JsonSerializable(typeof(Modules.ProcessorInfo), TypeInfoPropertyName = "ModularProcessorInfo")]
 [JsonSerializable(typeof(Modules.MemoryInfo), TypeInfoPropertyName = "ModularMemoryInfo")]

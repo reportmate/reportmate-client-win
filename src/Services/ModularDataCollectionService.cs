@@ -982,6 +982,9 @@ namespace ReportMate.WindowsClient.Services
                 case SecurityData securityData:
                     payload.Security = securityData;
                     break;
+                case IdentityData identityData:
+                    payload.Identity = identityData;
+                    break;
                 case SystemData systemData:
                     payload.System = systemData;
                     break;

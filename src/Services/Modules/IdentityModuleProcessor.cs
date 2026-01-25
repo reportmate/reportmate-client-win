@@ -1,9 +1,8 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
-using System.DirectoryServices.AccountManagement;
 using System.Linq;
-using System.Security.Principal;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -11,8 +10,8 @@ using ReportMate.WindowsClient.Models.Modules;
 namespace ReportMate.WindowsClient.Services.Modules
 {
     /// <summary>
-    /// Identity module processor - User accounts and sessions
-    /// Collects local and domain users, groups, logged-in sessions, and login history
+    /// Identity module processor - User accounts, groups, and identity management
+    /// Matches Mac client's IdentityModuleProcessor structure
     /// </summary>
     public class IdentityModuleProcessor : BaseModuleProcessor<IdentityData>
     {
@@ -30,7 +29,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         public override async Task<IdentityData> ProcessModuleAsync(
-            Dictionary<string, List<Dictionary<string, object>>> osqueryResults,
+            Dictionary<string, List<Dictionary<string, object>>> osqueryResults, 
             string deviceId)
         {
             _logger.LogDebug("Processing Identity module for device {DeviceId}", deviceId);
@@ -43,248 +42,340 @@ namespace ReportMate.WindowsClient.Services.Modules
                 CollectedAt = DateTime.UtcNow
             };
 
-            // Process user accounts
+            // Process user accounts from osquery
             await ProcessUserAccounts(osqueryResults, data);
 
-            // Process groups
-            ProcessGroups(osqueryResults, data);
+            // Process groups from osquery
+            await ProcessGroups(osqueryResults, data);
 
-            // Process logged-in users
+            // Process logged-in users from osquery
             ProcessLoggedInUsers(osqueryResults, data);
 
-            // Process login history from Windows Event Log
+            // Process login history from security events
             await ProcessLoginHistory(data);
+
+            // Process directory services info
+            await ProcessDirectoryServices(data);
 
             // Build summary
             BuildSummary(data);
 
-            _logger.LogInformation(
-                "Identity module processed - Users: {UserCount}, Groups: {GroupCount}, LoggedIn: {LoggedInCount}, Admins: {AdminCount}",
-                data.Users.Count, data.Groups.Count, data.LoggedInUsers.Count, data.Summary.AdminUsers);
+            _logger.LogInformation("Identity module processed - Users: {UserCount}, Groups: {GroupCount}, LoggedIn: {LoggedInCount}",
+                data.Users.Count, data.Groups.Count, data.LoggedInUsers.Count);
 
             return data;
         }
 
-        private async Task ProcessUserAccounts(
-            Dictionary<string, List<Dictionary<string, object>>> osqueryResults,
-            IdentityData data)
+        private async Task ProcessUserAccounts(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, IdentityData data)
         {
-            // Try osquery first
-            if (osqueryResults.TryGetValue("users", out var users))
+            // Try osquery users table first
+            if (osqueryResults.TryGetValue("users", out var users) && users.Count > 0)
             {
                 _logger.LogDebug("Processing {Count} users from osquery", users.Count);
 
                 foreach (var user in users)
                 {
                     var username = GetStringValue(user, "username");
-                    var uid = GetIntValue(user, "uid", 0);
+                    if (string.IsNullOrEmpty(username)) continue;
 
-                    // Skip system accounts (UID < 1000 on Windows typically means system/service)
-                    if (uid < 500 || uid >= 65534)
+                    // Skip system accounts (UID < 1000 typically, but Windows uses SIDs)
+                    var uidStr = GetStringValue(user, "uid");
+                    if (int.TryParse(uidStr, out var uid) && uid < 500)
                         continue;
 
-                    var userInfo = new UserAccountInfo
+                    var account = new UserAccount
                     {
                         Username = username,
-                        RealName = GetStringValue(user, "description"),
-                        Uid = uid,
-                        Gid = GetIntValue(user, "gid", 0),
+                        FullName = GetStringValue(user, "description"),
+                        Description = GetStringValue(user, "description"),
+                        Sid = GetStringValue(user, "uuid"),
                         HomeDirectory = GetStringValue(user, "directory"),
-                        Shell = GetStringValue(user, "shell"),
-                        Uuid = GetStringValue(user, "uuid"),
-                        Sid = GetStringValue(user, "user_sid")
+                        IsLocal = true
                     };
 
-                    data.Users.Add(userInfo);
+                    data.Users.Add(account);
                 }
             }
 
-            // Enhance with WMI/DirectoryServices for admin status and more details
-            await EnhanceUserDataWithDirectoryServices(data);
+            // Enhance with PowerShell for additional details
+            await EnhanceUserAccountsWithPowerShell(data);
         }
 
-        private async Task EnhanceUserDataWithDirectoryServices(IdentityData data)
+        private async Task EnhanceUserAccountsWithPowerShell(IdentityData data)
         {
             try
             {
-                // Get local admin group members
-                var adminGroup = await GetAdminGroupMembers();
-
-                // Get enhanced user info from Win32_UserAccount
-                var wmiUsers = await _wmiHelperService.GetWmiObjectsAsync<WmiUserAccount>(
-                    "SELECT * FROM Win32_UserAccount WHERE LocalAccount = True");
-
-                foreach (var wmiUser in wmiUsers)
-                {
-                    var existingUser = data.Users.FirstOrDefault(u =>
-                        u.Username.Equals(wmiUser.Name, StringComparison.OrdinalIgnoreCase));
-
-                    if (existingUser != null)
-                    {
-                        existingUser.IsEnabled = !wmiUser.Disabled;
-                        existingUser.IsLocalAccount = wmiUser.LocalAccount;
-                        existingUser.AccountType = wmiUser.LocalAccount ? "Local" : "Domain";
-                        existingUser.IsLockout = wmiUser.Lockout;
-                        existingUser.Description = wmiUser.Description ?? existingUser.RealName;
-                        existingUser.Sid = wmiUser.SID ?? existingUser.Sid;
-                        existingUser.IsAdmin = adminGroup.Contains(wmiUser.Name, StringComparer.OrdinalIgnoreCase);
+                var script = @"
+                    $users = Get-LocalUser | ForEach-Object {
+                        $username = $_.Name
+                        $isAdmin = $false
+                        
+                        try {
+                            $adminGroup = Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue
+                            $isAdmin = ($adminGroup | Where-Object { $_.Name -match [regex]::Escape($username) }) -ne $null
+                        } catch { }
+                        
+                        $groups = @()
+                        try {
+                            $allGroups = Get-LocalGroup
+                            foreach ($group in $allGroups) {
+                                try {
+                                    $members = Get-LocalGroupMember -Group $group.Name -ErrorAction SilentlyContinue
+                                    if ($members | Where-Object { $_.Name -match [regex]::Escape($username) }) {
+                                        $groups += $group.Name
+                                    }
+                                } catch { }
+                            }
+                        } catch { }
+                        
+                        @{
+                            Username = $_.Name
+                            FullName = $_.FullName
+                            Description = $_.Description
+                            Sid = $_.SID.Value
+                            IsEnabled = $_.Enabled
+                            IsAdmin = $isAdmin
+                            PasswordNeverExpires = $_.PasswordNeverExpires
+                            UserCannotChangePassword = $_.UserMayNotChangePassword
+                            PasswordRequired = $_.PasswordRequired
+                            LastLogon = if ($_.LastLogon) { $_.LastLogon.ToString('o') } else { $null }
+                            PasswordLastSet = if ($_.PasswordLastSet) { $_.PasswordLastSet.ToString('o') } else { $null }
+                            GroupMemberships = $groups
+                            PrincipalSource = $_.PrincipalSource.ToString()
+                        }
                     }
-                    else if (!wmiUser.Disabled)
+                    
+                    $users | ConvertTo-Json -Depth 3 -Compress
+                ";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('[');
+                    if (jsonStart < 0)
                     {
-                        // Add user from WMI if not already in list
-                        data.Users.Add(new UserAccountInfo
+                        jsonStart = trimmedResult.IndexOf('{');
+                    }
+
+                    if (jsonStart >= 0)
+                    {
+                        var jsonContent = trimmedResult.Substring(jsonStart);
+
+                        using var document = JsonDocument.Parse(jsonContent);
+                        var root = document.RootElement;
+
+                        var elements = root.ValueKind == JsonValueKind.Array
+                            ? root.EnumerateArray().ToList()
+                            : new List<JsonElement> { root };
+
+                        // Clear existing and rebuild with enhanced data
+                        data.Users.Clear();
+
+                        foreach (var userElement in elements)
                         {
-                            Username = wmiUser.Name ?? string.Empty,
-                            RealName = wmiUser.Description ?? string.Empty,
-                            Description = wmiUser.Description ?? string.Empty,
-                            Sid = wmiUser.SID ?? string.Empty,
-                            IsEnabled = !wmiUser.Disabled,
-                            IsLocalAccount = wmiUser.LocalAccount,
-                            AccountType = wmiUser.LocalAccount ? "Local" : "Domain",
-                            IsLockout = wmiUser.Lockout,
-                            IsAdmin = adminGroup.Contains(wmiUser.Name ?? "", StringComparer.OrdinalIgnoreCase)
-                        });
+                            var account = new UserAccount
+                            {
+                                Username = GetJsonStringValue(userElement, "Username"),
+                                FullName = GetJsonStringValue(userElement, "FullName"),
+                                Description = GetJsonStringValue(userElement, "Description"),
+                                Sid = GetJsonStringValue(userElement, "Sid"),
+                                IsDisabled = !GetJsonBoolValue(userElement, "IsEnabled"),
+                                IsAdmin = GetJsonBoolValue(userElement, "IsAdmin"),
+                                PasswordNeverExpires = GetJsonBoolValue(userElement, "PasswordNeverExpires"),
+                                UserCannotChangePassword = GetJsonBoolValue(userElement, "UserCannotChangePassword"),
+                                PasswordRequired = GetJsonBoolValue(userElement, "PasswordRequired"),
+                                IsLocal = GetJsonStringValue(userElement, "PrincipalSource") == "Local"
+                            };
+
+                            // Parse dates
+                            var lastLogon = GetJsonStringValue(userElement, "LastLogon");
+                            if (!string.IsNullOrEmpty(lastLogon) && DateTime.TryParse(lastLogon, out var logonDate))
+                            {
+                                account.LastLogon = logonDate;
+                            }
+
+                            var pwdLastSet = GetJsonStringValue(userElement, "PasswordLastSet");
+                            if (!string.IsNullOrEmpty(pwdLastSet) && DateTime.TryParse(pwdLastSet, out var pwdDate))
+                            {
+                                account.PasswordLastSet = pwdDate;
+                            }
+
+                            // Parse group memberships
+                            if (userElement.TryGetProperty("GroupMemberships", out var groupsProp) &&
+                                groupsProp.ValueKind == JsonValueKind.Array)
+                            {
+                                account.GroupMemberships = groupsProp.EnumerateArray()
+                                    .Select(g => g.GetString() ?? "")
+                                    .Where(g => !string.IsNullOrEmpty(g))
+                                    .ToList();
+                            }
+
+                            data.Users.Add(account);
+                        }
+
+                        _logger.LogDebug("Enhanced {Count} user accounts with PowerShell data", data.Users.Count);
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to enhance user data with DirectoryServices/WMI");
+                _logger.LogWarning(ex, "Failed to enhance user accounts with PowerShell");
             }
         }
 
-        private async Task<HashSet<string>> GetAdminGroupMembers()
+        private async Task ProcessGroups(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, IdentityData data)
         {
-            var adminMembers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            try
-            {
-                using var context = new PrincipalContext(ContextType.Machine);
-                using var adminGroup = GroupPrincipal.FindByIdentity(context, "Administrators");
-
-                if (adminGroup != null)
-                {
-                    foreach (var member in adminGroup.GetMembers())
-                    {
-                        if (!string.IsNullOrEmpty(member.SamAccountName))
-                        {
-                            adminMembers.Add(member.SamAccountName);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to enumerate admin group members");
-
-                // Fallback: Use net localgroup command output parsing
-                try
-                {
-                    var result = await RunCommandAsync("net", "localgroup Administrators");
-                    if (!string.IsNullOrEmpty(result))
-                    {
-                        var lines = result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                        bool inMembers = false;
-                        foreach (var line in lines)
-                        {
-                            if (line.StartsWith("---"))
-                            {
-                                inMembers = true;
-                                continue;
-                            }
-                            if (line.StartsWith("The command completed"))
-                            {
-                                break;
-                            }
-                            if (inMembers && !string.IsNullOrWhiteSpace(line))
-                            {
-                                adminMembers.Add(line.Trim());
-                            }
-                        }
-                    }
-                }
-                catch
-                {
-                    // Ignore fallback failures
-                }
-            }
-
-            return adminMembers;
-        }
-
-        private void ProcessGroups(
-            Dictionary<string, List<Dictionary<string, object>>> osqueryResults,
-            IdentityData data)
-        {
-            if (osqueryResults.TryGetValue("groups", out var groups))
+            // Try osquery groups table
+            if (osqueryResults.TryGetValue("groups", out var groups) && groups.Count > 0)
             {
                 _logger.LogDebug("Processing {Count} groups from osquery", groups.Count);
 
                 foreach (var group in groups)
                 {
-                    var groupname = GetStringValue(group, "groupname");
-                    var gid = GetIntValue(group, "gid", 0);
+                    var groupName = GetStringValue(group, "groupname");
+                    if (string.IsNullOrEmpty(groupName)) continue;
 
-                    // Focus on key groups (system groups have GID < 1000)
-                    var groupInfo = new UserGroupInfo
+                    var groupInfo = new GroupInfo
                     {
-                        Groupname = groupname,
-                        Gid = gid,
+                        Name = groupName,
                         Sid = GetStringValue(group, "group_sid"),
-                        Comment = GetStringValue(group, "comment"),
-                        GroupType = gid < 1000 ? "System" : "Local"
+                        Description = GetStringValue(group, "comment")
                     };
 
                     data.Groups.Add(groupInfo);
                 }
             }
 
-            // Get user_groups for membership mapping
-            if (osqueryResults.TryGetValue("user_groups", out var userGroups))
+            // Enhance with PowerShell for group members
+            await EnhanceGroupsWithPowerShell(data);
+        }
+
+        private async Task EnhanceGroupsWithPowerShell(IdentityData data)
+        {
+            try
             {
-                _logger.LogDebug("Processing {Count} user-group mappings", userGroups.Count);
+                var script = @"
+                    # Get key groups with members
+                    $keyGroups = @('Administrators', 'Remote Desktop Users', 'Users', 'Power Users', 'Backup Operators')
+                    
+                    $result = foreach ($groupName in $keyGroups) {
+                        try {
+                            $group = Get-LocalGroup -Name $groupName -ErrorAction SilentlyContinue
+                            if ($group) {
+                                $members = @()
+                                try {
+                                    $groupMembers = Get-LocalGroupMember -Group $groupName -ErrorAction SilentlyContinue
+                                    $members = $groupMembers | ForEach-Object { $_.Name }
+                                } catch { }
+                                
+                                @{
+                                    Name = $group.Name
+                                    Description = $group.Description
+                                    Sid = $group.SID.Value
+                                    Members = $members
+                                    IsBuiltIn = ($group.PrincipalSource -eq 'Local')
+                                }
+                            }
+                        } catch { }
+                    }
+                    
+                    $result | ConvertTo-Json -Depth 3 -Compress
+                ";
 
-                foreach (var mapping in userGroups)
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+
+                if (!string.IsNullOrEmpty(result))
                 {
-                    var uid = GetIntValue(mapping, "uid", 0);
-                    var gid = GetIntValue(mapping, "gid", 0);
-
-                    var user = data.Users.FirstOrDefault(u => u.Uid == uid);
-                    var group = data.Groups.FirstOrDefault(g => g.Gid == gid);
-
-                    if (user != null && group != null)
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('[');
+                    if (jsonStart < 0)
                     {
-                        if (!string.IsNullOrEmpty(user.GroupMembership))
-                            user.GroupMembership += ", ";
-                        user.GroupMembership += group.Groupname;
+                        jsonStart = trimmedResult.IndexOf('{');
+                    }
 
-                        if (!string.IsNullOrEmpty(group.Members))
-                            group.Members += ", ";
-                        group.Members += user.Username;
+                    if (jsonStart >= 0)
+                    {
+                        var jsonContent = trimmedResult.Substring(jsonStart);
+
+                        using var document = JsonDocument.Parse(jsonContent);
+                        var root = document.RootElement;
+
+                        var elements = root.ValueKind == JsonValueKind.Array
+                            ? root.EnumerateArray().ToList()
+                            : new List<JsonElement> { root };
+
+                        // Clear and rebuild with enhanced data
+                        data.Groups.Clear();
+
+                        foreach (var groupElement in elements)
+                        {
+                            var groupInfo = new GroupInfo
+                            {
+                                Name = GetJsonStringValue(groupElement, "Name"),
+                                Description = GetJsonStringValue(groupElement, "Description"),
+                                Sid = GetJsonStringValue(groupElement, "Sid"),
+                                IsBuiltIn = GetJsonBoolValue(groupElement, "IsBuiltIn")
+                            };
+
+                            // Parse members
+                            if (groupElement.TryGetProperty("Members", out var membersProp) &&
+                                membersProp.ValueKind == JsonValueKind.Array)
+                            {
+                                groupInfo.Members = membersProp.EnumerateArray()
+                                    .Select(m => m.GetString() ?? "")
+                                    .Where(m => !string.IsNullOrEmpty(m))
+                                    .ToList();
+                            }
+
+                            data.Groups.Add(groupInfo);
+                        }
+
+                        _logger.LogDebug("Enhanced {Count} groups with PowerShell data", data.Groups.Count);
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to enhance groups with PowerShell");
+            }
         }
 
-        private void ProcessLoggedInUsers(
-            Dictionary<string, List<Dictionary<string, object>>> osqueryResults,
-            IdentityData data)
+        private void ProcessLoggedInUsers(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, IdentityData data)
         {
-            if (osqueryResults.TryGetValue("logged_in_users", out var loggedIn))
+            if (osqueryResults.TryGetValue("logged_in_users", out var loggedIn) && loggedIn.Count > 0)
             {
-                _logger.LogDebug("Processing {Count} logged-in users", loggedIn.Count);
+                _logger.LogDebug("Processing {Count} logged in users from osquery", loggedIn.Count);
 
                 foreach (var session in loggedIn)
                 {
-                    data.LoggedInUsers.Add(new LoggedInUserInfo
+                    var user = GetStringValue(session, "user");
+                    if (string.IsNullOrEmpty(user)) continue;
+
+                    var loggedInUser = new LoggedInUser
                     {
-                        User = GetStringValue(session, "user"),
-                        Tty = GetStringValue(session, "tty"),
-                        Host = GetStringValue(session, "host"),
-                        Pid = GetIntValue(session, "pid", 0),
-                        LogonType = GetStringValue(session, "type"),
-                        LoginTime = ParseTimestamp(GetStringValue(session, "time"))
-                    });
+                        Username = user,
+                        Domain = GetStringValue(session, "host"),
+                        SessionType = GetStringValue(session, "tty"),
+                        IsActive = true
+                    };
+
+                    // Parse time
+                    var timeStr = GetStringValue(session, "time");
+                    if (long.TryParse(timeStr, out var timestamp))
+                    {
+                        loggedInUser.LoginTime = DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime;
+                    }
+
+                    // Parse session ID
+                    var pidStr = GetStringValue(session, "pid");
+                    if (int.TryParse(pidStr, out var pid))
+                    {
+                        loggedInUser.SessionId = pid;
+                    }
+
+                    data.LoggedInUsers.Add(loggedInUser);
                 }
             }
         }
@@ -293,67 +384,94 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             try
             {
-                // Query Windows Security Event Log for logon events (4624, 4625, 4634)
-                // Event 4624 = Successful logon
-                // Event 4625 = Failed logon
-                // Event 4634 = Logoff
-
+                // Get recent login events from Security event log
                 var script = @"
                     $events = Get-WinEvent -FilterHashtable @{
-                        LogName='Security'
-                        ID=4624,4625
-                    } -MaxEvents 50 -ErrorAction SilentlyContinue
-
-                    $events | ForEach-Object {
+                        LogName = 'Security'
+                        Id = 4624, 4625  # Successful and failed logons
+                    } -MaxEvents 50 -ErrorAction SilentlyContinue | ForEach-Object {
                         $xml = [xml]$_.ToXml()
-                        $eventData = $xml.Event.EventData.Data
-
-                        [PSCustomObject]@{
-                            TimeCreated = $_.TimeCreated.ToString('o')
-                            EventId = $_.Id
-                            TargetUserName = ($eventData | Where-Object Name -eq 'TargetUserName').'#text'
-                            LogonType = ($eventData | Where-Object Name -eq 'LogonType').'#text'
-                            IpAddress = ($eventData | Where-Object Name -eq 'IpAddress').'#text'
+                        $data = @{}
+                        $xml.Event.EventData.Data | ForEach-Object {
+                            $data[$_.Name] = $_.'#text'
                         }
-                    } | ConvertTo-Json -Compress
+                        
+                        @{
+                            EventId = $_.Id
+                            Timestamp = $_.TimeCreated.ToString('o')
+                            Username = $data['TargetUserName']
+                            Domain = $data['TargetDomainName']
+                            LogonType = $data['LogonType']
+                            Source = $data['IpAddress']
+                            Success = ($_.Id -eq 4624)
+                        }
+                    }
+                    
+                    $events | ConvertTo-Json -Depth 2 -Compress
                 ";
 
-                var result = await RunPowerShellAsync(script);
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+
                 if (!string.IsNullOrEmpty(result))
                 {
-                    var events = System.Text.Json.JsonSerializer.Deserialize<List<LoginEventData>>(result);
-                    if (events != null)
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('[');
+                    if (jsonStart < 0)
                     {
-                        foreach (var evt in events)
+                        jsonStart = trimmedResult.IndexOf('{');
+                    }
+
+                    if (jsonStart >= 0)
+                    {
+                        var jsonContent = trimmedResult.Substring(jsonStart);
+
+                        using var document = JsonDocument.Parse(jsonContent);
+                        var root = document.RootElement;
+
+                        var elements = root.ValueKind == JsonValueKind.Array
+                            ? root.EnumerateArray().ToList()
+                            : new List<JsonElement> { root };
+
+                        foreach (var eventElement in elements)
                         {
-                            // Skip system/service accounts
-                            if (string.IsNullOrEmpty(evt.TargetUserName) ||
-                                evt.TargetUserName.EndsWith("$") ||
-                                evt.TargetUserName.Equals("SYSTEM", StringComparison.OrdinalIgnoreCase))
-                            {
+                            var username = GetJsonStringValue(eventElement, "Username");
+                            if (string.IsNullOrEmpty(username) || username == "-" || username == "SYSTEM")
                                 continue;
+
+                            var entry = new LoginHistoryEntry
+                            {
+                                Username = username,
+                                EventId = GetJsonIntValue(eventElement, "EventId"),
+                                Success = GetJsonBoolValue(eventElement, "Success"),
+                                Source = GetJsonStringValue(eventElement, "Source"),
+                                EventType = GetJsonBoolValue(eventElement, "Success") ? "Logon" : "Failed"
+                            };
+
+                            // Parse timestamp
+                            var timestampStr = GetJsonStringValue(eventElement, "Timestamp");
+                            if (!string.IsNullOrEmpty(timestampStr) && DateTime.TryParse(timestampStr, out var timestamp))
+                            {
+                                entry.Timestamp = timestamp;
                             }
 
-                            data.LoginHistory.Add(new LoginHistoryInfo
-                            {
-                                Username = evt.TargetUserName,
-                                LoginTime = DateTime.TryParse(evt.TimeCreated, out var dt) ? dt : null,
-                                EventType = evt.EventId == 4624 ? "Logon" : "Failed",
-                                LogonType = MapLogonType(evt.LogonType),
-                                SourceIp = evt.IpAddress ?? string.Empty,
-                                EventId = evt.EventId
-                            });
+                            // Map logon type
+                            var logonType = GetJsonStringValue(eventElement, "LogonType");
+                            entry.LogonType = MapLogonType(logonType);
+
+                            data.LoginHistory.Add(entry);
                         }
+
+                        _logger.LogDebug("Collected {Count} login history entries", data.LoginHistory.Count);
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to retrieve login history from Event Log");
+                _logger.LogWarning(ex, "Failed to collect login history");
             }
         }
 
-        private string MapLogonType(string? logonType)
+        private string MapLogonType(string logonType)
         {
             return logonType switch
             {
@@ -366,92 +484,152 @@ namespace ReportMate.WindowsClient.Services.Modules
                 "9" => "NewCredentials",
                 "10" => "RemoteInteractive",
                 "11" => "CachedInteractive",
-                _ => logonType ?? "Unknown"
+                _ => logonType
             };
+        }
+
+        private async Task ProcessDirectoryServices(IdentityData data)
+        {
+            try
+            {
+                var script = @"
+                    $result = @{
+                        IsDomainJoined = $false
+                        DomainName = ''
+                        DnsDomainName = ''
+                        Workgroup = ''
+                        IsAadJoined = $false
+                        IsAadRegistered = $false
+                        TenantId = ''
+                    }
+                    
+                    try {
+                        $computerSystem = Get-WmiObject -Class Win32_ComputerSystem
+                        $result.IsDomainJoined = ($computerSystem.PartOfDomain -eq $true)
+                        
+                        if ($result.IsDomainJoined) {
+                            $result.DomainName = $computerSystem.Domain
+                            $result.DnsDomainName = $env:USERDNSDOMAIN
+                        } else {
+                            $result.Workgroup = $computerSystem.Workgroup
+                        }
+                    } catch { }
+                    
+                    # Check Azure AD join status via dsregcmd
+                    try {
+                        $dsreg = dsregcmd /status 2>&1
+                        if ($dsreg -match 'AzureAdJoined\s*:\s*YES') {
+                            $result.IsAadJoined = $true
+                        }
+                        if ($dsreg -match 'WorkplaceJoined\s*:\s*YES') {
+                            $result.IsAadRegistered = $true
+                        }
+                        if ($dsreg -match 'TenantId\s*:\s*([a-f0-9-]+)') {
+                            $result.TenantId = $matches[1]
+                        }
+                    } catch { }
+                    
+                    $result | ConvertTo-Json -Compress
+                ";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('{');
+
+                    if (jsonStart >= 0)
+                    {
+                        var jsonContent = trimmedResult.Substring(jsonStart);
+
+                        using var document = JsonDocument.Parse(jsonContent);
+                        var root = document.RootElement;
+
+                        data.DirectoryServices.ActiveDirectory.IsDomainJoined = GetJsonBoolValue(root, "IsDomainJoined");
+                        data.DirectoryServices.ActiveDirectory.DomainName = GetJsonStringValue(root, "DomainName");
+                        data.DirectoryServices.ActiveDirectory.DnsDomainName = GetJsonStringValue(root, "DnsDomainName");
+                        data.DirectoryServices.Workgroup = GetJsonStringValue(root, "Workgroup");
+                        data.DirectoryServices.AzureAd.IsAadJoined = GetJsonBoolValue(root, "IsAadJoined");
+                        data.DirectoryServices.AzureAd.IsAadRegistered = GetJsonBoolValue(root, "IsAadRegistered");
+                        data.DirectoryServices.AzureAd.TenantId = GetJsonStringValue(root, "TenantId");
+
+                        _logger.LogDebug("Directory services: DomainJoined={IsDomain}, AadJoined={IsAad}",
+                            data.DirectoryServices.ActiveDirectory.IsDomainJoined,
+                            data.DirectoryServices.AzureAd.IsAadJoined);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect directory services info");
+            }
         }
 
         private void BuildSummary(IdentityData data)
         {
-            data.Summary = new IdentitySummary
-            {
-                TotalUsers = data.Users.Count,
-                AdminUsers = data.Users.Count(u => u.IsAdmin),
-                DisabledUsers = data.Users.Count(u => !u.IsEnabled),
-                LocalUsers = data.Users.Count(u => u.IsLocalAccount),
-                DomainUsers = data.Users.Count(u => !u.IsLocalAccount),
-                CurrentlyLoggedIn = data.LoggedInUsers.Count,
-                FailedLoginsLast7Days = data.LoginHistory.Count(h =>
-                    h.EventType == "Failed" &&
-                    h.LoginTime.HasValue &&
-                    h.LoginTime.Value > DateTime.UtcNow.AddDays(-7))
-            };
-        }
+            data.Summary.TotalUsers = data.Users.Count;
+            data.Summary.AdminUsers = data.Users.Count(u => u.IsAdmin);
+            data.Summary.DisabledUsers = data.Users.Count(u => u.IsDisabled);
+            data.Summary.CurrentlyLoggedIn = data.LoggedInUsers.Count;
 
-        private async Task<string> RunCommandAsync(string command, string arguments)
-        {
-            try
+            // Determine domain status
+            if (data.DirectoryServices.ActiveDirectory.IsDomainJoined &&
+                data.DirectoryServices.AzureAd.IsAadJoined)
             {
-                using var process = new System.Diagnostics.Process
-                {
-                    StartInfo = new System.Diagnostics.ProcessStartInfo
-                    {
-                        FileName = command,
-                        Arguments = arguments,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }
-                };
-
-                process.Start();
-                var output = await process.StandardOutput.ReadToEndAsync();
-                await process.WaitForExitAsync();
-                return output;
+                data.Summary.DomainStatus = "Hybrid";
             }
-            catch
+            else if (data.DirectoryServices.ActiveDirectory.IsDomainJoined)
             {
-                return string.Empty;
+                data.Summary.DomainStatus = "Domain";
+            }
+            else if (data.DirectoryServices.AzureAd.IsAadJoined)
+            {
+                data.Summary.DomainStatus = "AzureAD";
+            }
+            else
+            {
+                data.Summary.DomainStatus = "Standalone";
             }
         }
 
-        private async Task<string> RunPowerShellAsync(string script)
+        #region Helper Methods
+
+        // Use base class GetStringValue method
+        // private new string GetStringValue(Dictionary<string, object> dict, string key) - removed, use inherited
+
+        private string GetJsonStringValue(JsonElement element, string propertyName)
         {
-            return await RunCommandAsync("powershell", $"-NoProfile -NonInteractive -Command \"{script}\"");
+            if (element.TryGetProperty(propertyName, out var prop))
+            {
+                if (prop.ValueKind == JsonValueKind.String)
+                    return prop.GetString() ?? string.Empty;
+                if (prop.ValueKind == JsonValueKind.Number)
+                    return prop.GetRawText();
+            }
+            return string.Empty;
         }
 
-        private DateTime? ParseTimestamp(string? timestamp)
+        private bool GetJsonBoolValue(JsonElement element, string propertyName)
         {
-            if (string.IsNullOrEmpty(timestamp))
-                return null;
-
-            if (long.TryParse(timestamp, out var unixTime))
-                return DateTimeOffset.FromUnixTimeSeconds(unixTime).UtcDateTime;
-
-            if (DateTime.TryParse(timestamp, out var dt))
-                return dt;
-
-            return null;
+            if (element.TryGetProperty(propertyName, out var prop))
+            {
+                if (prop.ValueKind == JsonValueKind.True) return true;
+                if (prop.ValueKind == JsonValueKind.False) return false;
+            }
+            return false;
         }
-    }
 
-    // Helper classes for JSON deserialization
-    internal class WmiUserAccount
-    {
-        public string? Name { get; set; }
-        public string? Description { get; set; }
-        public string? SID { get; set; }
-        public bool Disabled { get; set; }
-        public bool LocalAccount { get; set; }
-        public bool Lockout { get; set; }
-    }
+        private int GetJsonIntValue(JsonElement element, string propertyName)
+        {
+            if (element.TryGetProperty(propertyName, out var prop))
+            {
+                if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var value))
+                    return value;
+            }
+            return 0;
+        }
 
-    internal class LoginEventData
-    {
-        public string? TimeCreated { get; set; }
-        public int EventId { get; set; }
-        public string? TargetUserName { get; set; }
-        public string? LogonType { get; set; }
-        public string? IpAddress { get; set; }
+        #endregion
     }
 }
