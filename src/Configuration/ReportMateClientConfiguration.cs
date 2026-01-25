@@ -78,6 +78,15 @@ public class ReportMateClientConfiguration
     public bool CimianIntegrationEnabled { get; set; } = true;
 
     /// <summary>
+    /// Storage analysis mode for hardware module
+    /// - "quick": Drive totals only (fast, ~1 second)
+    /// - "deep": Full directory analysis with per-folder sizes (slow, can take minutes)
+    /// - "auto": Use cached deep analysis if available and less than 24h old, otherwise run deep
+    /// Default is "auto" which provides the best balance of data freshness and performance
+    /// </summary>
+    public string StorageMode { get; set; } = "auto";
+
+    /// <summary>
     /// Proxy configuration
     /// </summary>
     public ProxyConfiguration? Proxy { get; set; }

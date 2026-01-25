@@ -4,13 +4,28 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services.Modules;
+using ReportMate.WindowsClient.Configuration;
 
 namespace ReportMate.WindowsClient.Services.Modules
 {
+    /// <summary>
+    /// Storage analysis mode enumeration
+    /// </summary>
+    public enum StorageAnalysisMode
+    {
+        /// <summary>Drive totals only (capacity, free space) - fast, ~1 second</summary>
+        Quick,
+        /// <summary>Full directory analysis with per-folder sizes - slow, can take minutes</summary>
+        Deep,
+        /// <summary>Deep if cache expired (>24h), otherwise use cache</summary>
+        Auto
+    }
+
     /// <summary>
     /// Hardware module processor - Physical device information
     /// </summary>
@@ -19,6 +34,14 @@ namespace ReportMate.WindowsClient.Services.Modules
         private readonly ILogger<HardwareModuleProcessor> _logger;
         private readonly IOsQueryService _osQueryService;
         private readonly IWmiHelperService _wmiHelperService;
+        
+        /// <summary>Cache file path for storage analysis results</summary>
+        private readonly string _storageAnalysisCachePath;
+        /// <summary>Cache validity period (24 hours in seconds)</summary>
+        private const int CacheValiditySeconds = 24 * 60 * 60;
+        
+        /// <summary>Current storage mode (set from configuration or command line)</summary>
+        public StorageAnalysisMode StorageMode { get; set; } = StorageAnalysisMode.Auto;
 
         public override string ModuleId => "hardware";
 
@@ -30,6 +53,20 @@ namespace ReportMate.WindowsClient.Services.Modules
             _logger = logger;
             _osQueryService = osQueryService;
             _wmiHelperService = wmiHelperService;
+            
+            // Set cache path in ProgramData
+            var programDataPath = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            _storageAnalysisCachePath = Path.Combine(programDataPath, "ManagedReports", "cache", "storage_analysis.json");
+            
+            // Read storage mode from command line option (defaults to "auto")
+            var storageModeStr = Program.CurrentStorageMode?.ToLowerInvariant() ?? "auto";
+            StorageMode = storageModeStr switch
+            {
+                "quick" => StorageAnalysisMode.Quick,
+                "deep" => StorageAnalysisMode.Deep,
+                _ => StorageAnalysisMode.Auto
+            };
+            _logger.LogDebug("Storage analysis mode set to: {StorageMode}", StorageMode);
         }
 
         public override async Task<HardwareData> ProcessModuleAsync(
@@ -391,16 +428,31 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 try
                 {
-                    // Try to get memory type from WMI first
-                    var wmiMemoryType = await _wmiHelperService.QueryWmiSingleValueAsync<string>(
-                        $"SELECT MemoryType FROM Win32_PhysicalMemory WHERE DeviceLocator = '{module.Location}'", 
-                        "MemoryType");
+                    // Try SMBIOSMemoryType first - this has better type mappings than MemoryType
+                    var smbiosMemoryType = await _wmiHelperService.QueryWmiSingleValueAsync<int>(
+                        $"SELECT SMBIOSMemoryType FROM Win32_PhysicalMemory WHERE DeviceLocator = '{module.Location}'", 
+                        "SMBIOSMemoryType");
                     
-                    if (!string.IsNullOrEmpty(wmiMemoryType))
+                    if (smbiosMemoryType > 0)
                     {
-                        module.Type = MapMemoryType(wmiMemoryType);
-                        _logger.LogDebug("Updated memory type from WMI fallback for {Location}: {Type} (raw: {RawType})", 
-                            module.Location, module.Type, wmiMemoryType);
+                        module.Type = MapMemoryType(smbiosMemoryType.ToString());
+                        _logger.LogDebug("Updated memory type from SMBIOSMemoryType for {Location}: {Type} (raw: {RawType})", 
+                            module.Location, module.Type, smbiosMemoryType);
+                    }
+                    
+                    // If still unknown, try legacy MemoryType field
+                    if (module.Type == "Unknown" || string.IsNullOrEmpty(module.Type))
+                    {
+                        var wmiMemoryType = await _wmiHelperService.QueryWmiSingleValueAsync<string>(
+                            $"SELECT MemoryType FROM Win32_PhysicalMemory WHERE DeviceLocator = '{module.Location}'", 
+                            "MemoryType");
+                        
+                        if (!string.IsNullOrEmpty(wmiMemoryType) && wmiMemoryType != "0")
+                        {
+                            module.Type = MapMemoryType(wmiMemoryType);
+                            _logger.LogDebug("Updated memory type from WMI fallback for {Location}: {Type} (raw: {RawType})", 
+                                module.Location, module.Type, wmiMemoryType);
+                        }
                     }
                     
                     // If still unknown, try to get part number and infer type
@@ -464,6 +516,23 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 break;
                             }
                         }
+                    }
+                }
+            }
+            
+            // Speed-based memory type inference fallback for older systems
+            // This is a last resort when WMI and registry don't return memory type
+            foreach (var module in data.Memory.Modules.Where(m => m.Type == "Unknown" || string.IsNullOrEmpty(m.Type)))
+            {
+                var speed = module.Speed;
+                if (speed > 0)
+                {
+                    var inferredType = InferMemoryTypeFromSpeed(speed);
+                    if (inferredType != "Unknown")
+                    {
+                        module.Type = inferredType;
+                        _logger.LogDebug("Inferred memory type from speed for {Location}: {Type} (speed: {Speed}MHz)", 
+                            module.Location, module.Type, speed);
                     }
                 }
             }
@@ -633,18 +702,43 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Process graphics info from multiple sources
+            // Process graphics info from multiple sources - prioritize discrete GPUs over integrated
             if (osqueryResults.TryGetValue("video_info", out var videoInfo) && videoInfo.Count > 0)
             {
-                var video = videoInfo[0];
-                data.Graphics.Name = CleanProductName(GetStringValue(video, "model"));
-                data.Graphics.Manufacturer = CleanManufacturerName(GetStringValue(video, "manufacturer"));
-                data.Graphics.MemorySize = 0; // video_info doesn't have memory size in this osquery version
-                data.Graphics.DriverVersion = GetStringValue(video, "driver_version");
-                data.Graphics.DriverDate = GetDateTimeValue(video, "driver_date");
+                // Find the best GPU - prioritize discrete over integrated
+                Dictionary<string, object>? selectedGpu = null;
+                bool isDiscreteGpu = false;
                 
-                _logger.LogDebug("Graphics info from video_info - Name: {Name}, Manufacturer: {Manufacturer}, Driver: {DriverVersion}", 
-                    data.Graphics.Name, data.Graphics.Manufacturer, data.Graphics.DriverVersion);
+                foreach (var video in videoInfo)
+                {
+                    var model = GetStringValue(video, "model");
+                    var manufacturer = GetStringValue(video, "manufacturer");
+                    
+                    // Check if this is a discrete GPU (NVIDIA, AMD Radeon, etc.)
+                    var isDiscrete = IsDiscreteGpu(model, manufacturer);
+                    
+                    // Use this GPU if:
+                    // 1. We haven't selected one yet, OR
+                    // 2. This is discrete and current selection is not
+                    if (selectedGpu == null || (isDiscrete && !isDiscreteGpu))
+                    {
+                        selectedGpu = video;
+                        isDiscreteGpu = isDiscrete;
+                        _logger.LogDebug("GPU candidate: {Model} (Discrete: {IsDiscrete})", model, isDiscrete);
+                    }
+                }
+                
+                if (selectedGpu != null)
+                {
+                    data.Graphics.Name = CleanProductName(GetStringValue(selectedGpu, "model"));
+                    data.Graphics.Manufacturer = CleanManufacturerName(GetStringValue(selectedGpu, "manufacturer"));
+                    data.Graphics.MemorySize = 0; // video_info doesn't have memory size in this osquery version
+                    data.Graphics.DriverVersion = GetStringValue(selectedGpu, "driver_version");
+                    data.Graphics.DriverDate = GetDateTimeValue(selectedGpu, "driver_date");
+                    
+                    _logger.LogDebug("Selected GPU: {Name}, Manufacturer: {Manufacturer}, Discrete: {IsDiscrete}", 
+                        data.Graphics.Name, data.Graphics.Manufacturer, isDiscreteGpu);
+                }
             }
             
             // Enhance graphics info from registry if needed
@@ -928,8 +1022,8 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Bluetooth adapter information
             await ProcessBluetoothInformation(osqueryResults, data);
 
-            // Process hierarchical directory storage analysis
-            await ProcessStorageAnalysis(osqueryResults, data);
+            // Process hierarchical directory storage analysis (respects StorageMode: quick/deep/auto)
+            await ProcessStorageAnalysisWithMode(osqueryResults, data);
 
             _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}, Wireless: {Wireless}, Bluetooth: {Bluetooth}", 
                 data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None", data.Wireless?.Name ?? "Not Present", data.Bluetooth?.Name ?? "Not Present");
@@ -1151,14 +1245,24 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             var upperDeviceName = deviceName.ToUpperInvariant();
 
-            // Exclude false positives - be more strict
+            // Exclude false positives - be very strict to avoid reporting fake NPUs
+            // Microsoft Passport Container Enumeration Bus contains "AI" but is NOT an NPU
+            // Intel Power Engine Plug-in is a power management component, NOT an NPU
+            // Airoha is a Bluetooth/wireless chip manufacturer (MediaTek subsidiary), NOT an NPU
+            // BTFASTPAIR is Intel Bluetooth Fast Pairing service, NOT an NPU
             if (upperDeviceName.Contains("USB") ||
                 upperDeviceName.Contains("INPUT") ||
                 upperDeviceName.Contains("HID") ||
                 upperDeviceName.Contains("KEYBOARD") ||
                 upperDeviceName.Contains("MOUSE") ||
                 upperDeviceName.Contains("AUDIO") ||
+                upperDeviceName.Contains("PASSPORT") ||
+                upperDeviceName.Contains("CONTAINER ENUMERATION") ||
+                upperDeviceName.Contains("ENUMERATION BUS") ||
                 upperDeviceName.Contains("BLUETOOTH") ||
+                upperDeviceName.Contains("BTFASTPAIR") ||          // Intel Bluetooth Fast Pairing
+                upperDeviceName.Contains("FASTPAIR") ||            // Fast Pairing services
+                upperDeviceName.StartsWith("BT") ||                // Bluetooth device prefixes
                 upperDeviceName.Contains("WEBCAM") ||
                 upperDeviceName.Contains("CAMERA") ||
                 upperDeviceName.Contains("CONFIGURATION DEVICE") ||
@@ -1167,7 +1271,21 @@ namespace ReportMate.WindowsClient.Services.Modules
                 upperDeviceName.Contains("PLATFORM DEVICE") ||
                 upperDeviceName.Contains("PROTECTION DOMAIN") ||
                 upperDeviceName.Contains("REGISTRY DEVICE") ||
-                upperDeviceName.Contains("SERVICE REGISTRY"))
+                upperDeviceName.Contains("SERVICE REGISTRY") ||
+                upperDeviceName.Contains("POWER ENGINE") ||
+                upperDeviceName.Contains("PLUG-IN") ||
+                upperDeviceName.Contains("MANAGEMENT ENGINE") ||
+                upperDeviceName.Contains("TRUSTED EXECUTION") ||
+                upperDeviceName.Contains("GNA") ||
+                upperDeviceName.Contains("AIROHA") ||           // Bluetooth/wireless chip (MediaTek)
+                upperDeviceName.Contains("IAP2") ||             // Airoha Integrated Access Point
+                upperDeviceName.Contains("WIRELESS") ||         // Wireless network adapters
+                upperDeviceName.Contains("WI-FI") ||            // Wi-Fi adapters
+                upperDeviceName.Contains("WIFI") ||             // Wi-Fi adapters
+                upperDeviceName.Contains("WLAN") ||             // Wireless LAN
+                upperDeviceName.Contains("802.11") ||           // Wireless standard
+                upperDeviceName.Contains("NETWORK ADAPTER") ||  // Network devices
+                upperDeviceName.Contains("ETHERNET"))           // Ethernet adapters
             {
                 return false;
             }
@@ -1232,7 +1350,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
-        /// Clean processor names by removing trademark symbols and fixing virtual CPU issues
+        /// Clean processor names by removing trademark symbols, core counts, and fixing virtual CPU issues
         /// </summary>
         private string CleanProcessorName(string? processorName)
         {
@@ -1245,6 +1363,29 @@ namespace ReportMate.WindowsClient.Services.Modules
                 .Replace("®", "")
                 .Replace("™", "")
                 .Trim();
+
+            // Remove core count suffixes like "16-Cores", "8-Core", etc.
+            // This is redundant since we have a dedicated cores field
+            cleaned = System.Text.RegularExpressions.Regex.Replace(
+                cleaned, 
+                @"\s+\d+-Cores?\s*$", 
+                "", 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+
+            // Remove "CPU @ X.XXGHz" suffix - we have a dedicated speed field
+            // Matches patterns like "CPU @ 3.70GHz", "CPU @3.7GHz", etc.
+            cleaned = System.Text.RegularExpressions.Regex.Replace(
+                cleaned,
+                @"\s*CPU\s*@\s*[\d.]+\s*GHz\s*$",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+
+            // Remove standalone "CPU" at the end - redundant for a CPU field
+            cleaned = System.Text.RegularExpressions.Regex.Replace(
+                cleaned,
+                @"\s+CPU\s*$",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
 
             // Don't return "Virtual CPU" - it's not useful
             if (cleaned.StartsWith("Virtual CPU", StringComparison.OrdinalIgnoreCase))
@@ -1395,6 +1536,56 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Infer memory type from speed (MHz) as a last-resort fallback
+        /// This is useful when WMI SMBIOSMemoryType returns 0 on older systems
+        /// </summary>
+        private string InferMemoryTypeFromSpeed(int speedMHz)
+        {
+            // Speed ranges for different memory types:
+            // DDR3: 800-2133 MHz (typical: 1333, 1600, 1866, 2133)
+            // DDR4: 2133-3600+ MHz (typical: 2133, 2400, 2666, 2933, 3200, 3600)
+            // DDR5: 4800-8000+ MHz (typical: 4800, 5200, 5600, 6000, 6400, 7200)
+            // LPDDR4: 2133-4266 MHz
+            // LPDDR5: 5500-8533 MHz
+            
+            if (speedMHz >= 4800)
+            {
+                // Could be DDR5 or LPDDR5
+                // LPDDR5 typically runs at odd speeds like 5500, 6400, 8448
+                // DDR5 typically at 4800, 5200, 5600, 6000
+                if (speedMHz >= 8000)
+                    return "LPDDR5"; // Very high speeds are typically LPDDR5 (mobile)
+                if (speedMHz == 8448 || speedMHz == 7500 || speedMHz == 6400)
+                    return "LPDDR5"; // Common LPDDR5 speeds
+                return "DDR5";
+            }
+            else if (speedMHz >= 3600)
+            {
+                // High DDR4 or LPDDR4/LPDDR5
+                return "DDR4"; // Most common at these speeds
+            }
+            else if (speedMHz >= 2133)
+            {
+                // DDR4 range (2133-3600)
+                // Common DDR4 speeds: 2133, 2400, 2666, 2933, 3200
+                return "DDR4";
+            }
+            else if (speedMHz >= 800)
+            {
+                // DDR3 range (800-2133)
+                // Common DDR3 speeds: 1066, 1333, 1600, 1866
+                return "DDR3";
+            }
+            else if (speedMHz >= 400)
+            {
+                // DDR2 range
+                return "DDR2";
+            }
+            
+            return "Unknown";
+        }
+
+        /// <summary>
         /// Determine storage type based on available information
         /// </summary>
         private string DetermineStorageType(string? osqueryType, string name)
@@ -1434,6 +1625,64 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Default fallback - prefer SSD for modern devices
             return "SSD";
+        }
+
+        /// <summary>
+        /// Check if a GPU is a discrete (dedicated) GPU rather than integrated
+        /// </summary>
+        private bool IsDiscreteGpu(string? model, string? manufacturer)
+        {
+            if (string.IsNullOrEmpty(model) && string.IsNullOrEmpty(manufacturer))
+                return false;
+
+            var modelUpper = (model ?? "").ToUpperInvariant();
+            var mfgUpper = (manufacturer ?? "").ToUpperInvariant();
+
+            // NVIDIA GPUs are always discrete (except for some rare cases)
+            if (modelUpper.Contains("NVIDIA") || modelUpper.Contains("GEFORCE") || 
+                modelUpper.Contains("QUADRO") || modelUpper.Contains("RTX") || 
+                modelUpper.Contains("GTX") || mfgUpper.Contains("NVIDIA"))
+            {
+                return true;
+            }
+
+            // AMD Radeon discrete GPUs (not integrated APU graphics)
+            if (modelUpper.Contains("RADEON") && 
+                (modelUpper.Contains("RX") || modelUpper.Contains("PRO") || 
+                 modelUpper.Contains("XT") || modelUpper.Contains("VEGA")))
+            {
+                return true;
+            }
+
+            // Integrated graphics indicators (these are NOT discrete)
+            if (modelUpper.Contains("INTEL") && 
+                (modelUpper.Contains("UHD") || modelUpper.Contains("HD GRAPHICS") || 
+                 modelUpper.Contains("IRIS") || modelUpper.Contains("INTEGRATED")))
+            {
+                return false;
+            }
+
+            // AMD integrated graphics (APU)
+            if (modelUpper.Contains("RADEON") && 
+                (modelUpper.Contains("GRAPHICS") || modelUpper.Contains("VEGA") && modelUpper.Contains("MOBILE")))
+            {
+                return false;
+            }
+
+            // Qualcomm Adreno is integrated (mobile SoC)
+            if (modelUpper.Contains("ADRENO") || modelUpper.Contains("QUALCOMM"))
+            {
+                return false;
+            }
+
+            // Microsoft Basic Display is definitely not discrete
+            if (modelUpper.Contains("MICROSOFT") && modelUpper.Contains("BASIC"))
+            {
+                return false;
+            }
+
+            // Default: assume discrete if manufacturer is NVIDIA/AMD with Radeon
+            return false;
         }
 
         /// <summary>
@@ -1528,6 +1777,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var npuName = GetStringValue(npu, "data");
                     if (!string.IsNullOrEmpty(npuName))
                     {
+                        // Filter out false positives - must be a real NPU
+                        if (!IsValidNpuDevice(npuName))
+                        {
+                            _logger.LogDebug("Filtered out false positive NPU from registry: {NPU}", npuName);
+                            continue;
+                        }
+                        
                         data.Npu.Name = CleanNpuName(npuName);
                         data.Npu.IsAvailable = true;
                         
@@ -1552,7 +1808,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         }
                         
                         _logger.LogDebug("Found NPU from registry: {NPU}", npuName);
-                        break; // Use first found NPU
+                        break; // Use first found valid NPU
                     }
                 }
             }
@@ -1616,6 +1872,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     if (!string.IsNullOrEmpty(deviceName) && string.IsNullOrEmpty(data.Npu.Name))
                     {
+                        // Filter out false positives - must be a real NPU
+                        if (!IsValidNpuDevice(deviceName) && !IsValidNpuDevice(description))
+                        {
+                            _logger.LogDebug("Filtered out false positive NPU driver: {Device}", deviceName);
+                            continue;
+                        }
+                        
                         data.Npu.Name = CleanNpuName(deviceName);
                         data.Npu.Manufacturer = CleanManufacturerName(manufacturer);
                         data.Npu.IsAvailable = true;
@@ -2193,19 +2456,37 @@ namespace ReportMate.WindowsClient.Services.Modules
                 IsAvailable = false
             };
 
-            // Process wireless drivers (primary source)
+            // Process wireless drivers (primary source) - prioritize real hardware over virtual adapters
             if (osqueryResults.TryGetValue("wireless_drivers", out var wirelessDrivers) && wirelessDrivers.Count > 0)
             {
-                var driver = wirelessDrivers[0]; // Use the first wireless adapter found
+                // Find the best wireless adapter - skip virtual/Microsoft adapters
+                Dictionary<string, object>? selectedDriver = null;
                 
-                var deviceName = GetStringValue(driver, "device_name");
-                var description = GetStringValue(driver, "description");
-                var manufacturer = GetStringValue(driver, "manufacturer");
-                var version = GetStringValue(driver, "version");
-                var dateStr = GetStringValue(driver, "date");
-                
-                if (!string.IsNullOrEmpty(deviceName) || !string.IsNullOrEmpty(description))
+                foreach (var driver in wirelessDrivers)
                 {
+                    var deviceName = GetStringValue(driver, "device_name");
+                    var description = GetStringValue(driver, "description");
+                    var manufacturer = GetStringValue(driver, "manufacturer");
+                    
+                    // Skip virtual adapters and non-hardware devices
+                    if (IsVirtualWirelessAdapter(deviceName, description, manufacturer))
+                    {
+                        _logger.LogDebug("Skipping virtual wireless adapter: {Name}", deviceName);
+                        continue;
+                    }
+                    
+                    selectedDriver = driver;
+                    break; // Use first real hardware adapter found
+                }
+                
+                if (selectedDriver != null)
+                {
+                    var deviceName = GetStringValue(selectedDriver, "device_name");
+                    var description = GetStringValue(selectedDriver, "description");
+                    var manufacturer = GetStringValue(selectedDriver, "manufacturer");
+                    var version = GetStringValue(selectedDriver, "version");
+                    var dateStr = GetStringValue(selectedDriver, "date");
+                    
                     data.Wireless.Name = CleanProductName(!string.IsNullOrEmpty(deviceName) ? deviceName : description);
                     data.Wireless.Manufacturer = CleanManufacturerName(manufacturer);
                     data.Wireless.DriverVersion = version;
@@ -2260,6 +2541,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var regData = GetStringValue(reg, "data");
                     if (!string.IsNullOrEmpty(regData) && string.IsNullOrEmpty(data.Wireless.Name))
                     {
+                        // Skip virtual/management adapters from registry too
+                        if (IsVirtualWirelessAdapter(regData, null, null))
+                        {
+                            _logger.LogDebug("Skipping virtual wireless adapter from registry: {Name}", regData);
+                            continue;
+                        }
+                        
                         data.Wireless.Name = CleanProductName(regData);
                         data.Wireless.IsAvailable = true;
                         data.Wireless.Status = "Enabled";
@@ -2332,6 +2620,60 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Check if a wireless adapter is virtual/software-based rather than real hardware
+        /// </summary>
+        private bool IsVirtualWirelessAdapter(string? deviceName, string? description, string? manufacturer)
+        {
+            var nameUpper = (deviceName ?? "").ToUpperInvariant();
+            var descUpper = (description ?? "").ToUpperInvariant();
+            var mfgUpper = (manufacturer ?? "").ToUpperInvariant();
+            
+            // Virtual adapter indicators
+            if (nameUpper.Contains("VIRTUAL") || descUpper.Contains("VIRTUAL"))
+                return true;
+            
+            // Wi-Fi Direct is a virtual adapter (peer-to-peer connection feature)
+            if (nameUpper.Contains("WI-FI DIRECT") || nameUpper.Contains("WIFI DIRECT"))
+                return true;
+            
+            // Microsoft's Wi-Fi adapters are typically virtual (Direct, Hosted Network, etc.)
+            if (mfgUpper.Contains("MICROSOFT") && 
+                (nameUpper.Contains("WI-FI") || nameUpper.Contains("WIFI") || nameUpper.Contains("WIRELESS")))
+                return true;
+            
+            // Hyper-V virtual adapters
+            if (nameUpper.Contains("HYPER-V") || descUpper.Contains("HYPER-V"))
+                return true;
+            
+            // VPN adapters
+            if (nameUpper.Contains("VPN") || descUpper.Contains("VPN"))
+                return true;
+            
+            // Hosted Network Virtual Adapter
+            if (nameUpper.Contains("HOSTED NETWORK") || descUpper.Contains("HOSTED NETWORK"))
+                return true;
+            
+            // Policy/Limits devices (Qualcomm)
+            if (nameUpper.Contains("LIMITS POLICY") || descUpper.Contains("LIMITS POLICY"))
+                return true;
+            
+            // Management interfaces (Intel Wireless Manageability, etc.)
+            if (nameUpper.Contains("MANAGEABILITY") || descUpper.Contains("MANAGEABILITY"))
+                return true;
+            
+            // WMI Provider adapters
+            if (nameUpper.Contains("WMI PROVIDER") || descUpper.Contains("WMI PROVIDER"))
+                return true;
+            
+            // Intel management components
+            if (mfgUpper.Contains("INTEL") && 
+                (nameUpper.Contains("MANAGEMENT") || descUpper.Contains("MANAGEMENT")))
+                return true;
+            
+            return false;
+        }
+
+        /// <summary>
         /// PowerShell fallback for wireless adapter detection
         /// </summary>
         private async Task ProcessWirelessViaPowerShell(HardwareData data)
@@ -2340,11 +2682,30 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogDebug("Attempting PowerShell fallback for wireless adapter detection...");
                 
+                // Improved PowerShell script that filters out virtual adapters
                 var powershellScript = @"
 try {
-    $adapter = Get-NetAdapter | Where-Object { $_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*' } | Select-Object -First 1
+    # Get real Wi-Fi adapters (exclude virtual, Wi-Fi Direct, etc.)
+    $adapter = Get-NetAdapter | Where-Object { 
+        ($_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*') -and
+        $_.InterfaceDescription -notlike '*Virtual*' -and
+        $_.InterfaceDescription -notlike '*Wi-Fi Direct*' -and
+        $_.InterfaceDescription -notlike '*Hosted Network*' -and
+        $_.PhysicalMediaType -eq 'Native 802.11'
+    } | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1
+    
+    if (!$adapter) {
+        # Fallback: get any physical wireless adapter even if not connected
+        $adapter = Get-NetAdapter | Where-Object { 
+            ($_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*') -and
+            $_.InterfaceDescription -notlike '*Virtual*' -and
+            $_.InterfaceDescription -notlike '*Wi-Fi Direct*' -and
+            $_.PhysicalMediaType -eq 'Native 802.11'
+        } | Select-Object -First 1
+    }
+    
     if ($adapter) {
-        $driver = Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceName -like '*Wi*' -or $_.DeviceName -like '*Wireless*' } | Select-Object -First 1
+        $driver = Get-WmiObject Win32_PnPSignedDriver | Where-Object { $_.DeviceName -eq $adapter.InterfaceDescription } | Select-Object -First 1
         ""$($adapter.InterfaceDescription)|$($adapter.MacAddress)|$($adapter.Status)|$($driver.Manufacturer)|$($driver.DriverVersion)|$($driver.DriverDate)""
     } else {
         'NOT_FOUND'
@@ -2580,6 +2941,164 @@ try {
                 _logger.LogDebug("PowerShell Bluetooth detection failed: {Error}", ex.Message);
             }
         }
+
+        #region Storage Analysis Mode and Caching
+
+        /// <summary>
+        /// Check if cached storage analysis exists and is still valid (less than 24 hours old)
+        /// </summary>
+        private bool IsCacheValid()
+        {
+            try
+            {
+                if (!File.Exists(_storageAnalysisCachePath))
+                {
+                    _logger.LogDebug("Storage analysis cache not found");
+                    return false;
+                }
+
+                var fileInfo = new FileInfo(_storageAnalysisCachePath);
+                var age = DateTime.UtcNow - fileInfo.LastWriteTimeUtc;
+                var isValid = age.TotalSeconds < CacheValiditySeconds;
+                
+                _logger.LogDebug("Storage analysis cache age: {AgeHours:F1} hours, valid: {IsValid}", 
+                    age.TotalHours, isValid);
+                
+                return isValid;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Error checking cache validity: {Error}", ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Load cached storage analysis results
+        /// </summary>
+        private List<DirectoryInformation>? LoadCachedStorageAnalysis()
+        {
+            try
+            {
+                if (!File.Exists(_storageAnalysisCachePath))
+                    return null;
+
+                var json = File.ReadAllText(_storageAnalysisCachePath);
+                var cached = JsonSerializer.Deserialize<List<DirectoryInformation>>(json);
+                
+                if (cached != null)
+                {
+                    _logger.LogInformation("Loaded {Count} items from storage analysis cache", cached.Count);
+                }
+                
+                return cached;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Error loading storage analysis cache: {Error}", ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Save storage analysis results to cache
+        /// </summary>
+        private void SaveStorageAnalysisCache(List<DirectoryInformation> analysis)
+        {
+            try
+            {
+                var cacheDir = Path.GetDirectoryName(_storageAnalysisCachePath);
+                if (!string.IsNullOrEmpty(cacheDir) && !Directory.Exists(cacheDir))
+                {
+                    Directory.CreateDirectory(cacheDir);
+                }
+
+                var json = JsonSerializer.Serialize(analysis, new JsonSerializerOptions 
+                { 
+                    WriteIndented = true 
+                });
+                File.WriteAllText(_storageAnalysisCachePath, json);
+                
+                _logger.LogInformation("Saved storage analysis cache with {Count} items", analysis.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Error saving storage analysis cache: {Error}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Determine if deep storage analysis should run based on storage mode and cache
+        /// </summary>
+        private bool ShouldRunDeepAnalysis()
+        {
+            switch (StorageMode)
+            {
+                case StorageAnalysisMode.Quick:
+                    _logger.LogInformation("Storage mode: quick - skipping deep analysis");
+                    return false;
+                    
+                case StorageAnalysisMode.Deep:
+                    _logger.LogInformation("Storage mode: deep - forcing deep analysis");
+                    return true;
+                    
+                case StorageAnalysisMode.Auto:
+                default:
+                    var cacheValid = IsCacheValid();
+                    if (cacheValid)
+                    {
+                        _logger.LogInformation("Storage mode: auto - cache valid, skipping deep analysis");
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Storage mode: auto - cache expired/missing, running deep analysis");
+                    }
+                    return !cacheValid;
+            }
+        }
+
+        /// <summary>
+        /// Process storage analysis with mode support (quick/deep/auto)
+        /// </summary>
+        private async Task ProcessStorageAnalysisWithMode(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
+        {
+            var primaryStorage = data.Storage.FirstOrDefault(s => s.Name.Contains("C:") || s.Interface == "Logical Drive");
+            if (primaryStorage == null)
+            {
+                _logger.LogWarning("No primary storage device found for directory analysis");
+                return;
+            }
+
+            if (ShouldRunDeepAnalysis())
+            {
+                // Run full deep analysis
+                await ProcessStorageAnalysis(osqueryResults, data);
+                
+                // Cache the results
+                if (primaryStorage.RootDirectories.Count > 0)
+                {
+                    SaveStorageAnalysisCache(primaryStorage.RootDirectories);
+                }
+            }
+            else
+            {
+                // Load from cache if available
+                var cached = LoadCachedStorageAnalysis();
+                if (cached != null && cached.Count > 0)
+                {
+                    primaryStorage.RootDirectories = cached;
+                    primaryStorage.LastAnalyzed = new FileInfo(_storageAnalysisCachePath).LastWriteTimeUtc;
+                    _logger.LogInformation("Using cached storage analysis with {Count} root directories", cached.Count);
+                }
+                else
+                {
+                    _logger.LogInformation("No cached storage analysis available, storage details will be limited");
+                    primaryStorage.StorageAnalysisEnabled = false;
+                }
+            }
+        }
+
+        #endregion
 
         /// <summary>
         /// Process hierarchical directory storage analysis from osquery results
