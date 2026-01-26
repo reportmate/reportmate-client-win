@@ -17,6 +17,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public SecureShellInfo SecureShell { get; set; } = new();
         public RdpInfo Rdp { get; set; } = new();
         public List<SecurityUpdate> SecurityUpdates { get; set; } = new();
+        public List<SecurityCve> SecurityCves { get; set; } = new();
+        public SecurityReleaseInfo SecurityReleaseInfo { get; set; } = new();
         public List<SecurityEvent> SecurityEvents { get; set; } = new();
         public List<CertificateInfo> Certificates { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
@@ -152,6 +154,37 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? ReleaseDate { get; set; }
         public DateTime? InstallDate { get; set; }
         public string Status { get; set; } = string.Empty; // Installed, Pending, Failed
+    }
+
+    /// <summary>
+    /// Common Vulnerability and Exposure (CVE) information
+    /// Mirrors macOS SOFA CVE data structure for parity
+    /// </summary>
+    public class SecurityCve
+    {
+        public string Cve { get; set; } = string.Empty;
+        public string OsVersion { get; set; } = string.Empty;
+        public string PatchedVersion { get; set; } = string.Empty; // KB article for Windows
+        public bool ActivelyExploited { get; set; }
+        public string Severity { get; set; } = string.Empty; // Critical, Important, Moderate, Low
+        public string Url { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Source { get; set; } = "msrc"; // msrc = Microsoft Security Response Center
+    }
+
+    /// <summary>
+    /// Security release information - mirrors macOS SOFA security release info
+    /// </summary>
+    public class SecurityReleaseInfo
+    {
+        public string OsVersion { get; set; } = string.Empty;
+        public string OsBuild { get; set; } = string.Empty;
+        public string ProductVersion { get; set; } = string.Empty;
+        public DateTime? ReleaseDate { get; set; }
+        public int UniqueCvesCount { get; set; }
+        public int DaysSincePreviousRelease { get; set; }
+        public string SecurityInfoUrl { get; set; } = string.Empty;
+        public bool UpdateAvailable { get; set; }
     }
 
     public class SecurityEvent
