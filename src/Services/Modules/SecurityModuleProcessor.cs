@@ -68,14 +68,17 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process security updates
             ProcessSecurityUpdates(osqueryResults, data);
 
+            // Process security CVEs (Common Vulnerabilities and Exposures)
+            await ProcessSecurityCves(data);
+
             // Process security events
             await ProcessSecurityEvents(osqueryResults, data);
 
             // Process certificates
             ProcessCertificates(osqueryResults, data);
 
-            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}, Certificates: {CertCount}", 
-                data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent, data.Certificates.Count);
+            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}, Certificates: {CertCount}, CVEs: {CveCount}", 
+                data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent, data.Certificates.Count, data.SecurityCves.Count);
 
             return data;
         }
@@ -379,6 +382,211 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     data.SecurityUpdates.Add(update);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Process security CVEs (Common Vulnerabilities and Exposures)
+        /// Provides parity with macOS SOFA CVE data
+        /// Uses Windows Update API and installed hotfixes to determine pending/unpatched CVEs
+        /// </summary>
+        private async Task ProcessSecurityCves(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Security CVE information via PowerShell");
+
+                // Get OS version and build info for security release info
+                var osInfoScript = @"
+                    $os = Get-CimInstance Win32_OperatingSystem
+                    $result = @{
+                        OsVersion = $os.Version
+                        OsBuild = $os.BuildNumber
+                        ProductVersion = $os.Caption
+                        InstallDate = $os.InstallDate.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+                    }
+                    $result | ConvertTo-Json -Compress
+                ";
+
+                var osInfoResult = await _wmiHelperService.ExecutePowerShellCommandAsync(osInfoScript);
+                if (!string.IsNullOrEmpty(osInfoResult))
+                {
+                    try
+                    {
+                        var trimmed = osInfoResult.Trim();
+                        var jsonStart = trimmed.IndexOf('{');
+                        if (jsonStart >= 0)
+                        {
+                            var jsonContent = trimmed.Substring(jsonStart);
+                            using var osDoc = JsonDocument.Parse(jsonContent);
+                            var osRoot = osDoc.RootElement;
+
+                            data.SecurityReleaseInfo.OsVersion = osRoot.TryGetProperty("OsVersion", out var verProp) ? verProp.GetString() ?? "" : "";
+                            data.SecurityReleaseInfo.OsBuild = osRoot.TryGetProperty("OsBuild", out var buildProp) ? buildProp.GetString() ?? "" : "";
+                            data.SecurityReleaseInfo.ProductVersion = osRoot.TryGetProperty("ProductVersion", out var prodProp) ? prodProp.GetString() ?? "" : "";
+                            
+                            // Set security info URL to Microsoft Update Catalog
+                            data.SecurityReleaseInfo.SecurityInfoUrl = $"https://www.catalog.update.microsoft.com/Search.aspx?q={data.SecurityReleaseInfo.OsBuild}";
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse OS info for security release");
+                    }
+                }
+
+                // Check for pending security updates (unpatched vulnerabilities)
+                var pendingUpdatesScript = @"
+                    try {
+                        $UpdateSession = New-Object -ComObject Microsoft.Update.Session
+                        $UpdateSearcher = $UpdateSession.CreateUpdateSearcher()
+                        
+                        # Search for pending security updates
+                        $SearchResult = $UpdateSearcher.Search('IsInstalled=0 and CategoryIDs contains ''0FA1201D-4330-4FA8-8AE9-B877473B6441''')
+                        
+                        $updates = @()
+                        foreach ($Update in $SearchResult.Updates) {
+                            # Get severity from MSRC if available
+                            $severity = 'Unknown'
+                            if ($Update.MsrcSeverity) {
+                                $severity = $Update.MsrcSeverity
+                            }
+                            
+                            # Extract CVE IDs from update title and description
+                            $cvePattern = 'CVE-\d{4}-\d{4,}'
+                            $cves = @()
+                            
+                            if ($Update.Title -match $cvePattern) {
+                                $cves += [regex]::Matches($Update.Title, $cvePattern) | ForEach-Object { $_.Value }
+                            }
+                            if ($Update.Description -match $cvePattern) {
+                                $cves += [regex]::Matches($Update.Description, $cvePattern) | ForEach-Object { $_.Value }
+                            }
+                            
+                            # Also check KB article info
+                            $kbArticleIds = @()
+                            foreach ($kb in $Update.KBArticleIDs) {
+                                $kbArticleIds += 'KB' + $kb
+                            }
+                            
+                            $updates += @{
+                                Title = $Update.Title
+                                Description = $Update.Description.Substring(0, [Math]::Min(300, $Update.Description.Length))
+                                Severity = $severity
+                                CVEs = $cves | Select-Object -Unique
+                                KBArticles = $kbArticleIds -join ', '
+                                IsMandatory = $Update.IsMandatory
+                                IsDownloaded = $Update.IsDownloaded
+                                RebootRequired = $Update.RebootRequired
+                                LastDeploymentChangeTime = if($Update.LastDeploymentChangeTime) { $Update.LastDeploymentChangeTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK') } else { $null }
+                            }
+                        }
+                        
+                        @{
+                            PendingCount = $SearchResult.Updates.Count
+                            Updates = $updates
+                        } | ConvertTo-Json -Depth 4
+                    } catch {
+                        @{ PendingCount = 0; Updates = @(); Error = $_.Exception.Message } | ConvertTo-Json
+                    }
+                ";
+
+                var pendingResult = await _wmiHelperService.ExecutePowerShellCommandAsync(pendingUpdatesScript);
+                if (!string.IsNullOrEmpty(pendingResult))
+                {
+                    try
+                    {
+                        var trimmed = pendingResult.Trim();
+                        var jsonStart = trimmed.IndexOf('{');
+                        if (jsonStart >= 0)
+                        {
+                            var jsonContent = trimmed.Substring(jsonStart);
+                            using var doc = JsonDocument.Parse(jsonContent);
+                            var root = doc.RootElement;
+
+                            // Update pending status
+                            if (root.TryGetProperty("PendingCount", out var pendingCountProp))
+                            {
+                                var pendingCount = pendingCountProp.GetInt32();
+                                data.SecurityReleaseInfo.UpdateAvailable = pendingCount > 0;
+                            }
+
+                            // Process pending updates and their CVEs
+                            if (root.TryGetProperty("Updates", out var updatesProp) && updatesProp.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var update in updatesProp.EnumerateArray())
+                                {
+                                    var title = update.TryGetProperty("Title", out var titleProp) ? titleProp.GetString() ?? "" : "";
+                                    var description = update.TryGetProperty("Description", out var descProp) ? descProp.GetString() ?? "" : "";
+                                    var severity = update.TryGetProperty("Severity", out var sevProp) ? sevProp.GetString() ?? "Unknown" : "Unknown";
+                                    var kbArticles = update.TryGetProperty("KBArticles", out var kbProp) ? kbProp.GetString() ?? "" : "";
+                                    var isMandatory = update.TryGetProperty("IsMandatory", out var mandProp) && mandProp.GetBoolean();
+
+                                    // Process CVEs from this update
+                                    if (update.TryGetProperty("CVEs", out var cvesProp) && cvesProp.ValueKind == JsonValueKind.Array)
+                                    {
+                                        foreach (var cve in cvesProp.EnumerateArray())
+                                        {
+                                            var cveId = cve.GetString();
+                                            if (!string.IsNullOrEmpty(cveId))
+                                            {
+                                                data.SecurityCves.Add(new SecurityCve
+                                                {
+                                                    Cve = cveId,
+                                                    OsVersion = data.SecurityReleaseInfo.OsVersion,
+                                                    PatchedVersion = kbArticles,
+                                                    ActivelyExploited = isMandatory, // Mandatory updates often address actively exploited CVEs
+                                                    Severity = severity,
+                                                    Description = title,
+                                                    Url = $"https://msrc.microsoft.com/update-guide/vulnerability/{cveId}",
+                                                    Source = "msrc"
+                                                });
+                                            }
+                                        }
+                                    }
+
+                                    // If no CVEs extracted but it's a security update, add placeholder
+                                    if (!update.TryGetProperty("CVEs", out _) || 
+                                        (update.TryGetProperty("CVEs", out var cvesCheck) && cvesCheck.GetArrayLength() == 0))
+                                    {
+                                        // Only add if title indicates security update
+                                        if (title.Contains("Security", StringComparison.OrdinalIgnoreCase) ||
+                                            title.Contains("Cumulative Update", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            data.SecurityCves.Add(new SecurityCve
+                                            {
+                                                Cve = "Pending Security Update",
+                                                OsVersion = data.SecurityReleaseInfo.OsVersion,
+                                                PatchedVersion = kbArticles,
+                                                ActivelyExploited = isMandatory,
+                                                Severity = severity,
+                                                Description = title,
+                                                Url = !string.IsNullOrEmpty(kbArticles) 
+                                                    ? $"https://support.microsoft.com/help/{kbArticles.Replace("KB", "")}"
+                                                    : "",
+                                                Source = "msrc"
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse pending security updates");
+                    }
+                }
+
+                // Set CVE count in release info
+                data.SecurityReleaseInfo.UniqueCvesCount = data.SecurityCves.Count;
+
+                _logger.LogInformation("Security CVE collection complete - {CveCount} pending CVEs found, Update available: {UpdateAvailable}",
+                    data.SecurityCves.Count, data.SecurityReleaseInfo.UpdateAvailable);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect Security CVE information");
             }
         }
 
