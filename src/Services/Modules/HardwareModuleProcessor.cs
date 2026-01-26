@@ -103,8 +103,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.Processor.Name = CleanProcessorName(cpuBrand);
                 if (!string.IsNullOrEmpty(cpuBrand) && !cpuBrand.Contains("Virtual CPU", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Extract manufacturer from brand (first word typically) - only for non-virtual CPUs
-                    data.Processor.Manufacturer = CleanManufacturerName(cpuBrand.Split(' ')[0]);
+                    // Extract manufacturer from brand - look for known manufacturers in the string
+                    data.Processor.Manufacturer = ExtractProcessorManufacturer(cpuBrand);
                 }
                 data.Processor.Cores = GetIntValue(info, "cpu_physical_cores");
                 data.Processor.LogicalProcessors = GetIntValue(info, "cpu_logical_cores");
@@ -741,18 +741,65 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
             
-            // Enhance graphics info from registry if needed
+            // Enhance graphics info from registry if needed - PRIORITIZE discrete GPUs over integrated
+            // The registry contains ALL GPUs, while video_info may only return the primary display adapter
             if (osqueryResults.TryGetValue("graphics_registry", out var graphicsRegistry) && graphicsRegistry.Count > 0)
             {
+                string? discreteGpuName = null;
+                string? discreteGpuPath = null;
+                string? firstGpuName = null;
+                
                 foreach (var gfxReg in graphicsRegistry)
                 {
                     var registryDesc = CleanProductName(GetStringValue(gfxReg, "data"));
-                    if (!string.IsNullOrEmpty(registryDesc) && string.IsNullOrEmpty(data.Graphics.Name))
+                    var registryPath = GetStringValue(gfxReg, "path");
+                    
+                    if (string.IsNullOrEmpty(registryDesc))
+                        continue;
+                    
+                    // Track first valid GPU as fallback
+                    if (firstGpuName == null)
+                        firstGpuName = registryDesc;
+                    
+                    // Check if this is a discrete GPU
+                    if (IsDiscreteGpu(registryDesc, "") && discreteGpuName == null)
                     {
-                        data.Graphics.Name = registryDesc;
-                        _logger.LogDebug("Updated graphics name from registry: {GraphicsName}", registryDesc);
-                        break; // Use the first valid one
+                        discreteGpuName = registryDesc;
+                        discreteGpuPath = registryPath;
+                        _logger.LogInformation("Found discrete GPU in registry: {GpuName} at {Path}", registryDesc, registryPath);
                     }
+                    else
+                    {
+                        _logger.LogDebug("Found GPU in registry: {GpuName} at {Path}", registryDesc, registryPath);
+                    }
+                }
+                
+                // Use discrete GPU if found, otherwise keep what video_info selected, or use first from registry
+                if (!string.IsNullOrEmpty(discreteGpuName))
+                {
+                    // Discrete GPU found - override whatever video_info selected
+                    var wasIntegrated = !IsDiscreteGpu(data.Graphics.Name ?? "", data.Graphics.Manufacturer ?? "");
+                    if (wasIntegrated || string.IsNullOrEmpty(data.Graphics.Name))
+                    {
+                        data.Graphics.Name = discreteGpuName;
+                        // Determine manufacturer from name
+                        if (discreteGpuName.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || 
+                            discreteGpuName.Contains("GeForce", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Graphics.Manufacturer = "NVIDIA";
+                        }
+                        else if (discreteGpuName.Contains("AMD", StringComparison.OrdinalIgnoreCase) || 
+                                 discreteGpuName.Contains("Radeon", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.Graphics.Manufacturer = "AMD";
+                        }
+                        _logger.LogInformation("Overriding GPU selection with discrete GPU from registry: {GpuName}", discreteGpuName);
+                    }
+                }
+                else if (string.IsNullOrEmpty(data.Graphics.Name) && !string.IsNullOrEmpty(firstGpuName))
+                {
+                    data.Graphics.Name = firstGpuName;
+                    _logger.LogDebug("Updated graphics name from registry (fallback): {GraphicsName}", firstGpuName);
                 }
             }
             
@@ -1164,6 +1211,39 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Extract processor manufacturer from CPU brand string
+        /// Handles patterns like "13th Gen Intel Core i9-13900K" where manufacturer is not the first word
+        /// </summary>
+        private string ExtractProcessorManufacturer(string cpuBrand)
+        {
+            if (string.IsNullOrEmpty(cpuBrand))
+                return string.Empty;
+
+            var upperBrand = cpuBrand.ToUpperInvariant();
+            
+            // Check for known processor manufacturers in the string
+            if (upperBrand.Contains("INTEL"))
+                return "Intel";
+            if (upperBrand.Contains("AMD"))
+                return "AMD";
+            if (upperBrand.Contains("QUALCOMM"))
+                return "Qualcomm";
+            if (upperBrand.Contains("APPLE"))
+                return "Apple";
+            if (upperBrand.Contains("ARM"))
+                return "ARM";
+            if (upperBrand.Contains("NVIDIA"))
+                return "NVIDIA";
+            if (upperBrand.Contains("MEDIATEK"))
+                return "MediaTek";
+            if (upperBrand.Contains("SAMSUNG"))
+                return "Samsung";
+            
+            // Fallback: use first word (cleaned)
+            return CleanManufacturerName(cpuBrand.Split(' ')[0]);
+        }
+
+        /// <summary>
         /// Clean product names by removing trademark symbols and standardizing format
         /// </summary>
         private string CleanProductName(string? productName)
@@ -1285,19 +1365,37 @@ namespace ReportMate.WindowsClient.Services.Modules
                 upperDeviceName.Contains("WLAN") ||             // Wireless LAN
                 upperDeviceName.Contains("802.11") ||           // Wireless standard
                 upperDeviceName.Contains("NETWORK ADAPTER") ||  // Network devices
-                upperDeviceName.Contains("ETHERNET"))           // Ethernet adapters
+                upperDeviceName.Contains("ETHERNET") ||         // Ethernet adapters
+                upperDeviceName.Contains("AI BOOST") ||         // Intel AI Boost (CPU feature, not NPU)
+                upperDeviceName.Contains("HID CUSTOM SENSOR") ||// HID sensors (not NPU)
+                upperDeviceName.Contains("CUSTOM SENSOR") ||    // Generic sensors (not NPU)
+                upperDeviceName.Contains("SOFTWARE EXTENSION") ||// Software extensions (not hardware)
+                upperDeviceName.Contains("PROSET"))             // Intel PROSet software components
             {
                 return false;
             }
 
             // Must contain NPU-related terms to be considered valid
-            return upperDeviceName.Contains("NPU") ||
+            // Exclude generic "AI" matches unless combined with specific NPU terms
+            var hasNpuTerm = upperDeviceName.Contains("NPU") ||
                    upperDeviceName.Contains("NEURAL") ||
                    (upperDeviceName.Contains("HEXAGON") && !upperDeviceName.Contains("INPUT")) ||
                    upperDeviceName.Contains("TENSOR") ||
-                   (upperDeviceName.Contains("AI") && !upperDeviceName.Contains("INPUT")) ||
                    upperDeviceName.Contains("MACHINE LEARNING") ||
                    upperDeviceName.Contains("TOPS");
+            
+            // "AI" alone is not enough - too many false positives (AI Boost, AI Assistant, etc.)
+            // Only accept "AI" if it's part of a more specific NPU-related term
+            if (!hasNpuTerm && upperDeviceName.Contains("AI"))
+            {
+                // Check for specific AI+NPU combinations
+                hasNpuTerm = upperDeviceName.Contains("AI ACCELERATOR") ||
+                             upperDeviceName.Contains("AI PROCESSOR") ||
+                             upperDeviceName.Contains("AI ENGINE") ||
+                             upperDeviceName.Contains("AI COPROCESSOR");
+            }
+            
+            return hasNpuTerm;
         }
 
         /// <summary>
@@ -1384,6 +1482,15 @@ namespace ReportMate.WindowsClient.Services.Modules
             cleaned = System.Text.RegularExpressions.Regex.Replace(
                 cleaned,
                 @"\s+CPU\s*$",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+
+            // Remove redundant manufacturer in parentheses at the end
+            // Matches patterns like "(Intel)", "(AMD)", "(Qualcomm)", etc.
+            // Only remove if the manufacturer name already appears at the start
+            cleaned = System.Text.RegularExpressions.Regex.Replace(
+                cleaned,
+                @"\s*\((Intel|AMD|Qualcomm|Apple|ARM|NVIDIA|MediaTek|Samsung)\)\s*$",
                 "",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
 
@@ -1544,18 +1651,20 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Speed ranges for different memory types:
             // DDR3: 800-2133 MHz (typical: 1333, 1600, 1866, 2133)
             // DDR4: 2133-3600+ MHz (typical: 2133, 2400, 2666, 2933, 3200, 3600)
-            // DDR5: 4800-8000+ MHz (typical: 4800, 5200, 5600, 6000, 6400, 7200)
+            // DDR5: 4400-8000+ MHz (typical: 4800, 5200, 5600, 6000, 6400, 7200)
+            //       Note: DDR5 starts at 4400 MHz (JEDEC standard DDR5-4400)
             // LPDDR4: 2133-4266 MHz
             // LPDDR5: 5500-8533 MHz
             
-            if (speedMHz >= 4800)
+            if (speedMHz >= 4400)
             {
+                // DDR5 range starts at 4400 MHz (JEDEC DDR5-4400)
                 // Could be DDR5 or LPDDR5
                 // LPDDR5 typically runs at odd speeds like 5500, 6400, 8448
-                // DDR5 typically at 4800, 5200, 5600, 6000
+                // DDR5 typically at 4400, 4800, 5200, 5600, 6000, 6400, 7200
                 if (speedMHz >= 8000)
                     return "LPDDR5"; // Very high speeds are typically LPDDR5 (mobile)
-                if (speedMHz == 8448 || speedMHz == 7500 || speedMHz == 6400)
+                if (speedMHz == 8448 || speedMHz == 7500)
                     return "LPDDR5"; // Common LPDDR5 speeds
                 return "DDR5";
             }
@@ -2670,6 +2779,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                 (nameUpper.Contains("MANAGEMENT") || descUpper.Contains("MANAGEMENT")))
                 return true;
             
+            // Intel PROSet/Wireless WiFi Software extension (software, not hardware)
+            if (nameUpper.Contains("PROSET") || nameUpper.Contains("SOFTWARE EXTENSION"))
+                return true;
+            
+            // Software extensions are not real adapters
+            if (nameUpper.Contains("EXTENSION") && nameUpper.Contains("SOFTWARE"))
+                return true;
+            
             return false;
         }
 
@@ -3723,7 +3840,7 @@ try {
                             FormattedSize = FormatDirectorySize(size),
                             FileCount = 0, // Not calculated for performance
                             SubdirectoryCount = 0, // Not calculated for performance
-                            PercentageOfDrive = storage.Capacity > 0 ? (double)size / storage.Capacity * 100 : 0,
+                            PercentageOfDrive = CalculatePercentageOfDrive(size, storage.Capacity),
                             LastModified = DateTime.UtcNow,
                             Subdirectories = new List<DirectoryInformation>()
                         };
@@ -3873,7 +3990,7 @@ try {
                                 FormattedSize = FormatDirectorySize(size),
                                 FileCount = 0, // Not calculated for performance
                                 SubdirectoryCount = 0, // Not calculated for performance
-                                PercentageOfDrive = storage.Capacity > 0 ? (double)size / storage.Capacity * 100 : 0,
+                                PercentageOfDrive = CalculatePercentageOfDrive(size, storage.Capacity),
                                 LastModified = lastModified,
                                 Subdirectories = new List<DirectoryInformation>()
                             };
@@ -4071,7 +4188,7 @@ try {
                                 FormattedSize = FormatDirectorySize(userSize),
                                 FileCount = 0,
                                 SubdirectoryCount = 0,
-                                PercentageOfDrive = storage.Capacity > 0 ? (double)userSize / storage.Capacity * 100 : 0,
+                                PercentageOfDrive = CalculatePercentageOfDrive(userSize, storage.Capacity),
                                 LastModified = DateTime.UtcNow,
                                 Subdirectories = new List<DirectoryInformation>()
                             };
@@ -4099,7 +4216,7 @@ try {
                                 FormattedSize = FormatDirectorySize(folderSize),
                                 FileCount = 0,
                                 SubdirectoryCount = 0,
-                                PercentageOfDrive = storage.Capacity > 0 ? (double)folderSize / storage.Capacity * 100 : 0,
+                                PercentageOfDrive = CalculatePercentageOfDrive(folderSize, storage.Capacity),
                                 LastModified = DateTime.UtcNow,
                                 Subdirectories = new List<DirectoryInformation>()
                             };

@@ -12,11 +12,12 @@ namespace ReportMate.WindowsClient.Models
     // All individual module data classes are imported from their respective files:
     // - ApplicationsModels.cs: ApplicationsData, InstalledApplication, RunningProcess, StartupProgram
     // - HardwareModels.cs: HardwareData, ProcessorInfo, MemoryInfo, StorageDevice, etc.
+    // - IdentityModels.cs: IdentityData, UserAccount, GroupInfo, LoggedInUser, DirectoryServicesInfo
     // - InventoryModels.cs: InventoryData
     // - InstallsModels.cs: InstallsData, CimianInfo, MunkiInfo, ManagedInstall
     // - ManagementModels.cs: ManagementData, MdmEnrollmentInfo, MdmProfile, CompliancePolicy
     // - NetworkModels.cs: NetworkData, NetworkInterface, WifiNetwork, DnsConfiguration, etc.
     // - ProfilesModels.cs: ProfilesData, ConfigurationProfile, GroupPolicyObject, RegistryPolicy
-    // - SecurityModels.cs: SecurityData, AntivirusInfo, FirewallInfo, EncryptionInfo, etc.
+    // - SecurityModels.cs: SecurityData, AntivirusInfo, FirewallInfo, EncryptionInfo, CertificateInfo, etc.
     // - SystemModels.cs: SystemData, OperatingSystemInfo, SystemUpdate, SystemService, etc.
 }

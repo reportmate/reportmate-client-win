@@ -13,7 +13,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public FirewallInfo Firewall { get; set; } = new();
         public EncryptionInfo Encryption { get; set; } = new();
         public TpmInfo Tpm { get; set; } = new();
-        public WindowsHelloInfo WindowsHello { get; set; } = new();
+        public SecureBootInfo SecureBoot { get; set; } = new();
         public SecureShellInfo SecureShell { get; set; } = new();
         public RdpInfo Rdp { get; set; } = new();
         public List<SecurityUpdate> SecurityUpdates { get; set; } = new();
@@ -23,7 +23,29 @@ namespace ReportMate.WindowsClient.Models.Modules
     }
 
     /// <summary>
-    /// Certificate information for system and user certificates
+    /// Secure Boot and UEFI information
+    /// </summary>
+    public class SecureBootInfo
+    {
+        public bool IsEnabled { get; set; }
+        public bool IsConfirmed { get; set; } // Result of Confirm-SecureBootUEFI
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled", "Unknown"
+        public List<UefiCertificateInfo> DbCertificates { get; set; } = new(); // Secure Boot DB certs
+        public List<UefiCertificateInfo> KekCertificates { get; set; } = new(); // Key Exchange Key certs
+    }
+
+    /// <summary>
+    /// UEFI Secure Boot certificate from DB or KEK store
+    /// </summary>
+    public class UefiCertificateInfo
+    {
+        public string Thumbprint { get; set; } = string.Empty;
+        public string Subject { get; set; } = string.Empty;
+        public string Store { get; set; } = string.Empty; // "db" or "kek"
+    }
+
+    /// <summary>
+    /// Certificate information from Windows certificate stores
     /// </summary>
     public class CertificateInfo
     {
@@ -34,7 +56,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Thumbprint { get; set; } = string.Empty;
         public string ThumbprintSha256 { get; set; } = string.Empty;
         public string StoreLocation { get; set; } = string.Empty; // LocalMachine or CurrentUser
-        public string StoreName { get; set; } = string.Empty; // My, Root, CA, etc.
+        public string StoreName { get; set; } = string.Empty; // My, Root, CA, TrustedPublisher
         public DateTime? NotBefore { get; set; }
         public DateTime? NotAfter { get; set; }
         public string KeyAlgorithm { get; set; } = string.Empty;
@@ -139,127 +161,6 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Level { get; set; } = string.Empty; // Information, Warning, Error
         public DateTime Timestamp { get; set; }
         public string Message { get; set; } = string.Empty;
-    }
-
-    /// <summary>
-    /// Windows Hello authentication and biometric information
-    /// </summary>
-    public class WindowsHelloInfo
-    {
-        public CredentialProviderInfo CredentialProviders { get; set; } = new();
-        public BiometricServiceInfo BiometricService { get; set; } = new();
-        public WindowsHelloPolicyInfo Policies { get; set; } = new();
-        public NgcKeyStorageInfo NgcKeyStorage { get; set; } = new();
-        public CredentialGuardInfo CredentialGuard { get; set; } = new();
-        public List<WindowsHelloEvent> HelloEvents { get; set; } = new();
-        public WebAuthNInfo WebAuthN { get; set; } = new();
-        
-        // Computed status fields for UI display
-        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled", "Partially Configured"
-    }
-
-    public class CredentialProviderInfo
-    {
-        public bool FaceRecognitionEnabled { get; set; }
-        public bool PinEnabled { get; set; }
-        public bool FingerprintEnabled { get; set; }
-        public bool SmartCardEnabled { get; set; }
-        public List<CredentialProvider> Providers { get; set; } = new();
-    }
-
-    public class CredentialProvider
-    {
-        public string Id { get; set; } = string.Empty;
-        public string Name { get; set; } = string.Empty;
-        public string Type { get; set; } = string.Empty; // Face, PIN, Fingerprint, SmartCard
-        public bool IsEnabled { get; set; }
-        public bool IsDisabled { get; set; }
-        public string Version { get; set; } = string.Empty;
-    }
-
-    public class BiometricServiceInfo
-    {
-        public bool IsServiceRunning { get; set; }
-        public string ServiceStatus { get; set; } = string.Empty;
-        public List<BiometricDevice> Devices { get; set; } = new();
-    }
-
-    public class BiometricDevice
-    {
-        public string DeviceType { get; set; } = string.Empty; // Fingerprint, Face, Iris
-        public string Manufacturer { get; set; } = string.Empty;
-        public string Model { get; set; } = string.Empty;
-        public bool IsAvailable { get; set; }
-        public string Status { get; set; } = string.Empty;
-    }
-
-    public class WindowsHelloPolicyInfo
-    {
-        public bool AllowDomainPinLogon { get; set; }
-        public bool BiometricLogonEnabled { get; set; }
-        public List<WindowsHelloPolicySetting> GroupPolicies { get; set; } = new();
-        public List<WindowsHelloPolicySetting> PassportPolicies { get; set; } = new();
-    }
-
-    public class WindowsHelloPolicySetting
-    {
-        public string Path { get; set; } = string.Empty;
-        public string Name { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-        public string Type { get; set; } = string.Empty;
-    }
-
-    public class NgcKeyStorageInfo
-    {
-        public bool IsConfigured { get; set; }
-        public List<KeyStorageProvider> Providers { get; set; } = new();
-    }
-
-    public class KeyStorageProvider
-    {
-        public string Name { get; set; } = string.Empty;
-        public string Type { get; set; } = string.Empty;
-        public bool IsEnabled { get; set; }
-        public Dictionary<string, string> Settings { get; set; } = new();
-    }
-
-    public class CredentialGuardInfo
-    {
-        public bool IsEnabled { get; set; }
-        public bool IsConfigured { get; set; }
-        public string Configuration { get; set; } = string.Empty;
-        public List<CredentialGuardSetting> Settings { get; set; } = new();
-    }
-
-    public class CredentialGuardSetting
-    {
-        public string Name { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-        public string Description { get; set; } = string.Empty;
-    }
-
-    public class WindowsHelloEvent
-    {
-        public int EventId { get; set; }
-        public string Source { get; set; } = string.Empty;
-        public string Level { get; set; } = string.Empty;
-        public DateTime Timestamp { get; set; }
-        public string EventType { get; set; } = string.Empty; // Authentication, Enrollment, Error
-        public string Description { get; set; } = string.Empty;
-    }
-
-    public class WebAuthNInfo
-    {
-        public bool IsEnabled { get; set; }
-        public bool IsConfigured { get; set; }
-        public List<WebAuthNSetting> Settings { get; set; } = new();
-    }
-
-    public class WebAuthNSetting
-    {
-        public string Name { get; set; } = string.Empty;
-        public string Value { get; set; } = string.Empty;
-        public string Scope { get; set; } = string.Empty; // LocalMachine, CurrentUser
     }
 
     public class SecureShellInfo
