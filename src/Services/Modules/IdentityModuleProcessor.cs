@@ -102,6 +102,9 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Enhance with PowerShell for additional details
             await EnhanceUserAccountsWithPowerShell(data);
+            
+            // Collect Entra ID/Domain users from user profiles
+            await CollectEntraAndDomainUsers(data);
         }
 
         private async Task EnhanceUserAccountsWithPowerShell(IdentityData data)
@@ -225,6 +228,155 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to enhance user accounts with PowerShell");
+            }
+        }
+
+        /// <summary>
+        /// Collect Entra ID and Domain users from Win32_UserProfile
+        /// These users are not returned by Get-LocalUser but have logged into the device
+        /// </summary>
+        private async Task CollectEntraAndDomainUsers(IdentityData data)
+        {
+            try
+            {
+                // Get user profiles including Entra ID and domain users
+                // SIDs starting with S-1-5-21- are domain/local users
+                // SIDs starting with S-1-12-1- are Entra ID users
+                var script = @"
+                    $profiles = Get-CimInstance -ClassName Win32_UserProfile | Where-Object {
+                        -not $_.Special -and
+                        $_.LocalPath -like 'C:\Users\*' -and
+                        $_.LocalPath -notlike '*\Public'
+                    }
+                    
+                    $existingLocalUsers = Get-LocalUser | Select-Object -ExpandProperty SID | ForEach-Object { $_.Value }
+                    
+                    $users = foreach ($profile in $profiles) {
+                        # Skip if this SID is already a local user
+                        if ($existingLocalUsers -contains $profile.SID) { continue }
+                        
+                        $username = Split-Path $profile.LocalPath -Leaf
+                        $sid = $profile.SID
+                        
+                        # Determine account type based on SID prefix
+                        $accountType = 'Unknown'
+                        $isLocal = $false
+                        if ($sid -like 'S-1-12-1-*') {
+                            $accountType = 'EntraID'
+                        } elseif ($sid -like 'S-1-5-21-*') {
+                            # Check if it's a domain account by looking at the SID structure
+                            # Domain SIDs typically have a different domain identifier than local machine SID
+                            $machineSid = (Get-LocalUser | Select-Object -First 1).SID.AccountDomainSid.Value
+                            if ($sid.StartsWith($machineSid)) {
+                                # This is a local account, skip (should be covered by Get-LocalUser)
+                                continue
+                            } else {
+                                $accountType = 'Domain'
+                            }
+                        }
+                        
+                        # Try to get more user info from the profile registry
+                        $displayName = $username
+                        $upn = ''
+                        
+                        try {
+                            $sidObject = New-Object System.Security.Principal.SecurityIdentifier($sid)
+                            $account = $sidObject.Translate([System.Security.Principal.NTAccount])
+                            $displayName = $account.Value
+                            if ($displayName -like '*\*') {
+                                $displayName = $displayName.Split('\')[1]
+                            }
+                        } catch { }
+                        
+                        # For Entra ID users, try to get UPN from registry
+                        if ($accountType -eq 'EntraID') {
+                            try {
+                                $regPath = ""HKLM:\SOFTWARE\Microsoft\IdentityStore\Cache\$sid\IdentityCache\$sid""
+                                if (Test-Path $regPath) {
+                                    $upnReg = Get-ItemProperty -Path $regPath -Name 'UserName' -ErrorAction SilentlyContinue
+                                    if ($upnReg) { $upn = $upnReg.UserName }
+                                }
+                            } catch { }
+                        }
+                        
+                        @{
+                            Username = $username
+                            FullName = $displayName
+                            Sid = $sid
+                            HomeDirectory = $profile.LocalPath
+                            AccountType = $accountType
+                            IsLocal = $isLocal
+                            LastUseTime = if ($profile.LastUseTime) { $profile.LastUseTime.ToString('o') } else { $null }
+                            UserPrincipalName = $upn
+                        }
+                    }
+                    
+                    $users | ConvertTo-Json -Depth 2 -Compress
+                ";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('[');
+                    if (jsonStart < 0)
+                    {
+                        jsonStart = trimmedResult.IndexOf('{');
+                    }
+
+                    if (jsonStart >= 0)
+                    {
+                        var jsonContent = trimmedResult.Substring(jsonStart);
+
+                        using var document = JsonDocument.Parse(jsonContent);
+                        var root = document.RootElement;
+
+                        var elements = root.ValueKind == JsonValueKind.Array
+                            ? root.EnumerateArray().ToList()
+                            : new List<JsonElement> { root };
+
+                        var addedCount = 0;
+                        foreach (var userElement in elements)
+                        {
+                            var sid = GetJsonStringValue(userElement, "Sid");
+                            
+                            // Skip if we already have this user (by SID)
+                            if (data.Users.Any(u => u.Sid == sid))
+                                continue;
+
+                            var account = new UserAccount
+                            {
+                                Username = GetJsonStringValue(userElement, "Username"),
+                                FullName = GetJsonStringValue(userElement, "FullName"),
+                                Sid = sid,
+                                HomeDirectory = GetJsonStringValue(userElement, "HomeDirectory"),
+                                AccountType = GetJsonStringValue(userElement, "AccountType"),
+                                IsLocal = false,
+                                UserPrincipalName = GetJsonStringValue(userElement, "UserPrincipalName")
+                            };
+
+                            // Parse last use time as last logon
+                            var lastUse = GetJsonStringValue(userElement, "LastUseTime");
+                            if (!string.IsNullOrEmpty(lastUse) && DateTime.TryParse(lastUse, out var lastUseDate))
+                            {
+                                account.LastLogon = lastUseDate;
+                            }
+
+                            data.Users.Add(account);
+                            addedCount++;
+                        }
+
+                        if (addedCount > 0)
+                        {
+                            _logger.LogInformation("Added {Count} Entra ID/Domain user accounts from user profiles", addedCount);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect Entra ID/Domain user accounts from profiles");
             }
         }
 
@@ -518,7 +670,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         }
                     } catch { }
                     
-                    # Check Azure AD join status via dsregcmd
+                    # Check Entra ID join status via dsregcmd
                     try {
                         $dsreg = dsregcmd /status 2>&1
                         if ($dsreg -match 'AzureAdJoined\s*:\s*YES') {
@@ -553,13 +705,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                         data.DirectoryServices.ActiveDirectory.DomainName = GetJsonStringValue(root, "DomainName");
                         data.DirectoryServices.ActiveDirectory.DnsDomainName = GetJsonStringValue(root, "DnsDomainName");
                         data.DirectoryServices.Workgroup = GetJsonStringValue(root, "Workgroup");
-                        data.DirectoryServices.AzureAd.IsAadJoined = GetJsonBoolValue(root, "IsAadJoined");
-                        data.DirectoryServices.AzureAd.IsAadRegistered = GetJsonBoolValue(root, "IsAadRegistered");
-                        data.DirectoryServices.AzureAd.TenantId = GetJsonStringValue(root, "TenantId");
+                        data.DirectoryServices.EntraId.IsEntraJoined = GetJsonBoolValue(root, "IsAadJoined");
+                        data.DirectoryServices.EntraId.IsEntraRegistered = GetJsonBoolValue(root, "IsAadRegistered");
+                        data.DirectoryServices.EntraId.TenantId = GetJsonStringValue(root, "TenantId");
 
-                        _logger.LogDebug("Directory services: DomainJoined={IsDomain}, AadJoined={IsAad}",
+                        _logger.LogDebug("Directory services: DomainJoined={IsDomain}, EntraJoined={IsEntra}",
                             data.DirectoryServices.ActiveDirectory.IsDomainJoined,
-                            data.DirectoryServices.AzureAd.IsAadJoined);
+                            data.DirectoryServices.EntraId.IsEntraJoined);
                     }
                 }
             }
@@ -575,10 +727,14 @@ namespace ReportMate.WindowsClient.Services.Modules
             data.Summary.AdminUsers = data.Users.Count(u => u.IsAdmin);
             data.Summary.DisabledUsers = data.Users.Count(u => u.IsDisabled);
             data.Summary.CurrentlyLoggedIn = data.LoggedInUsers.Count;
+            
+            // Count local vs domain/Entra ID users
+            data.Summary.LocalUsers = data.Users.Count(u => u.IsLocal);
+            data.Summary.DomainUsers = data.Users.Count(u => !u.IsLocal);
 
             // Determine domain status
             if (data.DirectoryServices.ActiveDirectory.IsDomainJoined &&
-                data.DirectoryServices.AzureAd.IsAadJoined)
+                data.DirectoryServices.EntraId.IsEntraJoined)
             {
                 data.Summary.DomainStatus = "Hybrid";
             }
@@ -586,9 +742,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 data.Summary.DomainStatus = "Domain";
             }
-            else if (data.DirectoryServices.AzureAd.IsAadJoined)
+            else if (data.DirectoryServices.EntraId.IsEntraJoined)
             {
-                data.Summary.DomainStatus = "AzureAD";
+                data.Summary.DomainStatus = "EntraID";
             }
             else
             {

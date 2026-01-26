@@ -108,7 +108,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<string> GroupMemberships { get; set; } = new();
         
         /// <summary>
-        /// User Principal Name (for domain accounts or AAD)
+        /// User Principal Name (for domain accounts or Entra ID)
         /// </summary>
         public string UserPrincipalName { get; set; } = string.Empty;
     }
@@ -172,7 +172,7 @@ namespace ReportMate.WindowsClient.Models.Modules
     }
 
     /// <summary>
-    /// Directory services binding information (AD, Azure AD)
+    /// Directory services binding information (AD, Entra ID)
     /// </summary>
     public class DirectoryServicesInfo
     {
@@ -182,9 +182,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public ActiveDirectoryInfo ActiveDirectory { get; set; } = new();
         
         /// <summary>
-        /// Azure AD / Entra ID join status
+        /// Entra ID (formerly Azure AD) join status
         /// </summary>
-        public AzureAdInfo AzureAd { get; set; } = new();
+        public EntraIdInfo EntraId { get; set; } = new();
         
         /// <summary>
         /// Workgroup name (if not domain joined)
@@ -207,12 +207,12 @@ namespace ReportMate.WindowsClient.Models.Modules
     }
 
     /// <summary>
-    /// Azure AD / Entra ID information
+    /// Entra ID (formerly Azure AD) information
     /// </summary>
-    public class AzureAdInfo
+    public class EntraIdInfo
     {
-        public bool IsAadJoined { get; set; }
-        public bool IsAadRegistered { get; set; }
+        public bool IsEntraJoined { get; set; }
+        public bool IsEntraRegistered { get; set; }
         public string TenantId { get; set; } = string.Empty;
         public string TenantName { get; set; } = string.Empty;
         public string DeviceId { get; set; } = string.Empty;
@@ -231,7 +231,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public int DomainUsers { get; set; }
         public int CurrentlyLoggedIn { get; set; }
         public int FailedLoginsLast7Days { get; set; }
-        public string DomainStatus { get; set; } = string.Empty; // Standalone, Domain, AzureAD, Hybrid
+        public string DomainStatus { get; set; } = string.Empty; // Standalone, Domain, EntraID, Hybrid
     }
 
     /// <summary>
