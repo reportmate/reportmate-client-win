@@ -33,6 +33,11 @@ public class Program
 {
     private static ServiceProvider? _serviceProvider;
     private static ILogger<Program>? _logger;
+    
+    /// <summary>
+    /// Current storage analysis mode (quick, deep, or auto). Accessible by processors.
+    /// </summary>
+    public static string CurrentStorageMode { get; private set; } = "auto";
 
     // Windows API for console attachment
     [DllImport("kernel32.dll")]
@@ -124,6 +129,21 @@ public class Program
             // Parse and execute commands
             var commandLineBuilder = new CommandLineBuilder(rootCommand)
                 .UseDefaults()
+                .AddMiddleware(async (context, next) =>
+                {
+                    // Capture storage mode from parsed result before handlers run
+                    var storageModeOption = context.ParseResult.RootCommandResult.Command.Options
+                        .FirstOrDefault(o => o.Name == "storage-mode");
+                    if (storageModeOption is not null)
+                    {
+                        var storageModeResult = context.ParseResult.FindResultFor(storageModeOption);
+                        if (storageModeResult is not null)
+                        {
+                            CurrentStorageMode = storageModeResult.GetValueOrDefault<string>() ?? "auto";
+                        }
+                    }
+                    await next(context);
+                })
                 .UseExceptionHandler((exception, context) =>
                 {
                     _logger?.LogError(exception, "Unhandled exception occurred");
@@ -482,6 +502,7 @@ public class Program
         services.AddScoped<ApplicationsModuleProcessor>();
         services.AddScoped<DisplayModuleProcessor>();
         services.AddScoped<HardwareModuleProcessor>();
+        services.AddScoped<IdentityModuleProcessor>();
         services.AddScoped<InventoryModuleProcessor>();
         services.AddScoped<InstallsModuleProcessor>();
         services.AddScoped<ManagementModuleProcessor>();
@@ -513,9 +534,11 @@ public class Program
         var transmitOnlyOption = new Option<bool>("--transmit-only", "Transmit cached data only without collecting new data");
         var runModuleOption = new Option<string>("--run-module", "Run only a specific module (e.g., network, hardware, security). By default, this will collect and transmit the module data.");
         var runModulesOption = new Option<string>("--run-modules", "Run multiple specific modules separated by commas (e.g., hardware,installs,security). By default, this will collect and transmit the module data.");
+        var storageModeOption = new Option<string>("--storage-mode", () => "auto", "Storage analysis mode for hardware module: 'quick' (drive totals only), 'deep' (full directory analysis), or 'auto' (use cache if <24h old)");
         
         // Add global options to root command
         rootCommand.AddGlobalOption(verboseOption);
+        rootCommand.AddGlobalOption(storageModeOption);
         rootCommand.AddOption(forceOption);
         rootCommand.AddOption(collectOnlyOption);
         rootCommand.AddOption(transmitOnlyOption);
@@ -593,6 +616,8 @@ public class Program
             Logger.SetVerboseLevel(verbose);
             ConsoleFormatter.SetVerboseMode(verbose >= 2); // Enable for INFO level and above
             
+            // Storage mode is already captured via middleware in Program.CurrentStorageMode
+            
             // Validate mutually exclusive options
             if (collectOnly && transmitOnly)
             {
@@ -618,6 +643,7 @@ public class Program
                     ["Transmit Only"] = transmitOnly,
                     ["Run Module"] = runModule ?? "NONE",
                     ["Run Modules"] = runModules ?? "NONE",
+                    ["Storage Mode"] = CurrentStorageMode,
                     ["Effective Mode"] = !string.IsNullOrEmpty(runModule) ? $"Single Module: {runModule}" :
                                         !string.IsNullOrEmpty(runModules) ? $"Multiple Modules: {runModules}" :
                                         "ALL (full collection)",

@@ -44,19 +44,19 @@
       "description": "CPU speed from registry"
     },
     "graphics_registry": {
-      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverDesc';",
+      "query": "SELECT path, name, type, data FROM registry WHERE (key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0001' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0002' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0003') AND name = 'DriverDesc';",
       "interval": 3600,
-      "description": "Graphics card information from registry"
+      "description": "Graphics card information from registry - queries all GPU slots 0000-0003"
     },
     "graphics_memory_registry": {
-      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\HardwareInformation.MemorySize';",
+      "query": "SELECT path, name, type, data FROM registry WHERE (key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0001' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0002' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0003') AND name = 'HardwareInformation.MemorySize';",
       "interval": 3600,
-      "description": "Graphics memory from registry"
+      "description": "Graphics memory from registry - queries all GPU slots"
     },
     "graphics_driver_registry": {
-      "query": "SELECT name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\%\\DriverVersion';",
+      "query": "SELECT path, name, type, data FROM registry WHERE (key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0001' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0002' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0003') AND name = 'DriverVersion';",
       "interval": 3600,
-      "description": "Graphics driver version from registry"
+      "description": "Graphics driver version from registry - queries all GPU slots"
     },
     "wmi_bios_info": {
       "query": "SELECT name, value FROM wmi_bios_info WHERE name IN ('SerialNumber', 'Manufacturer', 'SMBIOSBIOSVersion', 'ReleaseDate');",
