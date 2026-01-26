@@ -1,9 +1,9 @@
 {
   "schedules": {
     "hourly": {
-      "modules": ["security", "profiles", "network", "management"],
+      "modules": ["security", "profiles", "network", "management", "identity"],
       "interval_minutes": 60,
-      "description": "Modules that need frequent updates for security and configuration monitoring (installs module runs from Cimian's postflight script)"
+      "description": "Modules that need frequent updates for security, configuration, and identity monitoring (installs module runs from Cimian's postflight script)"
     },
     "every4hours": {
       "modules": ["applications", "inventory", "system"],
@@ -16,7 +16,7 @@
       "description": "Modules that rarely change - physical hardware and peripheral devices"
     },
     "all": {
-      "modules": ["security", "profiles", "network", "applications", "inventory", "system", "hardware", "management", "printers", "displays"],
+      "modules": ["security", "profiles", "network", "applications", "inventory", "system", "hardware", "management", "printers", "displays", "identity"],
       "interval_minutes": 720,
       "description": "Run all available modules (except installs) for comprehensive data collection"
     }
