@@ -803,7 +803,23 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
             
-            // Get graphics memory from registry if not available
+            // Get graphics memory from QWORD registry first (64-bit value for GPUs with >4GB VRAM like RTX 3080)
+            if (osqueryResults.TryGetValue("graphics_memory_qword_registry", out var graphicsMemoryQwordRegistry) && 
+                graphicsMemoryQwordRegistry.Count > 0 && data.Graphics.MemorySize == 0)
+            {
+                foreach (var memReg in graphicsMemoryQwordRegistry)
+                {
+                    var memoryData = GetStringValue(memReg, "data");
+                    if (!string.IsNullOrEmpty(memoryData) && long.TryParse(memoryData, out var memoryBytes) && memoryBytes > 0)
+                    {
+                        data.Graphics.MemorySize = ConvertBytesToGB(memoryBytes);
+                        _logger.LogDebug("Updated graphics memory from QWORD registry: {Memory}GB (raw: {Raw})", data.Graphics.MemorySize, memoryBytes);
+                        break;
+                    }
+                }
+            }
+            
+            // Get graphics memory from registry if not available (32-bit fallback for older GPUs)
             if (osqueryResults.TryGetValue("graphics_memory_registry", out var graphicsMemoryRegistry) && 
                 graphicsMemoryRegistry.Count > 0 && data.Graphics.MemorySize == 0)
             {
@@ -964,6 +980,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                         break;
                     }
                 }
+            }
+
+            // Final GPU name cleanup - remove manufacturer prefix from name
+            // e.g., "NVIDIA GeForce RTX 3080" -> "GeForce RTX 3080"
+            if (!string.IsNullOrEmpty(data.Graphics.Name))
+            {
+                data.Graphics.Name = CleanGpuName(data.Graphics.Name, data.Graphics.Manufacturer);
+                _logger.LogDebug("Cleaned GPU name: {Name}, Manufacturer: {Manufacturer}", data.Graphics.Name, data.Graphics.Manufacturer);
             }
 
             // USB devices are not available in this osquery version
@@ -1276,6 +1300,41 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Clean GPU name by removing manufacturer prefix (e.g., "NVIDIA GeForce RTX 3080" -> "GeForce RTX 3080")
+        /// </summary>
+        private string CleanGpuName(string? gpuName, string? manufacturer = null)
+        {
+            if (string.IsNullOrEmpty(gpuName))
+                return string.Empty;
+
+            var cleaned = CleanProductName(gpuName);
+            
+            // Remove manufacturer prefix if present
+            if (!string.IsNullOrEmpty(manufacturer))
+            {
+                var cleanedManufacturer = CleanManufacturerName(manufacturer);
+                if (!string.IsNullOrEmpty(cleanedManufacturer) && 
+                    cleaned.StartsWith(cleanedManufacturer, StringComparison.OrdinalIgnoreCase))
+                {
+                    cleaned = cleaned.Substring(cleanedManufacturer.Length).TrimStart();
+                }
+            }
+            
+            // Also handle common manufacturer prefixes that may be in the name itself
+            string[] prefixes = { "NVIDIA ", "AMD ", "Intel ", "ATI " };
+            foreach (var prefix in prefixes)
+            {
+                if (cleaned.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    cleaned = cleaned.Substring(prefix.Length);
+                    break;
+                }
+            }
+            
+            return cleaned.Trim();
+        }
+
+        /// <summary>
         /// Clean model names by removing trademark symbols, standardizing format, filtering common noise words,
         /// and removing redundant manufacturer prefix if the model starts with it
         /// </summary>
@@ -1461,6 +1520,28 @@ namespace ReportMate.WindowsClient.Services.Modules
                 .Replace("®", "")
                 .Replace("™", "")
                 .Trim();
+
+            // Remove manufacturer prefixes for cleaner display
+            // Intel: "Intel Core i9-13900K" → "Core i9-13900K"
+            // Intel: "13th Gen Intel Core i9-13900K" → "Core i9-13900K"  
+            // AMD: "AMD Ryzen Threadripper PRO 5945WX" → "Ryzen Threadripper PRO 5945WX"
+            
+            // Remove generation prefix + manufacturer for Intel (e.g., "13th Gen Intel")
+            cleaned = System.Text.RegularExpressions.Regex.Replace(
+                cleaned,
+                @"^\d+(st|nd|rd|th)\s+Gen\s+Intel\s+",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+            
+            // Remove standalone manufacturer prefixes
+            if (cleaned.StartsWith("Intel ", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(6).Trim();
+            }
+            else if (cleaned.StartsWith("AMD ", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(4).Trim();
+            }
 
             // Remove core count suffixes like "16-Cores", "8-Core", etc.
             // This is redundant since we have a dedicated cores field
@@ -2609,6 +2690,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     // Extract protocol from name (Wi-Fi 6, 802.11ax, etc.)
                     data.Wireless.Protocol = ExtractWirelessProtocol(data.Wireless.Name);
+                    var (wifiGen, wifiVer) = ExtractWifiGenerationAndVersion(data.Wireless.Name);
+                    data.Wireless.WifiGeneration = wifiGen;
+                    data.Wireless.WifiVersion = wifiVer;
                     
                     _logger.LogDebug("Found Wireless adapter from drivers: {Name} (Manufacturer: {Manufacturer}, Protocol: {Protocol})", 
                         data.Wireless.Name, data.Wireless.Manufacturer, data.Wireless.Protocol);
@@ -2663,6 +2747,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                         
                         // Extract protocol from name
                         data.Wireless.Protocol = ExtractWirelessProtocol(data.Wireless.Name);
+                        var (wifiGen2, wifiVer2) = ExtractWifiGenerationAndVersion(data.Wireless.Name);
+                        data.Wireless.WifiGeneration = wifiGen2;
+                        data.Wireless.WifiVersion = wifiVer2;
                         
                         _logger.LogDebug("Found Wireless adapter from registry: {Name}", regData);
                         break;
@@ -2726,6 +2813,46 @@ namespace ReportMate.WindowsClient.Services.Modules
                 return "802.11a";
             
             return string.Empty;
+        }
+
+        /// <summary>
+        /// Extract WiFi generation (e.g., "Wi-Fi 6E") and version (e.g., "802.11ax") from adapter name
+        /// </summary>
+        private (string generation, string version) ExtractWifiGenerationAndVersion(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return (string.Empty, string.Empty);
+            
+            var lowerName = name.ToLowerInvariant();
+            
+            // Wi-Fi 7 / 802.11be
+            if (lowerName.Contains("wi-fi 7") || lowerName.Contains("wifi 7") || lowerName.Contains("802.11be"))
+                return ("Wi-Fi 7", "802.11be");
+            
+            // Wi-Fi 6E / 802.11ax 6GHz
+            if (lowerName.Contains("wi-fi 6e") || lowerName.Contains("wifi 6e") || lowerName.Contains("6e"))
+                return ("Wi-Fi 6E", "802.11ax");
+            
+            // Wi-Fi 6 / 802.11ax
+            if (lowerName.Contains("wi-fi 6") || lowerName.Contains("wifi 6") || lowerName.Contains("802.11ax") || lowerName.Contains("ax211") || lowerName.Contains("ax201") || lowerName.Contains("ax200"))
+                return ("Wi-Fi 6", "802.11ax");
+            
+            // Wi-Fi 5 / 802.11ac
+            if (lowerName.Contains("wi-fi 5") || lowerName.Contains("wifi 5") || lowerName.Contains("802.11ac") || lowerName.Contains("ac"))
+                return ("Wi-Fi 5", "802.11ac");
+            
+            // Wi-Fi 4 / 802.11n
+            if (lowerName.Contains("wi-fi 4") || lowerName.Contains("wifi 4") || lowerName.Contains("802.11n"))
+                return ("Wi-Fi 4", "802.11n");
+            
+            // Older standards
+            if (lowerName.Contains("802.11g"))
+                return (string.Empty, "802.11g");
+            if (lowerName.Contains("802.11b"))
+                return (string.Empty, "802.11b");
+            if (lowerName.Contains("802.11a"))
+                return (string.Empty, "802.11a");
+            
+            return (string.Empty, string.Empty);
         }
 
         /// <summary>
@@ -2851,6 +2978,9 @@ try {
                         }
                         
                         data.Wireless.Protocol = ExtractWirelessProtocol(data.Wireless.Name);
+                        var (wifiGen3, wifiVer3) = ExtractWifiGenerationAndVersion(data.Wireless.Name);
+                        data.Wireless.WifiGeneration = wifiGen3;
+                        data.Wireless.WifiVersion = wifiVer3;
                         
                         _logger.LogDebug("Wireless adapter detected via PowerShell: {Name}", data.Wireless.Name);
                     }
