@@ -73,7 +73,7 @@ namespace ReportMate.WindowsClient.DataProcessing
 
                 var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
                 {
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     WriteIndented = false
                 });
 
@@ -148,7 +148,7 @@ namespace ReportMate.WindowsClient.DataProcessing
 
                 var json = JsonSerializer.Serialize(deviceData, new JsonSerializerOptions
                 {
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     WriteIndented = true
                 });
 
