@@ -312,7 +312,7 @@ namespace ReportMate.WindowsClient.Services
 
             try
             {
-                // For single module collection, we need to get serial number from a system query
+                // For single module collection, we need to get serial number and UUID from a system query
                 // Since we don't have the full osquery results, run a minimal query to get device info
                 var systemQueries = new Dictionary<string, object>
                 {
@@ -321,12 +321,26 @@ namespace ReportMate.WindowsClient.Services
 
                 var systemResults = await ExecuteModularQueriesAsync(systemQueries);
                 var serialNumber = ExtractSerialNumber(systemResults);
+                var deviceUuid = ExtractDeviceUuid(systemResults);
+
+                // Ensure we have both required identifiers
+                if (string.IsNullOrEmpty(serialNumber))
+                {
+                    _logger.LogError("Failed to extract serial number for single module unified payload");
+                    throw new InvalidOperationException("Serial number is required for transmission");
+                }
+                
+                if (string.IsNullOrEmpty(deviceUuid))
+                {
+                    _logger.LogError("Failed to extract device UUID for single module unified payload");
+                    throw new InvalidOperationException("Device UUID is required for transmission");
+                }
 
                 // Create unified payload with metadata
                 var payload = new UnifiedDevicePayload();
                 payload.Metadata = new EventMetadata
                 {
-                    DeviceId = moduleData.DeviceId,
+                    DeviceId = deviceUuid,
                     SerialNumber = serialNumber,
                     CollectedAt = moduleData.CollectedAt,
                     ClientVersion = GetClientVersion(),
@@ -412,7 +426,7 @@ namespace ReportMate.WindowsClient.Services
                 var json = JsonSerializer.Serialize(data, actualType, new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
@@ -439,7 +453,7 @@ namespace ReportMate.WindowsClient.Services
                 var json = JsonSerializer.Serialize((object)data, new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
@@ -527,7 +541,7 @@ namespace ReportMate.WindowsClient.Services
                         // JSON options for deserialization
                         var jsonOptions = new JsonSerializerOptions
                         {
-                            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                             TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
                             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                         };
@@ -1005,7 +1019,7 @@ namespace ReportMate.WindowsClient.Services
                 var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
                 {
                     WriteIndented = true,
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     TypeInfoResolver = ReportMateJsonContext.Default,
                     Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping // Prevent unnecessary Unicode escaping
                 });
