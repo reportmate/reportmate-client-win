@@ -189,7 +189,7 @@ namespace ReportMate.WindowsClient.Services
 
                 var options = new JsonSerializerOptions
                 {
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                     WriteIndented = true
                 };
 
@@ -221,7 +221,7 @@ namespace ReportMate.WindowsClient.Services
                 var json = await File.ReadAllTextAsync(filePath);
                 var options = new JsonSerializerOptions
                 {
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
                 };
 
                 var data = JsonSerializer.Deserialize<ProcessedDeviceData>(json, options);

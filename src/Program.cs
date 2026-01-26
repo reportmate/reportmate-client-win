@@ -1484,7 +1484,7 @@ public class Program
             var unifiedPayloadJson = await File.ReadAllTextAsync(unifiedPayloadPath);
             var unifiedPayload = JsonSerializer.Deserialize<UnifiedDevicePayload>(unifiedPayloadJson, new JsonSerializerOptions
             {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 TypeInfoResolver = ReportMateJsonContext.Default
             });
 
