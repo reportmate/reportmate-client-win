@@ -93,7 +93,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Modules.LoginHistoryEntry))]
 [JsonSerializable(typeof(Modules.DirectoryServicesInfo))]
 [JsonSerializable(typeof(Modules.ActiveDirectoryInfo))]
-[JsonSerializable(typeof(Modules.AzureAdInfo))]
+[JsonSerializable(typeof(Modules.EntraIdInfo))]
 [JsonSerializable(typeof(Modules.IdentitySummary))]
 [JsonSerializable(typeof(List<Modules.UserAccount>))]
 [JsonSerializable(typeof(List<Modules.GroupInfo>))]
@@ -169,7 +169,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(object))]
 [JsonSourceGenerationOptions(
-    PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     WriteIndented = false,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     AllowTrailingCommas = true,
