@@ -175,6 +175,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? DriverDate { get; set; }
         public string Status { get; set; } = string.Empty; // Enabled, Disabled, Not Present
         public string Protocol { get; set; } = string.Empty; // 802.11ax, 802.11ac, etc.
+        public string WifiGeneration { get; set; } = string.Empty; // Wi-Fi 6E, Wi-Fi 6, Wi-Fi 5, etc.
+        public string WifiVersion { get; set; } = string.Empty; // 802.11ax, 802.11ac, etc.
         public bool IsAvailable { get; set; }
     }
 

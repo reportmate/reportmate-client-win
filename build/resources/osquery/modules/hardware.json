@@ -53,6 +53,11 @@
       "interval": 3600,
       "description": "Graphics memory from registry - queries all GPU slots"
     },
+    "graphics_memory_qword_registry": {
+      "query": "SELECT path, name, type, data FROM registry WHERE (key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0001' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0002' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0003') AND name = 'HardwareInformation.qwMemorySize';",
+      "interval": 3600,
+      "description": "Graphics memory QWORD (64-bit) from registry for GPUs with >4GB VRAM - queries all GPU slots"
+    },
     "graphics_driver_registry": {
       "query": "SELECT path, name, type, data FROM registry WHERE (key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0001' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0002' OR key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0003') AND name = 'DriverVersion';",
       "interval": 3600,
