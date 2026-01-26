@@ -792,23 +792,20 @@ if (-not $SkipNUPKG) {
             Write-Verbose "Running cimipkg from: $cimipkgPath"
             Push-Location $NupkgDir
             
-            # Use Start-Process to properly handle output and avoid redirection issues
-            $envFile = Join-Path $NupkgDir ".env"
+            # Build NUPKG using cimipkg
+            # NOTE: -e flag has issues with argument parsing, skip for now
+            Write-Verbose "Running cimipkg to create NUPKG package"
             
-            # Build arguments - only include -env if file exists (it's optional, keys can be set by separate package)
-            $cimipkgArgs = if (Test-Path $envFile) { "-env `"$envFile`" ." } else { "." }
+            $output = & $cimipkgPath --nupkg . 2>&1
             
-            $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-            $startInfo.FileName = $cimipkgPath
-            $startInfo.Arguments = $cimipkgArgs
-            $startInfo.WorkingDirectory = $NupkgDir
-            $startInfo.UseShellExecute = $false
-            $startInfo.CreateNoWindow = $true
+            $exitCode = $LASTEXITCODE
+            $stdout = ($output | Where-Object { $_ -is [string] }) -join "`n"
+            $stderr = ($output | Where-Object { $_ -isnot [string] }) -join "`n"
             
-            $process = [System.Diagnostics.Process]::Start($startInfo)
-            $process.WaitForExit()
-            $exitCode = $process.ExitCode
-            
+            Write-Verbose "cimipkg stdout: $stdout"
+            if ($stderr) {
+                Write-Verbose "cimipkg stderr: $stderr"
+            }
             Write-Verbose "cimipkg exit code: $exitCode"
             
             if ($exitCode -eq 0) {
@@ -842,6 +839,9 @@ if (-not $SkipNUPKG) {
                     Write-Warning "No .nupkg files found after cimipkg execution"
                 }
             } else {
+                # Display output when build fails
+                if ($stdout) { Write-Host "cimipkg stdout: $stdout" -ForegroundColor Yellow }
+                if ($stderr) { Write-Host "cimipkg stderr: $stderr" -ForegroundColor Red }
                 throw "cimipkg failed with exit code: $exitCode"
             }
         } catch {
@@ -968,33 +968,14 @@ Commit: $env:GITHUB_SHA
             Push-Location $PkgDir
             
             # Build PKG using cimipkg (default format is .pkg, not .nupkg)
-            # cimipkg reads version from build-info.yaml, no -v flag needed
-            $envFile = Join-Path $PkgDir ".env"
+            # NOTE: -e flag has issues with argument parsing, skip for now
+            Write-Verbose "Running cimipkg to create PKG package"
             
-            # Build arguments - only include -env if file exists (it's optional, keys can be set by separate package)
-            $pkgArgs = @("-verbose")
-            if (Test-Path $envFile) {
-                $pkgArgs += @("-env", $envFile)
-            }
-            $pkgArgs += "."
+            $output = & $cimipkgPath -verbose . 2>&1
             
-            Write-Verbose "Running cimipkg with args: $($pkgArgs -join ' ')"
-            
-            # Use Start-Process for better control
-            $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-            $startInfo.FileName = $cimipkgPath
-            $startInfo.Arguments = $pkgArgs -join ' '
-            $startInfo.WorkingDirectory = $PkgDir
-            $startInfo.UseShellExecute = $false
-            $startInfo.CreateNoWindow = $true
-            $startInfo.RedirectStandardOutput = $true
-            $startInfo.RedirectStandardError = $true
-            
-            $process = [System.Diagnostics.Process]::Start($startInfo)
-            $stdout = $process.StandardOutput.ReadToEnd()
-            $stderr = $process.StandardError.ReadToEnd()
-            $process.WaitForExit()
-            $exitCode = $process.ExitCode
+            $exitCode = $LASTEXITCODE
+            $stdout = ($output | Where-Object { $_ -is [string] }) -join "`n"
+            $stderr = ($output | Where-Object { $_ -isnot [string] }) -join "`n"
             
             Write-Verbose "cimipkg stdout: $stdout"
             if ($stderr) {
@@ -1022,6 +1003,9 @@ Commit: $env:GITHUB_SHA
                     Write-Warning "No .pkg files found after cimipkg execution"
                 }
             } else {
+                # Display output when build fails
+                if ($stdout) { Write-Host "cimipkg stdout: $stdout" -ForegroundColor Yellow }
+                if ($stderr) { Write-Host "cimipkg stderr: $stderr" -ForegroundColor Red }
                 throw "cimipkg failed with exit code: $exitCode"
             }
         } catch {
