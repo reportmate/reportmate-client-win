@@ -93,7 +93,7 @@
       "optional": true
     },
     "wireless_drivers": {
-      "query": "SELECT device_name, description, manufacturer, provider, version, date FROM drivers WHERE (device_name LIKE '%Wi-Fi%' OR device_name LIKE '%Wireless%' OR device_name LIKE '%WLAN%' OR device_name LIKE '%802.11%' OR description LIKE '%Wireless%' OR description LIKE '%Wi-Fi%' OR description LIKE '%WLAN%') AND device_name IS NOT NULL;",
+      "query": "SELECT device_name, description, manufacturer, provider, version, date FROM drivers WHERE ((device_name LIKE '%Wi-Fi%' OR device_name LIKE '%Wireless%' OR device_name LIKE '%WLAN%' OR device_name LIKE '%802.11%' OR device_name LIKE '%FastConnect%' OR device_name LIKE '%Mobile Connectivity%' OR description LIKE '%Wireless%' OR description LIKE '%Wi-Fi%' OR description LIKE '%WLAN%' OR description LIKE '%FastConnect%' OR description LIKE '%Mobile Connectivity%') AND device_name NOT LIKE '%Bluetooth%') AND device_name IS NOT NULL;",
       "interval": 3600,
       "description": "Wireless adapter driver information"
     },
