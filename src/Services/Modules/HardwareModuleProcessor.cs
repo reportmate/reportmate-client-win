@@ -1208,14 +1208,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                 .Replace("™", "")
                 .Trim();
 
-            // Remove " Inc." or " Inc" from the end (case insensitive)
-            if (cleaned.EndsWith(" Inc.", StringComparison.OrdinalIgnoreCase))
+            // Remove common corporate suffixes (case insensitive)
+            // Order matters - check longer suffixes first
+            string[] suffixes = { " Corporation", " Corp.", " Corp", " Incorporated", " Inc.", " Inc", " Ltd.", " Ltd", " LLC", " Co.", " Co" };
+            foreach (var suffix in suffixes)
             {
-                cleaned = cleaned.Substring(0, cleaned.Length - 5);
-            }
-            else if (cleaned.EndsWith(" Inc", StringComparison.OrdinalIgnoreCase))
-            {
-                cleaned = cleaned.Substring(0, cleaned.Length - 4);
+                if (cleaned.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    cleaned = cleaned.Substring(0, cleaned.Length - suffix.Length);
+                    break; // Only remove one suffix
+                }
             }
             
             cleaned = cleaned.Trim();
@@ -1250,7 +1252,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 return "Intel";
             if (upperBrand.Contains("AMD"))
                 return "AMD";
-            if (upperBrand.Contains("QUALCOMM"))
+            if (upperBrand.Contains("QUALCOMM") || upperBrand.Contains("SNAPDRAGON"))
                 return "Qualcomm";
             if (upperBrand.Contains("APPLE"))
                 return "Apple";
@@ -1321,7 +1323,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
             
             // Also handle common manufacturer prefixes that may be in the name itself
-            string[] prefixes = { "NVIDIA ", "AMD ", "Intel ", "ATI " };
+            string[] prefixes = { "NVIDIA ", "AMD ", "Intel ", "ATI ", "Qualcomm " };
             foreach (var prefix in prefixes)
             {
                 if (cleaned.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -1329,6 +1331,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                     cleaned = cleaned.Substring(prefix.Length);
                     break;
                 }
+            }
+            
+            // Remove " Graphics" suffix (e.g., "Adreno Graphics" -> "Adreno")
+            if (cleaned.EndsWith(" Graphics", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = cleaned.Substring(0, cleaned.Length - 9);
             }
             
             return cleaned.Trim();
@@ -1575,8 +1583,40 @@ namespace ReportMate.WindowsClient.Services.Modules
                 "",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
 
-            // Don't return "Virtual CPU" - it's not useful
-            if (cleaned.StartsWith("Virtual CPU", StringComparison.OrdinalIgnoreCase))
+            // Clean up Snapdragon names - we have separate fields for cores and speed
+            // "Snapdragon X 12-core X1E80100 @ 3.40 GHz" -> "Snapdragon X Elite"
+            // Map known Snapdragon chip IDs to marketing names
+            if (cleaned.Contains("X1E80100", StringComparison.OrdinalIgnoreCase) ||
+                cleaned.Contains("X1E84100", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = "Snapdragon X Elite";
+            }
+            else if (cleaned.Contains("X1E78100", StringComparison.OrdinalIgnoreCase) ||
+                     cleaned.Contains("X1E68100", StringComparison.OrdinalIgnoreCase))
+            {
+                cleaned = "Snapdragon X Plus";
+            }
+            else if (cleaned.StartsWith("Snapdragon", StringComparison.OrdinalIgnoreCase))
+            {
+                // For other Snapdragon processors, remove core count and speed info
+                // "Snapdragon X 12-core ... @ 3.40 GHz" -> "Snapdragon X"
+                cleaned = System.Text.RegularExpressions.Regex.Replace(
+                    cleaned,
+                    @"\s+\d+-core\s+.*$",
+                    "",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+                // Remove @ speed suffix
+                cleaned = System.Text.RegularExpressions.Regex.Replace(
+                    cleaned,
+                    @"\s+@\s*[\d.]+\s*GHz\s*$",
+                    "",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+            }
+
+            // Don't return "Virtual CPU" or "Virtual" - it's not useful (seen on ARM devices)
+            // These should be replaced by registry lookup
+            if (cleaned.StartsWith("Virtual CPU", StringComparison.OrdinalIgnoreCase) ||
+                cleaned.Equals("Virtual", StringComparison.OrdinalIgnoreCase))
             {
                 return string.Empty; // Let other queries provide the real name
             }
@@ -2073,10 +2113,27 @@ namespace ReportMate.WindowsClient.Services.Modules
                         data.Npu.Manufacturer = CleanManufacturerName(manufacturer);
                         data.Npu.IsAvailable = true;
                         
-                        if (description.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
+                        if (description.Contains("Hexagon", StringComparison.OrdinalIgnoreCase) ||
+                            deviceName.Contains("Hexagon", StringComparison.OrdinalIgnoreCase))
                         {
                             data.Npu.Architecture = "Hexagon";
+                            // First try to extract from description/name
                             ExtractTopsFromName(description, data.Npu);
+                            ExtractTopsFromName(deviceName, data.Npu);
+                            
+                            // If still no TOPS and this is a known Snapdragon X Elite chip, set 45 TOPS
+                            if (data.Npu.ComputeUnits == 0 && 
+                                (deviceName.Contains("X1E80100", StringComparison.OrdinalIgnoreCase) ||
+                                 deviceName.Contains("X1E78100", StringComparison.OrdinalIgnoreCase) ||
+                                 deviceName.Contains("X1E84100", StringComparison.OrdinalIgnoreCase) ||
+                                 deviceName.Contains("X1E68100", StringComparison.OrdinalIgnoreCase) ||
+                                 description.Contains("X1E80100", StringComparison.OrdinalIgnoreCase) ||
+                                 description.Contains("X1E78100", StringComparison.OrdinalIgnoreCase) ||
+                                 description.Contains("X Elite", StringComparison.OrdinalIgnoreCase)))
+                            {
+                                data.Npu.ComputeUnits = 45;
+                                _logger.LogDebug("Set 45 TOPS based on Snapdragon X Elite chip model in NPU device name");
+                            }
                         }
                         
                         _logger.LogDebug("Found NPU from drivers: {NPU} (Manufacturer: {Manufacturer})", deviceName, manufacturer);
@@ -2864,6 +2921,11 @@ namespace ReportMate.WindowsClient.Services.Modules
             var descUpper = (description ?? "").ToUpperInvariant();
             var mfgUpper = (manufacturer ?? "").ToUpperInvariant();
             
+            // Known real wireless hardware - always accept these (but not Bluetooth variants)
+            if ((nameUpper.Contains("FASTCONNECT") || descUpper.Contains("FASTCONNECT")) &&
+                !nameUpper.Contains("BLUETOOTH") && !descUpper.Contains("BLUETOOTH"))
+                return false; // FastConnect is Qualcomm's real Wi-Fi chipset (but dual Bluetooth variant is BT)
+            
             // Virtual adapter indicators
             if (nameUpper.Contains("VIRTUAL") || descUpper.Contains("VIRTUAL"))
                 return true;
@@ -2930,21 +2992,24 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var powershellScript = @"
 try {
     # Get real Wi-Fi adapters (exclude virtual, Wi-Fi Direct, etc.)
+    # Include FastConnect for Qualcomm devices
     $adapter = Get-NetAdapter | Where-Object { 
-        ($_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*') -and
+        (($_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*' -or $_.InterfaceDescription -like '*FastConnect*') -and
         $_.InterfaceDescription -notlike '*Virtual*' -and
         $_.InterfaceDescription -notlike '*Wi-Fi Direct*' -and
         $_.InterfaceDescription -notlike '*Hosted Network*' -and
-        $_.PhysicalMediaType -eq 'Native 802.11'
+        $_.InterfaceDescription -notlike '*Bluetooth*') -or
+        ($_.PhysicalMediaType -eq 'Native 802.11')
     } | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1
     
     if (!$adapter) {
         # Fallback: get any physical wireless adapter even if not connected
         $adapter = Get-NetAdapter | Where-Object { 
-            ($_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*') -and
+            (($_.InterfaceDescription -like '*Wi*' -or $_.InterfaceDescription -like '*Wireless*' -or $_.InterfaceDescription -like '*WLAN*' -or $_.InterfaceDescription -like '*FastConnect*') -and
             $_.InterfaceDescription -notlike '*Virtual*' -and
             $_.InterfaceDescription -notlike '*Wi-Fi Direct*' -and
-            $_.PhysicalMediaType -eq 'Native 802.11'
+            $_.InterfaceDescription -notlike '*Bluetooth*') -or
+            ($_.PhysicalMediaType -eq 'Native 802.11')
         } | Select-Object -First 1
     }
     
