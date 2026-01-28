@@ -65,6 +65,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Remote Desktop (RDP) information
             await ProcessRdpInfo(data);
 
+            // Process Device Guard / VBS / Core Isolation / Smart App Control
+            await ProcessDeviceGuardInfo(data);
+
             // Process security updates
             ProcessSecurityUpdates(osqueryResults, data);
 
@@ -1253,6 +1256,215 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to collect RDP status");
+            }
+        }
+
+        /// <summary>
+        /// Collect Device Guard, VBS, Core Isolation, Smart App Control, and Exploit Protection info
+        /// </summary>
+        private async Task ProcessDeviceGuardInfo(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Device Guard / VBS / Core Isolation / Smart App Control status");
+
+                var script = @"
+                    $result = @{
+                        VbsEnabled = $false
+                        VbsStatus = 'Unknown'
+                        VbsServices = @()
+                        CoreIsolationEnabled = $false
+                        MemoryIntegrityEnabled = $false
+                        SmartAppControlAvailable = $false
+                        SmartAppControlState = 'Off'
+                        ExploitProtection = @{
+                            DepEnabled = $true
+                            AslrEnabled = $true
+                            CfgEnabled = $false
+                            SehopEnabled = $false
+                            HeapIntegrityEnabled = $false
+                            SystemStatus = 'Unknown'
+                        }
+                    }
+
+                    try {
+                        # Get OS version to check if Smart App Control is available (Windows 11 22H2+)
+                        $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+                        $buildNumber = [int]$osInfo.BuildNumber
+                        
+                        # Windows 11 22H2 is build 22621+
+                        if ($buildNumber -ge 22621) {
+                            $result.SmartAppControlAvailable = $true
+                            
+                            # Check Smart App Control state via registry
+                            $sacKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+                            $sacValue = Get-ItemProperty -Path $sacKey -Name 'VerifiedAndReputablePolicyState' -ErrorAction SilentlyContinue
+                            if ($sacValue) {
+                                switch ($sacValue.VerifiedAndReputablePolicyState) {
+                                    0 { $result.SmartAppControlState = 'Off' }
+                                    1 { $result.SmartAppControlState = 'Evaluation' }
+                                    2 { $result.SmartAppControlState = 'On' }
+                                    default { $result.SmartAppControlState = 'Off' }
+                                }
+                            }
+                        }
+
+                        # Get Device Guard / VBS status
+                        $dgInfo = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue
+                        if ($dgInfo) {
+                            # VBS status: 0=Not configured, 1=Enabled but not running, 2=Running
+                            if ($dgInfo.VirtualizationBasedSecurityStatus -eq 2) {
+                                $result.VbsEnabled = $true
+                                $result.VbsStatus = 'Running'
+                            } elseif ($dgInfo.VirtualizationBasedSecurityStatus -eq 1) {
+                                $result.VbsEnabled = $true
+                                $result.VbsStatus = 'Configured'
+                            } else {
+                                $result.VbsStatus = 'Not configured'
+                            }
+                            
+                            # Running security services (bitmask)
+                            $runningServices = @()
+                            if ($dgInfo.SecurityServicesRunning) {
+                                foreach ($svc in $dgInfo.SecurityServicesRunning) {
+                                    switch ($svc) {
+                                        1 { $runningServices += 'Credential Guard' }
+                                        2 { $runningServices += 'HVCI' }
+                                        3 { $runningServices += 'System Guard Secure Launch' }
+                                        4 { $runningServices += 'SMM Firmware Measurement' }
+                                    }
+                                }
+                            }
+                            $result.VbsServices = $runningServices
+                            
+                            # HVCI (Memory Integrity) is running if service 2 is present
+                            if ($runningServices -contains 'HVCI') {
+                                $result.MemoryIntegrityEnabled = $true
+                            }
+                        }
+
+                        # Check Core Isolation / Memory Integrity via registry
+                        $hvciKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+                        $hvciEnabled = Get-ItemProperty -Path $hvciKey -Name 'Enabled' -ErrorAction SilentlyContinue
+                        if ($hvciEnabled -and $hvciEnabled.Enabled -eq 1) {
+                            $result.CoreIsolationEnabled = $true
+                            $result.MemoryIntegrityEnabled = $true
+                        }
+
+                        # Get Exploit Protection system settings
+                        try {
+                            $epSettings = Get-ProcessMitigation -System -ErrorAction SilentlyContinue
+                            if ($epSettings) {
+                                $result.ExploitProtection.DepEnabled = ($epSettings.DEP.Enable -eq 'ON' -or $epSettings.DEP.Enable -eq 'NOTSET')
+                                $result.ExploitProtection.AslrEnabled = ($epSettings.ASLR.BottomUp -eq 'ON' -or $epSettings.ASLR.BottomUp -eq 'NOTSET')
+                                $result.ExploitProtection.CfgEnabled = ($epSettings.CFG.Enable -eq 'ON')
+                                $result.ExploitProtection.SehopEnabled = ($epSettings.SEHOP.Enable -eq 'ON')
+                                $result.ExploitProtection.HeapIntegrityEnabled = ($epSettings.Heap.TerminateOnError -eq 'ON')
+                                $result.ExploitProtection.SystemStatus = 'Configured'
+                            }
+                        } catch {
+                            # Get-ProcessMitigation may not be available on all systems
+                            $result.ExploitProtection.SystemStatus = 'Unknown'
+                        }
+                    } catch {
+                        # Silently handle errors - result will contain defaults
+                    }
+
+                    $result | ConvertTo-Json -Depth 3 -Compress
+                ";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('{');
+                    if (jsonStart < 0)
+                    {
+                        _logger.LogDebug("No JSON object found in Device Guard result");
+                        return;
+                    }
+                    
+                    var jsonContent = trimmedResult.Substring(jsonStart);
+                    
+                    using var document = JsonDocument.Parse(jsonContent);
+                    var root = document.RootElement;
+                    
+                    if (root.ValueKind == JsonValueKind.Object)
+                    {
+                        // Helper to safely get bool property
+                        bool GetBoolProp(JsonElement element, string propName)
+                        {
+                            if (element.TryGetProperty(propName, out var prop))
+                            {
+                                if (prop.ValueKind == JsonValueKind.True) return true;
+                                if (prop.ValueKind == JsonValueKind.False) return false;
+                            }
+                            return false;
+                        }
+
+                        // Helper to safely get string property
+                        string GetStringProp(JsonElement element, string propName)
+                        {
+                            if (element.TryGetProperty(propName, out var prop))
+                            {
+                                return prop.GetString() ?? string.Empty;
+                            }
+                            return string.Empty;
+                        }
+
+                        data.DeviceGuard.VbsEnabled = GetBoolProp(root, "VbsEnabled");
+                        data.DeviceGuard.VbsStatus = GetStringProp(root, "VbsStatus");
+                        data.DeviceGuard.CoreIsolationEnabled = GetBoolProp(root, "CoreIsolationEnabled");
+                        data.DeviceGuard.MemoryIntegrityEnabled = GetBoolProp(root, "MemoryIntegrityEnabled");
+                        data.DeviceGuard.SmartAppControlAvailable = GetBoolProp(root, "SmartAppControlAvailable");
+                        data.DeviceGuard.SmartAppControlState = GetStringProp(root, "SmartAppControlState");
+
+                        // VBS Services array
+                        if (root.TryGetProperty("VbsServices", out var servicesArray) && 
+                            servicesArray.ValueKind == JsonValueKind.Array)
+                        {
+                            data.DeviceGuard.VbsServices = new List<string>();
+                            foreach (var svc in servicesArray.EnumerateArray())
+                            {
+                                var svcName = svc.GetString();
+                                if (!string.IsNullOrEmpty(svcName))
+                                {
+                                    data.DeviceGuard.VbsServices.Add(svcName);
+                                }
+                            }
+                        }
+
+                        // Exploit Protection nested object
+                        if (root.TryGetProperty("ExploitProtection", out var epElement) && 
+                            epElement.ValueKind == JsonValueKind.Object)
+                        {
+                            data.DeviceGuard.ExploitProtection.DepEnabled = GetBoolProp(epElement, "DepEnabled");
+                            data.DeviceGuard.ExploitProtection.AslrEnabled = GetBoolProp(epElement, "AslrEnabled");
+                            data.DeviceGuard.ExploitProtection.CfgEnabled = GetBoolProp(epElement, "CfgEnabled");
+                            data.DeviceGuard.ExploitProtection.SehopEnabled = GetBoolProp(epElement, "SehopEnabled");
+                            data.DeviceGuard.ExploitProtection.HeapIntegrityEnabled = GetBoolProp(epElement, "HeapIntegrityEnabled");
+                            data.DeviceGuard.ExploitProtection.SystemStatus = GetStringProp(epElement, "SystemStatus");
+                        }
+
+                        // Compute status display
+                        var features = new List<string>();
+                        if (data.DeviceGuard.VbsEnabled) features.Add("VBS");
+                        if (data.DeviceGuard.MemoryIntegrityEnabled) features.Add("Memory Integrity");
+                        if (data.DeviceGuard.SmartAppControlState == "On") features.Add("SAC");
+                        
+                        data.DeviceGuard.StatusDisplay = features.Count > 0 
+                            ? string.Join(", ", features) 
+                            : "Basic";
+
+                        _logger.LogInformation("Device Guard status: VBS={VbsStatus}, CoreIsolation={CoreIsolation}, SmartAppControl={SmartAppControl}", 
+                            data.DeviceGuard.VbsStatus, data.DeviceGuard.CoreIsolationEnabled, data.DeviceGuard.SmartAppControlState);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect Device Guard status");
             }
         }
 

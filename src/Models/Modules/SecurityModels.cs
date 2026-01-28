@@ -16,6 +16,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public SecureBootInfo SecureBoot { get; set; } = new();
         public SecureShellInfo SecureShell { get; set; } = new();
         public RdpInfo Rdp { get; set; } = new();
+        public DeviceGuardInfo DeviceGuard { get; set; } = new();
         public List<SecurityUpdate> SecurityUpdates { get; set; } = new();
         public List<SecurityCve> SecurityCves { get; set; } = new();
         public SecurityReleaseInfo SecurityReleaseInfo { get; set; } = new();
@@ -224,5 +225,44 @@ namespace ReportMate.WindowsClient.Models.Modules
         
         // Computed status fields for UI display
         public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled"
+    }
+
+    /// <summary>
+    /// Device Guard / Virtualization-based Security information
+    /// Covers Core Isolation, VBS, Smart App Control, Exploit Protection
+    /// </summary>
+    public class DeviceGuardInfo
+    {
+        // Core Isolation / Memory Integrity (HVCI)
+        public bool CoreIsolationEnabled { get; set; }
+        public bool MemoryIntegrityEnabled { get; set; }
+        
+        // Virtualization-based Security (VBS)
+        public bool VbsEnabled { get; set; }
+        public string VbsStatus { get; set; } = string.Empty; // Running, Configured, Not configured
+        public List<string> VbsServices { get; set; } = new(); // Credential Guard, HVCI, etc.
+        
+        // Smart App Control (Windows 11 22H2+)
+        public bool SmartAppControlAvailable { get; set; } // False if OS < Win11 22H2
+        public string SmartAppControlState { get; set; } = string.Empty; // On, Evaluation, Off
+        
+        // Exploit Protection
+        public ExploitProtectionInfo ExploitProtection { get; set; } = new();
+        
+        // Computed status for UI
+        public string StatusDisplay { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Exploit Protection settings (DEP, ASLR, CFG, etc.)
+    /// </summary>
+    public class ExploitProtectionInfo
+    {
+        public bool DepEnabled { get; set; } // Data Execution Prevention
+        public bool AslrEnabled { get; set; } // Address Space Layout Randomization
+        public bool CfgEnabled { get; set; } // Control Flow Guard
+        public bool SehopEnabled { get; set; } // Structured Exception Handling Overwrite Protection
+        public bool HeapIntegrityEnabled { get; set; }
+        public string SystemStatus { get; set; } = string.Empty; // Overall system-wide status
     }
 }
