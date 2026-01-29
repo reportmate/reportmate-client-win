@@ -1353,6 +1353,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             return false;
         }
 
+
         /// <summary>
         /// Derives a human-readable pending reason based on the item's status and version information.
         /// This provides context for why a package is pending installation/update.
@@ -2414,7 +2415,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogInformation("Starting consolidated event generation for device {DeviceId}", data.DeviceId);
                 
-                // Get session events for operational warnings (non-item-specific warnings)
+                // Get session events (for logging only)
                 var sessionEvents = data.Cimian?.Events ?? new List<CimianEvent>();
                 
                 // Get all items from items.json - this is the SOURCE OF TRUTH for counts
@@ -2426,9 +2427,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // These are the items that will show as "Error" in the Items table
                 var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
                 var failedItems = allItems
-                    .Where(i => failedItemStatuses.Any(s => 
-                        i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
-                        (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)))
+                    .Where(i => 
+                        failedItemStatuses.Any(s =>
+                            i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
+                            (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)) ||
+                        // CRITICAL: Also check if LastError is populated - this indicates a real failure
+                        !string.IsNullOrEmpty(i.LastError))
                     .Select(i => i.ItemName)
                     .Where(n => !string.IsNullOrEmpty(n))
                     .Distinct()
@@ -2438,33 +2442,26 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // These are the items that will show as "Warning" in the Items table
                 var warningItemStatuses = new[] { "Warning", "Not Available" };
                 var warningItems = allItems
-                    .Where(i => warningItemStatuses.Any(s => 
-                        i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
-                        (i.MappedStatus?.Equals("Warning", StringComparison.OrdinalIgnoreCase) == true)))
+                    .Where(i => 
+                        warningItemStatuses.Any(s =>
+                            i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
+                            (i.MappedStatus?.Equals("Warning", StringComparison.OrdinalIgnoreCase) == true)) ||
+                        // Also check if LastWarning is populated (but not if LastError is set - errors take precedence)
+                        (!string.IsNullOrEmpty(i.LastWarning) && string.IsNullOrEmpty(i.LastError)))
                     .Where(i => !failedItems.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase)) // Don't double-count
                     .Select(i => i.ItemName)
                     .Where(n => !string.IsNullOrEmpty(n))
                     .Distinct()
                     .ToList();
                 
-                // Build set of known item names (for distinguishing operational warnings)
+                // Build set of known item names
                 var knownItemNames = allItems
                     .Select(i => i.ItemName)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 
-                // === CATEGORIZE OPERATIONAL WARNINGS (session-level, not item-specific) ===
-                // These are warnings about Cimian's run itself (preflight, manifest processing, etc.)
-                // They don't map to specific items in the Items table
-                
-                var allWarningEvents = sessionEvents.Where(e =>
-                    e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase)
-                ).ToList();
-                
-                // Operational warnings: events without a package, or package not in managed list
-                var operationalWarningEvents = allWarningEvents.Where(e =>
-                    string.IsNullOrEmpty(e.Package) || 
-                    !knownItemNames.Contains(e.Package)
-                ).ToList();
+                // Session-level warnings are no longer tracked separately
+                // Only item-level errors and warnings matter for module status
+                var sessionLevelWarnings = new List<CimianEvent>(); // Empty - not used
                 
                 // Get installed item names for context
                 var installedItemNames = allItems
@@ -2485,11 +2482,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var totalManagedItems = allItems.Count;
                 var totalInstalledItems = installedItemNames.Count;
                 
-                _logger.LogInformation("Event count analysis from items.json - Failed Items: {ErrorCount} ({FailedItems}), Warning Items: {WarningCount} ({WarnItems}), Installed: {InstalledCount}, Operational Warnings: {OpWarnCount}, Session Activity: {SessionActivity} (installs: {Installs}, updates: {Updates})", 
+                _logger.LogInformation("Event count analysis from items.json - Failed Items: {ErrorCount} ({FailedItems}), Warning Items: {WarningCount} ({WarnItems}), Installed: {InstalledCount}, Session Warnings: {SessionWarnCount}, Session Activity: {SessionActivity} (installs: {Installs}, updates: {Updates})", 
                     failedItems.Count, string.Join(", ", failedItems.Take(5)),
                     warningItems.Count, string.Join(", ", warningItems.Take(5)),
                     totalInstalledItems,
-                    operationalWarningEvents.Count,
+                    sessionLevelWarnings.Count,
                     sessionActivityCount, sessionInstalls, sessionUpdates);
                 
                 // Build consolidated message and determine event type
@@ -2506,22 +2503,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     details["duration_seconds"] = latestSession.DurationSeconds;
                 }
                 
-                // include operational warnings in details - these are session-level issues
-                // (preflight errors, manifest processing, fact key issues, etc.)
-                if (operationalWarningEvents.Any())
-                {
-                    details["operational_warning_count"] = operationalWarningEvents.Count;
-                    details["operational_warnings"] = operationalWarningEvents
-                        .Take(10)
-                        .Select(e => new Dictionary<string, object>
-                        {
-                            ["message"] = e.Message,
-                            ["action"] = e.Action,
-                            ["event_type"] = e.EventType,
-                            ["timestamp"] = e.Timestamp.ToString("O")
-                        })
-                        .ToList();
-                }
+                // REMOVED: operational_warnings no longer tracked - only item errors/warnings matter
                 
                 // PRIORITY 1: ERROR - If there are any failed items in this session
                 if (failedItems.Any())
@@ -2536,9 +2518,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (warningItems.Any())
                         messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
                     
-                    // Add operational warnings if any
-                    if (operationalWarningEvents.Any())
-                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    // Session-level warnings no longer affect status
                     
                     // Add session activity count if any actual installs/updates occurred
                     if (sessionActivityCount > 0)
@@ -2566,9 +2546,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     // Always mention item warnings first
                     messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
                     
-                    // Add operational warnings if any
-                    if (operationalWarningEvents.Any())
-                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    // Session-level warnings no longer affect status
                     
                     // Add session activity count if any actual installs/updates occurred
                     if (sessionActivityCount > 0)
@@ -2589,7 +2567,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // PRIORITY 3: SUCCESS - if there was actual session activity (installs/updates)
                 else if (sessionActivityCount > 0)
                 {
-                    // If there are operational warnings, still report success but include them
+                    // Report success
                     eventType = "success";
                     var messageParts = new List<string>();
                     
@@ -2601,8 +2579,6 @@ namespace ReportMate.WindowsClient.Services.Modules
                     else if (sessionUpdates > 0)
                         messageParts.Add($"{sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
                     
-                    if (operationalWarningEvents.Any())
-                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
                     
                     message = string.Join(", ", messageParts);
                     
@@ -2614,16 +2590,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     _logger.LogInformation("Generated single SUCCESS event: {Message}", message);
                 }
-                // NO SESSION ACTIVITY but operational warnings exist
-                else if (operationalWarningEvents.Any())
-                {
-                    eventType = "warning";
-                    message = $"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}";
-                    details["total_managed_items"] = totalManagedItems;
-                    details["module_status"] = "warning";
-                    
-                    _logger.LogInformation("Generated single WARNING event (operational only): {Message}", message);
-                }
+                // NO SESSION ACTIVITY - report as maintenance check
+                // REMOVED: Session-level warnings no longer trigger status changes
                 // NO SESSION ACTIVITY AND NO WARNINGS: All items are managed, nothing to do
                 else if (totalManagedItems > 0)
                 {
@@ -2994,7 +2962,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         /// <summary>
         /// Determines if a warning message represents an expected/non-actionable condition
-        /// for PACKAGE-LEVEL warnings only. This does NOT apply to operational warnings.
+        /// for PACKAGE-LEVEL warnings only. 
         /// </summary>
         private static bool IsExpectedWarning(string message)
         {
@@ -3501,3 +3469,13 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
