@@ -51,12 +51,29 @@ namespace ReportMate.WindowsClient.Services.Modules
                 
                 foreach (var program in programs)
                 {
+                    var appName = GetStringValue(program, "name");
+                    var registryVersion = GetStringValue(program, "version");
+                    var installLocation = GetStringValue(program, "install_location");
+                    
+                    // Check if registry version seems incomplete and try to get file version
+                    var finalVersion = registryVersion;
+                    if (IsIncompleteVersion(registryVersion) && !string.IsNullOrEmpty(installLocation))
+                    {
+                        var fileVersion = GetFileVersionFromInstallLocation(installLocation, appName);
+                        if (!string.IsNullOrEmpty(fileVersion))
+                        {
+                            _logger.LogDebug("Enhanced version for {AppName}: {FileVersion} (registry had: {RegistryVersion})", 
+                                appName, fileVersion, registryVersion);
+                            finalVersion = fileVersion;
+                        }
+                    }
+                    
                     var app = new InstalledApplication
                     {
-                        Name = GetStringValue(program, "name"),
-                        Version = GetStringValue(program, "version"),
+                        Name = appName,
+                        Version = finalVersion,
                         Publisher = GetStringValue(program, "publisher"),
-                        InstallLocation = GetStringValue(program, "install_location"),
+                        InstallLocation = installLocation,
                         Architecture = GetStringValue(program, "uninstall_string").Contains("x64") ? "x64" : "x86",
                         Source = GetStringValue(program, "install_source")
                     };
@@ -218,6 +235,81 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             return Task.FromResult(events);
+        }
+
+        /// <summary>
+        /// Attempts to get the product/file version from an executable in the install location
+        /// </summary>
+        /// <param name="installLocation">Install location path from registry</param>
+        /// <param name="appName">Application name for matching</param>
+        /// <returns>Product version if found, otherwise null</returns>
+        private string? GetFileVersionFromInstallLocation(string installLocation, string appName)
+        {
+            try
+            {
+                if (!Directory.Exists(installLocation))
+                    return null;
+
+                // Look for .exe files with names similar to the app name
+                var exeFiles = Directory.GetFiles(installLocation, "*.exe", SearchOption.TopDirectoryOnly);
+                
+                // First, try to find an exe that matches the app name
+                var matchingExe = exeFiles.FirstOrDefault(exe => 
+                    Path.GetFileNameWithoutExtension(exe).Equals(appName, StringComparison.OrdinalIgnoreCase));
+                
+                // If no exact match, try the first .exe in the directory (usually the main executable)
+                var targetExe = matchingExe ?? exeFiles.FirstOrDefault();
+                
+                if (targetExe != null && File.Exists(targetExe))
+                {
+                    var versionInfo = System.Diagnostics.FileVersionInfo.GetVersionInfo(targetExe);
+                    
+                    // Try ProductVersion first, then FileVersion
+                    var version = versionInfo.ProductVersion ?? versionInfo.FileVersion;
+                    
+                    if (!string.IsNullOrEmpty(version))
+                    {
+                        _logger.LogTrace("Found file version for {AppName} from {ExePath}: {Version}", 
+                            appName, targetExe, version);
+                        return version;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Silently fail - this is a best-effort enhancement
+                _logger.LogTrace("Could not get file version for {AppName} from {InstallLocation}: {Error}", 
+                    appName, installLocation, ex.Message);
+            }
+            
+            return null;
+        }
+
+        /// <summary>
+        /// Determines if a version string seems incomplete and should use file version fallback
+        /// </summary>
+        /// <param name="version">Version string from Windows Registry</param>
+        /// <returns>True if version appears incomplete (e.g., just "2025" or "10.0")</returns>
+        private static bool IsIncompleteVersion(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version))
+                return true;
+
+            // If version has no dots and is just a number (e.g., "2025"), it's likely incomplete
+            if (!version.Contains('.') && int.TryParse(version, out _))
+                return true;
+
+            // If version has only one dot and appears to be a simple major.minor like "2025.0", it might be incomplete
+            // But allow common patterns like "1.0" for simple apps
+            var parts = version.Split('.');
+            if (parts.Length == 2)
+            {
+                // If both parts are numbers and the first part is > 1000 (likely a year), might be incomplete
+                if (int.TryParse(parts[0], out var major) && major > 1000 && int.TryParse(parts[1], out var minor) && minor == 0)
+                    return true;
+            }
+
+            return false;
         }
     }
 }
