@@ -539,30 +539,111 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             try
             {
-                // Get recent login events from Security event log
+                // Get recent interactive login events from Security event log
+                // 4624 = Successful logon, 4625 = Failed logon, 4634 = Logoff, 4647 = User-initiated logoff
+                // Filter to interactive logon types only (2, 7, 10, 11) to exclude service/network noise
                 var script = @"
+                    $logonEvents = @{}
+                    $results = @()
+                    
+                    # Collect logons (4624) and logoffs (4634, 4647) for interactive sessions
                     $events = Get-WinEvent -FilterHashtable @{
                         LogName = 'Security'
-                        Id = 4624, 4625  # Successful and failed logons
-                    } -MaxEvents 50 -ErrorAction SilentlyContinue | ForEach-Object {
-                        $xml = [xml]$_.ToXml()
-                        $data = @{}
-                        $xml.Event.EventData.Data | ForEach-Object {
-                            $data[$_.Name] = $_.'#text'
-                        }
+                        Id = 4624, 4625, 4634, 4647
+                    } -MaxEvents 300 -ErrorAction SilentlyContinue | Sort-Object TimeCreated
+                    
+                    foreach ($evt in $events) {
+                        $xml = [xml]$evt.ToXml()
+                        $d = @{}
+                        $xml.Event.EventData.Data | ForEach-Object { $d[$_.Name] = $_.'#text' }
                         
-                        @{
-                            EventId = $_.Id
-                            Timestamp = $_.TimeCreated.ToString('o')
-                            Username = $data['TargetUserName']
-                            Domain = $data['TargetDomainName']
-                            LogonType = $data['LogonType']
-                            Source = $data['IpAddress']
-                            Success = ($_.Id -eq 4624)
+                        $logonType = $d['LogonType']
+                        # Only interactive sessions: 2=Interactive, 7=Unlock, 10=RemoteInteractive, 11=CachedInteractive
+                        if ($logonType -notin @('2','7','10','11') -and $evt.Id -in @(4624,4625)) { continue }
+                        
+                        $username = $d['TargetUserName']
+                        if (-not $username -or $username -eq '-' -or $username -like 'SYSTEM' -or $username -like 'UMFD-*' -or $username -like 'DWM-*' -or $username -like '*$') { continue }
+                        
+                        $logonId = $d['TargetLogonId']
+                        
+                        if ($evt.Id -eq 4624) {
+                            # Store logon event keyed by LogonId for later matching with logoff
+                            $logonEvents[$logonId] = @{
+                                Username = $username
+                                Domain = $d['TargetDomainName']
+                                LogonType = $logonType
+                                LoginTime = $evt.TimeCreated.ToString('o')
+                                Source = $d['IpAddress']
+                                LogonId = $logonId
+                                EventId = $evt.Id
+                            }
+                        }
+                        elseif ($evt.Id -in @(4634, 4647)) {
+                            # Match logoff to logon by LogonId
+                            if ($logonEvents.ContainsKey($logonId)) {
+                                $logon = $logonEvents[$logonId]
+                                $loginTime = [datetime]::Parse($logon.LoginTime)
+                                $logoffTime = $evt.TimeCreated
+                                $duration = $logoffTime - $loginTime
+                                
+                                $durationStr = ''
+                                if ($duration.TotalDays -ge 1) {
+                                    $durationStr = '{0}d {1}h {2}m' -f [int]$duration.TotalDays, $duration.Hours, $duration.Minutes
+                                } elseif ($duration.TotalHours -ge 1) {
+                                    $durationStr = '{0}h {1}m' -f [int]$duration.TotalHours, $duration.Minutes
+                                } else {
+                                    $durationStr = '{0}m' -f [math]::Max(1, [int]$duration.TotalMinutes)
+                                }
+                                
+                                $results += @{
+                                    Username = $logon.Username
+                                    Domain = $logon.Domain
+                                    LogonType = $logon.LogonType
+                                    LoginTime = $logon.LoginTime
+                                    LogoutTime = $logoffTime.ToString('o')
+                                    Duration = $durationStr
+                                    Source = $logon.Source
+                                    EventId = 4624
+                                    Success = $true
+                                    EventType = 'Logon'
+                                }
+                                $logonEvents.Remove($logonId)
+                            }
+                        }
+                        elseif ($evt.Id -eq 4625) {
+                            $results += @{
+                                Username = $username
+                                Domain = $d['TargetDomainName']
+                                LogonType = $logonType
+                                LoginTime = $evt.TimeCreated.ToString('o')
+                                LogoutTime = $null
+                                Duration = ''
+                                Source = $d['IpAddress']
+                                EventId = 4625
+                                Success = $false
+                                EventType = 'Failed'
+                            }
                         }
                     }
                     
-                    $events | ConvertTo-Json -Depth 2 -Compress
+                    # Add unmatched logons (still active or logoff not captured)
+                    foreach ($logon in $logonEvents.Values) {
+                        $results += @{
+                            Username = $logon.Username
+                            Domain = $logon.Domain
+                            LogonType = $logon.LogonType
+                            LoginTime = $logon.LoginTime
+                            LogoutTime = $null
+                            Duration = ''
+                            Source = $logon.Source
+                            EventId = 4624
+                            Success = $true
+                            EventType = 'Logon'
+                        }
+                    }
+                    
+                    # Sort by login time descending and take newest 50
+                    $results | Sort-Object { [datetime]::Parse($_.LoginTime) } -Descending | Select-Object -First 50 | ConvertTo-Json -Depth 2 -Compress
                 ";
 
                 var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
@@ -599,24 +680,39 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 EventId = GetJsonIntValue(eventElement, "EventId"),
                                 Success = GetJsonBoolValue(eventElement, "Success"),
                                 Source = GetJsonStringValue(eventElement, "Source"),
-                                EventType = GetJsonBoolValue(eventElement, "Success") ? "Logon" : "Failed"
+                                EventType = GetJsonStringValue(eventElement, "EventType"),
+                                Duration = GetJsonStringValue(eventElement, "Duration")
                             };
 
-                            // Parse timestamp
-                            var timestampStr = GetJsonStringValue(eventElement, "Timestamp");
-                            if (!string.IsNullOrEmpty(timestampStr) && DateTime.TryParse(timestampStr, out var timestamp))
+                            // Parse login timestamp
+                            var loginTimeStr = GetJsonStringValue(eventElement, "LoginTime");
+                            if (!string.IsNullOrEmpty(loginTimeStr) && DateTime.TryParse(loginTimeStr, out var loginTime))
                             {
-                                entry.Timestamp = timestamp;
+                                entry.Timestamp = loginTime;
+                            }
+
+                            // Parse logout timestamp
+                            var logoutTimeStr = GetJsonStringValue(eventElement, "LogoutTime");
+                            if (!string.IsNullOrEmpty(logoutTimeStr) && DateTime.TryParse(logoutTimeStr, out var logoutTime))
+                            {
+                                entry.LogoutTime = logoutTime;
                             }
 
                             // Map logon type
                             var logonType = GetJsonStringValue(eventElement, "LogonType");
                             entry.LogonType = MapLogonType(logonType);
 
+                            // Source IP
+                            var source = GetJsonStringValue(eventElement, "Source");
+                            if (!string.IsNullOrEmpty(source) && source != "-")
+                            {
+                                entry.SourceIp = source;
+                            }
+
                             data.LoginHistory.Add(entry);
                         }
 
-                        _logger.LogDebug("Collected {Count} login history entries", data.LoginHistory.Count);
+                        _logger.LogDebug("Collected {Count} login history entries with duration data", data.LoginHistory.Count);
                     }
                 }
             }
