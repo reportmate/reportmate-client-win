@@ -2646,7 +2646,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             try
             {
-                // Try to collect pending packages from manifest files
+                // Try to collect pending packages and catalogs from manifest files
                 if (osqueryResults.TryGetValue("cimian_manifests_structure", out var manifests))
                 {
                     foreach (var manifest in manifests)
@@ -2659,36 +2659,53 @@ namespace ReportMate.WindowsClient.Services.Modules
                             try
                             {
                                 var yamlContent = File.ReadAllText(manifestPath);
-                                // Simple parsing for managed_installs - you could use a proper YAML parser here
-                                if (yamlContent.Contains("managed_installs:"))
+                                var lines = yamlContent.Split('\n');
+                                bool inManagedInstalls = false;
+                                bool inCatalogs = false;
+                                
+                                foreach (var line in lines)
                                 {
-                                    var lines = yamlContent.Split('\n');
-                                    bool inManagedInstalls = false;
+                                    var trimmedLine = line.Trim();
                                     
-                                    foreach (var line in lines)
+                                    // Check for section headers
+                                    if (trimmedLine.StartsWith("managed_installs:"))
                                     {
-                                        var trimmedLine = line.Trim();
-                                        if (trimmedLine.StartsWith("managed_installs:"))
+                                        inManagedInstalls = true;
+                                        inCatalogs = false;
+                                        continue;
+                                    }
+                                    if (trimmedLine.StartsWith("catalogs:"))
+                                    {
+                                        inManagedInstalls = false;
+                                        inCatalogs = true;
+                                        continue;
+                                    }
+                                    // Exit current section when a new section starts
+                                    if (trimmedLine.EndsWith(":") && !trimmedLine.StartsWith("-") && !string.IsNullOrEmpty(trimmedLine))
+                                    {
+                                        inManagedInstalls = false;
+                                        inCatalogs = false;
+                                        continue;
+                                    }
+                                    
+                                    // Parse catalogs section
+                                    if (inCatalogs && trimmedLine.StartsWith("-"))
+                                    {
+                                        var catalogName = trimmedLine.Substring(1).Trim();
+                                        if (!string.IsNullOrEmpty(catalogName) && !cimianInfo.Catalogs.Contains(catalogName))
                                         {
-                                            inManagedInstalls = true;
-                                            continue;
+                                            cimianInfo.Catalogs.Add(catalogName);
+                                            _logger.LogDebug("Found catalog: {Catalog} in manifest {Manifest}", catalogName, manifestName);
                                         }
-                                        
-                                        if (inManagedInstalls)
+                                    }
+                                    
+                                    // Parse managed_installs section
+                                    if (inManagedInstalls && trimmedLine.StartsWith("-"))
+                                    {
+                                        var packageName = trimmedLine.Substring(1).Trim();
+                                        if (!string.IsNullOrEmpty(packageName) && !cimianInfo.PendingPackages.Contains(packageName))
                                         {
-                                            if (trimmedLine.StartsWith("-"))
-                                            {
-                                                var packageName = trimmedLine.Substring(1).Trim();
-                                                if (!string.IsNullOrEmpty(packageName) && !cimianInfo.PendingPackages.Contains(packageName))
-                                                {
-                                                    cimianInfo.PendingPackages.Add(packageName);
-                                                }
-                                            }
-                                            else if (!trimmedLine.StartsWith(" ") && !string.IsNullOrEmpty(trimmedLine))
-                                            {
-                                                // We've moved to a different section
-                                                inManagedInstalls = false;
-                                            }
+                                            cimianInfo.PendingPackages.Add(packageName);
                                         }
                                     }
                                 }
@@ -2745,7 +2762,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
-                _logger.LogDebug("Collected {Count} pending packages from Cimian manifests", cimianInfo.PendingPackages.Count);
+                _logger.LogDebug("Collected {PackageCount} pending packages and {CatalogCount} catalogs from Cimian manifests. Catalogs: [{Catalogs}]", 
+                    cimianInfo.PendingPackages.Count, 
+                    cimianInfo.Catalogs.Count, 
+                    string.Join(", ", cimianInfo.Catalogs));
             }
             catch (Exception ex)
             {
