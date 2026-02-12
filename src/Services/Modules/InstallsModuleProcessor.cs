@@ -1234,7 +1234,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         CurrentStatus = originalStatus,  // Preserve original Cimian status
                         LatestVersion = GetDictValue(itemDict, "latest_version"),
                         InstalledVersion = GetDictValue(itemDict, "installed_version"),
-                        LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session"),
+                        LastSeenInSession = ConvertCimianTimestampToUtc(GetDictValue(itemDict, "last_seen_in_session")),
                         LastError = GetDictValue(itemDict, "last_error") ?? string.Empty, // Error messages
                         LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty, // Warning messages
                         PendingReason = GetDictValue(itemDict, "pending_reason") ?? string.Empty // Pending reason from Cimian
@@ -2190,7 +2190,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Status = reportMateStatus, // Enhanced: Use mapped ReportMate status
                         Version = extractedVersion, // Enhanced: Use version from recent_attempts
                         InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
-                        LastSeenInSession = GetDictValue(item, "last_seen_in_session"),
+                        LastSeenInSession = ConvertCimianTimestampToUtc(GetDictValue(item, "last_seen_in_session")),
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
                         Type = GetDictValue(item, "type"),
@@ -2208,7 +2208,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         MappedStatus = mappedStatus, // Store simplified status (Failed, Pending, Installed, etc.)
                         LatestVersion = extractedVersion, // Enhanced: Use version from recent_attempts
                         InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
-                        LastSeenInSession = GetDictValue(item, "last_seen_in_session"),
+                        LastSeenInSession = ConvertCimianTimestampToUtc(GetDictValue(item, "last_seen_in_session")),
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
                         Type = GetDictValue(item, "type"),
@@ -2225,27 +2225,37 @@ namespace ReportMate.WindowsClient.Services.Modules
                         cimianItem.PendingReason = DerivePendingReason(cimianItem, originalCimianStatus);
                     }
 
-                    // Parse timestamps
-                    if (item.TryGetValue("last_successful_time", out var lastSuccessObj) && 
-                        DateTime.TryParse(lastSuccessObj.ToString(), out var lastSuccess))
+                    // Parse timestamps - Use helper to fix Cimian's timezone bug
+                    // Cimian writes local time with "Z" suffix, so we need to interpret correctly
+                    if (item.TryGetValue("last_successful_time", out var lastSuccessObj))
                     {
-                        managedInstall.LastSuccessfulTime = lastSuccess;
-                        managedInstall.InstallDate = lastSuccess; // Keep compatibility
-                        cimianItem.LastSuccessfulTime = lastSuccess;
+                        var correctedTimeStr = ConvertCimianTimestampToUtc(lastSuccessObj.ToString());
+                        if (DateTime.TryParse(correctedTimeStr, out var lastSuccess))
+                        {
+                            managedInstall.LastSuccessfulTime = lastSuccess;
+                            managedInstall.InstallDate = lastSuccess; // Keep compatibility
+                            cimianItem.LastSuccessfulTime = lastSuccess;
+                        }
                     }
 
-                    if (item.TryGetValue("last_attempt_time", out var lastAttemptObj) && 
-                        DateTime.TryParse(lastAttemptObj.ToString(), out var lastAttempt))
+                    if (item.TryGetValue("last_attempt_time", out var lastAttemptObj))
                     {
-                        managedInstall.LastAttemptTime = lastAttempt;
-                        cimianItem.LastAttemptTime = lastAttempt;
+                        var correctedTimeStr = ConvertCimianTimestampToUtc(lastAttemptObj.ToString());
+                        if (DateTime.TryParse(correctedTimeStr, out var lastAttempt))
+                        {
+                            managedInstall.LastAttemptTime = lastAttempt;
+                            cimianItem.LastAttemptTime = lastAttempt;
+                        }
                     }
 
-                    if (item.TryGetValue("last_update", out var lastUpdateObj) && 
-                        DateTime.TryParse(lastUpdateObj.ToString(), out var lastUpdate))
+                    if (item.TryGetValue("last_update", out var lastUpdateObj))
                     {
-                        managedInstall.LastUpdate = lastUpdate;
-                        cimianItem.LastUpdate = lastUpdate;
+                        var correctedTimeStr = ConvertCimianTimestampToUtc(lastUpdateObj.ToString());
+                        if (DateTime.TryParse(correctedTimeStr, out var lastUpdate))
+                        {
+                            managedInstall.LastUpdate = lastUpdate;
+                            cimianItem.LastUpdate = lastUpdate;
+                        }
                     }
 
                     // Parse boolean values
@@ -2353,6 +2363,52 @@ namespace ReportMate.WindowsClient.Services.Modules
         private string GetDictValue(Dictionary<string, object> dict, string key)
         {
             return dict.TryGetValue(key, out var value) ? value?.ToString() ?? "" : "";
+        }
+
+        /// <summary>
+        /// Convert Cimian timestamps to proper UTC. Cimian has a bug where it writes local time
+        /// with a "Z" suffix (claiming UTC) when it's actually local time. This method detects
+        /// and corrects those timestamps.
+        /// </summary>
+        private string ConvertCimianTimestampToUtc(string? timestamp)
+        {
+            if (string.IsNullOrEmpty(timestamp))
+                return "";
+            
+            try
+            {
+                // If the timestamp ends with "Z" but has no timezone offset, Cimian likely wrote local time
+                // incorrectly claiming it's UTC. Parse it as local time and convert to proper UTC.
+                if (timestamp.EndsWith("Z") && !timestamp.Contains("+") && !timestamp.Contains("-08:") && !timestamp.Contains("-07:"))
+                {
+                    // Remove the "Z" and parse as local time
+                    var localTimeStr = timestamp.TrimEnd('Z');
+                    if (DateTime.TryParse(localTimeStr, out var localTime))
+                    {
+                        // Treat as local time (where the Windows machine is), convert to UTC
+                        var utcTime = localTime.ToUniversalTime();
+                        return utcTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                    }
+                }
+                
+                // If it has a proper timezone offset like "-08:00", parse and convert to UTC
+                if (DateTimeOffset.TryParse(timestamp, out var dto))
+                {
+                    return dto.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                }
+                
+                // Fallback: try parsing as DateTime and assume UTC
+                if (DateTime.TryParse(timestamp, out var dt))
+                {
+                    return dt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to convert Cimian timestamp: {Timestamp}", timestamp);
+            }
+            
+            return timestamp; // Return original if conversion fails
         }
 
         /// <summary>
