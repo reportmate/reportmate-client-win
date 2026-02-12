@@ -187,6 +187,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         public int TotalSessions { get; set; }
         public Dictionary<string, CimianReportFileInfo> Reports { get; set; } = new();
         
+        /// <summary>
+        /// Catalogs the device subscribes to from manifest (e.g., ["Production", "Testing"])
+        /// Parsed from the manifest file's catalogs: section
+        /// </summary>
+        public List<string> Catalogs { get; set; } = new();
+        
         // Enhanced Cimian reporting data
         public List<CimianItem> Items { get; set; } = new();
         public List<CimianSession> Sessions { get; set; } = new();
