@@ -2567,18 +2567,35 @@ namespace ReportMate.WindowsClient.Services.Modules
                     eventType = "error";
                     var messageParts = new List<string>();
                     
-                    // Always mention failed installs first
-                    messageParts.Add($"{failedItems.Count} failed install{(failedItems.Count == 1 ? "" : "s")}");
-                    
-                    // Add item warnings if any
-                    if (warningItems.Any())
-                        messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
-                    
-                    // Session-level warnings no longer affect status
-                    
-                    // Add session activity count if any actual installs/updates occurred
+                    // Success part: "{item} v{ver}, {item} v{ver} installed"
                     if (sessionActivityCount > 0)
-                        messageParts.Add($"{sessionActivityCount} successful{(sessionActivityCount == 1 ? "" : "s")}");
+                    {
+                        var handledNames = latestSessionForCounts?.PackagesHandled ?? new List<string>();
+                        var successStrings = handledNames
+                            .Where(n => !failedItems.Contains(n, StringComparer.OrdinalIgnoreCase) && !warningItems.Contains(n, StringComparer.OrdinalIgnoreCase))
+                            .Select(n => {
+                                var item = allItems.FirstOrDefault(i => i.ItemName.Equals(n, StringComparison.OrdinalIgnoreCase));
+                                var ver = item?.LatestVersion ?? item?.InstalledVersion ?? "";
+                                return string.IsNullOrEmpty(ver) ? n : $"{n} v{ver}";
+                            }).ToList();
+                        if (successStrings.Any())
+                            messageParts.Add($"{string.Join(", ", successStrings)} installed");
+                    }
+                    
+                    // Warning part: "{item} has a warning" or "{item}, {item} have warnings"
+                    if (warningItems.Any())
+                    {
+                        if (warningItems.Count == 1)
+                            messageParts.Add($"{warningItems[0]} has a warning");
+                        else
+                            messageParts.Add($"{string.Join(", ", warningItems)} have warnings");
+                    }
+                    
+                    // Error part: "{item} has an error!" or "{item}, {item} have errors!"
+                    if (failedItems.Count == 1)
+                        messageParts.Add($"{failedItems[0]} has an error!");
+                    else
+                        messageParts.Add($"{string.Join(", ", failedItems)} have errors!");
                     
                     message = string.Join(", ", messageParts);
                     
@@ -2599,14 +2616,26 @@ namespace ReportMate.WindowsClient.Services.Modules
                     eventType = "warning";
                     var messageParts = new List<string>();
                     
-                    // Always mention item warnings first
-                    messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
-                    
-                    // Session-level warnings no longer affect status
-                    
-                    // Add session activity count if any actual installs/updates occurred
+                    // Success part: "{item} v{ver}, {item} v{ver} installed"
                     if (sessionActivityCount > 0)
-                        messageParts.Add($"{sessionActivityCount} successful{(sessionActivityCount == 1 ? "" : "s")}");
+                    {
+                        var handledNames = latestSessionForCounts?.PackagesHandled ?? new List<string>();
+                        var successStrings = handledNames
+                            .Where(n => !warningItems.Contains(n, StringComparer.OrdinalIgnoreCase))
+                            .Select(n => {
+                                var item = allItems.FirstOrDefault(i => i.ItemName.Equals(n, StringComparison.OrdinalIgnoreCase));
+                                var ver = item?.LatestVersion ?? item?.InstalledVersion ?? "";
+                                return string.IsNullOrEmpty(ver) ? n : $"{n} v{ver}";
+                            }).ToList();
+                        if (successStrings.Any())
+                            messageParts.Add($"{string.Join(", ", successStrings)} installed");
+                    }
+                    
+                    // Warning part: "{item} has a warning" or "{item}, {item} have warnings"
+                    if (warningItems.Count == 1)
+                        messageParts.Add($"{warningItems[0]} has a warning");
+                    else
+                        messageParts.Add($"{string.Join(", ", warningItems)} have warnings");
                     
                     message = string.Join(", ", messageParts);
                     
@@ -2623,18 +2652,30 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // PRIORITY 3: SUCCESS - if there was actual session activity (installs/updates)
                 else if (sessionActivityCount > 0)
                 {
-                    // Report success
                     eventType = "success";
                     var messageParts = new List<string>();
                     
-                    // Report actual session activity
-                    if (sessionInstalls > 0 && sessionUpdates > 0)
-                        messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}, {sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
-                    else if (sessionInstalls > 0)
-                        messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}");
-                    else if (sessionUpdates > 0)
-                        messageParts.Add($"{sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
-                    
+                    // Build named items with versions: "{item} v{ver}, {item} v{ver} installed"
+                    var handledNames = latestSessionForCounts?.PackagesHandled ?? new List<string>();
+                    if (handledNames.Any())
+                    {
+                        var itemStrings = handledNames.Select(n => {
+                            var item = allItems.FirstOrDefault(i => i.ItemName.Equals(n, StringComparison.OrdinalIgnoreCase));
+                            var ver = item?.LatestVersion ?? item?.InstalledVersion ?? "";
+                            return string.IsNullOrEmpty(ver) ? n : $"{n} v{ver}";
+                        }).ToList();
+                        messageParts.Add($"{string.Join(", ", itemStrings)} installed");
+                    }
+                    else
+                    {
+                        // Fallback if no named items but count > 0
+                        if (sessionInstalls > 0 && sessionUpdates > 0)
+                            messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}, {sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
+                        else if (sessionInstalls > 0)
+                            messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}");
+                        else if (sessionUpdates > 0)
+                            messageParts.Add($"{sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
+                    }
                     
                     message = string.Join(", ", messageParts);
                     
