@@ -172,6 +172,15 @@ try {
         Write-Host "ReportMate already in system PATH"
     }
     
+    # Run initial collection immediately so the device appears in ReportMate right away
+    Write-Host "Running initial inventory and system collection..."
+    $logDir = "C:\ProgramData\ManagedReports\logs"
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    Start-Process -FilePath "$InstallPath\managedreportsrunner.exe" `
+        -ArgumentList "--run-modules", "inventory,system" `
+        -WindowStyle Hidden `
+        -PassThru | Out-Null
+
 } catch {
     Write-Error "Failed to create scheduled tasks: $_"
     exit 1
