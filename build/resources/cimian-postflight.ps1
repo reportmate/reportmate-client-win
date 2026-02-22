@@ -6,10 +6,10 @@ try {
     $reportMateExe = "C:\Program Files\ReportMate\managedreportsrunner.exe"
 
     if (Test-Path $reportMateExe) {
-        Write-Host "Running ReportMate installs module..."
+        Write-Host "Running ReportMate inventory,installs modules..."
         
         # Use PowerShell invoke operator with proper quoting format - suppress verbose output
-        & 'C:\Program Files\ReportMate\managedreportsrunner.exe' --run-module installs | Out-Null
+        & 'C:\Program Files\ReportMate\managedreportsrunner.exe' --run-modules inventory,installs | Out-Null
         
         if ($LASTEXITCODE -eq 0) {
             Write-Host "ReportMate execution completed successfully" -ForegroundColor Green
