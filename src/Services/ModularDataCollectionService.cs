@@ -111,6 +111,9 @@ namespace ReportMate.WindowsClient.Services
                         
                         var moduleData = await processor.ProcessModuleAsync(osqueryResults, deviceId);
                         
+                        // Stamp per-module version from build-time git history
+                        moduleData.ModuleVersion = Generated.ModuleVersions.GetVersion(processor.ModuleId);
+
                         // Validate the module data
                         var isValid = await processor.ValidateModuleDataAsync(moduleData);
                         if (!isValid)

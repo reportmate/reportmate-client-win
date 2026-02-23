@@ -11,7 +11,7 @@ namespace ReportMate.WindowsClient.Models.Modules
     public abstract class BaseModuleData
     {
         public string ModuleId { get; set; } = string.Empty;
-        public string Version { get; set; } = "1.0.0";
+        public string ModuleVersion { get; set; } = "0.0.0.0000";
         public DateTime CollectedAt { get; set; } = DateTime.UtcNow;
         public string DeviceId { get; set; } = string.Empty;
     }

@@ -386,6 +386,9 @@ FodyWeavers.xsd
 .DS_Store
 
 # ReportMate specific files
+# Build-time generated source files
+src/Generated/
+
 # Configuration files with sensitive data
 appsettings.Production.json
 appsettings.Development.json
