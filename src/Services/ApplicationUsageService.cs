@@ -111,7 +111,9 @@ namespace ReportMate.WindowsClient.Services
                 // Populate snapshot
                 snapshot.Status = "complete";
                 snapshot.Applications = appSummaries;
-                snapshot.ActiveSessions = sessions.Where(s => s.IsActive).ToList();
+                // Include ALL sessions (complete + active) so the API can aggregate fleet-wide usage.
+                // Previously only active (still-running) sessions were included, causing empty data.
+                snapshot.ActiveSessions = sessions;
                 snapshot.TotalLaunches = sessions.Count;
                 snapshot.TotalUsageSeconds = sessions.Sum(s => s.DurationSeconds);
 
@@ -810,19 +812,21 @@ namespace ReportMate.WindowsClient.Services
                 }
             }
 
-            // Strategy 4: App name word matches process filename (reverse of Strategy 3)
-            // Handles cases like "Google Chrome" where we look for "chrome" in the process path
+            // Strategy 4: App name word matches process filename only (NOT full path)
+            // Restricted to filename match to prevent false positives from vendor names 
+            // appearing in unrelated paths (e.g. "microsoft" matching C:\Program Files\Microsoft\...\anything.exe)
             if (!string.IsNullOrEmpty(app.Name))
             {
                 var nameWords = app.Name.ToLowerInvariant()
                     .Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries)
                     .Where(w => w.Length >= 4)
-                    .Where(w => !IsCommonWord(w));
+                    .Where(w => !IsCommonWord(w))
+                    .Where(w => !IsVendorName(w));
                     
                 foreach (var word in nameWords)
                 {
-                    // Check if app name word appears in process filename or path
-                    if (processFileName.Contains(word) || normalizedProcessPath.Contains(word))
+                    // Only match against process filename, not full path
+                    if (processFileName.Contains(word))
                     {
                         return true;
                     }
@@ -830,6 +834,22 @@ namespace ReportMate.WindowsClient.Services
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Check if a word is a vendor/publisher name that appears in many unrelated paths.
+        /// These must not be used alone for single-word matching (Strategy 4) since
+        /// "microsoft" appears in paths for Defender, Intune, Office, Edge, .NET, etc.
+        /// </summary>
+        private static bool IsVendorName(string word)
+        {
+            var vendorNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "microsoft", "google", "apple", "adobe", "mozilla", "autodesk",
+                "oracle", "intel", "nvidia", "amd", "dell", "lenovo", "hewlett",
+                "packard", "samsung", "vmware", "citrix", "cisco", "juniper"
+            };
+            return vendorNames.Contains(word);
         }
 
         /// <summary>
