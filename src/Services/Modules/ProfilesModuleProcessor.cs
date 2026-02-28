@@ -599,11 +599,7 @@ foreach ($area in $policyAreas) {
 $policies | ConvertTo-Json -Depth 3 -Compress
 ";
 
-                // Create a logger for WmiHelperService 
-                var loggerFactory = Microsoft.Extensions.Logging.LoggerFactory.Create(builder => builder.AddConsole());
-                var wmiLogger = loggerFactory.CreateLogger<Services.WmiHelperService>();
-                var powerShellHelper = new Services.WmiHelperService(wmiLogger);
-                var jsonResult = await powerShellHelper.ExecutePowerShellCommandAsync(powerShellScript);
+                var jsonResult = await PowerShellRunner.ExecuteAsync(powerShellScript, _logger);
                 
                 if (!string.IsNullOrEmpty(jsonResult))
                 {

@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>reportmate</id>
+    <version>2026.2.26.1446</version>
+    <title>ReportMate</title>
+    <authors>Windows Admins Open Source</authors>
+    <owners>Windows Admins Open Source</owners>
+    <description>ReportMate package</description>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
