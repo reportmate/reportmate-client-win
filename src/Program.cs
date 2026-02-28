@@ -482,13 +482,14 @@ public class Program
         });
 
         // Register services
-        // No longer using WMI - all data collection is done via osquery
+        // WMI service used by Hardware, Display, Peripherals, Printer, Management, Network, Identity modules
+        // Security and Profiles modules use PowerShellRunner directly (no WMI dependency)
         services.AddScoped<IApiService, ApiService>();
         services.AddScoped<IOsQueryService, OsQueryService>();
         services.AddScoped<IDataCollectionService, DataCollectionService>();
         services.AddScoped<IDeviceInfoService, DeviceInfoService>();
         services.AddScoped<IConfigurationService, ConfigurationService>();
-        services.AddScoped<IWmiHelperService, WmiHelperService>(); // Add WMI service for fallback scenarios
+        services.AddScoped<IWmiHelperService, WmiHelperService>(); // Used by Hardware, Display, Peripherals, Printer, Management, Network, Identity
         
         // Register modular services
         services.AddScoped<ModularOsQueryService>();
@@ -1086,7 +1087,7 @@ public class Program
             {
                 Logger.Section("Module Data", $"Collected data for module: {moduleId}");
                 Logger.Info("Module: {0}", moduleData.ModuleId);
-                Logger.Info("Version: {0}", moduleData.Version);
+                Logger.Info("Version: {0}", moduleData.ModuleVersion);
                 Logger.Info("Collection Time: {0:yyyy-MM-dd HH:mm:ss} UTC", moduleData.CollectedAt);
                 Logger.Info("Device ID: {0}", moduleData.DeviceId);
                 

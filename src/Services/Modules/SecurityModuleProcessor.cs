@@ -17,16 +17,13 @@ namespace ReportMate.WindowsClient.Services.Modules
     public class SecurityModuleProcessor : BaseModuleProcessor<SecurityData>
     {
         private readonly ILogger<SecurityModuleProcessor> _logger;
-        private readonly IWmiHelperService _wmiHelperService;
 
         public override string ModuleId => "security";
 
         public SecurityModuleProcessor(
-            ILogger<SecurityModuleProcessor> logger,
-            IWmiHelperService wmiHelperService)
+            ILogger<SecurityModuleProcessor> logger)
         {
             _logger = logger;
-            _wmiHelperService = wmiHelperService;
         }
 
         public override async Task<SecurityData> ProcessModuleAsync(
@@ -43,6 +40,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                 CollectedAt = DateTime.UtcNow,
                 LastSecurityScan = DateTime.UtcNow
             };
+
+            // Process Defender config from registry via osquery (no WMI)
+            ProcessDefenderConfigRegistry(osqueryResults, data);
 
             // Process antivirus information
             await ProcessAntivirusInfo(osqueryResults, data);
@@ -77,13 +77,56 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process security events
             await ProcessSecurityEvents(osqueryResults, data);
 
+            // Process threat detections from all AV/EDR products
+            await ProcessDetections(osqueryResults, data);
+
             // Process certificates
             ProcessCertificates(osqueryResults, data);
 
-            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}, Certificates: {CertCount}, CVEs: {CveCount}", 
-                data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent, data.Certificates.Count, data.SecurityCves.Count);
+            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}, Certificates: {CertCount}, CVEs: {CveCount}, Detections: {DetectionCount}", 
+                data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent, data.Certificates.Count, data.SecurityCves.Count, data.Detections.Count);
 
             return data;
+        }
+
+        /// <summary>
+        /// Process Defender configuration from osquery registry results (no WMI needed).
+        /// Populates antivirus data from registry keys collected by defender_config_registry query.
+        /// </summary>
+        private void ProcessDefenderConfigRegistry(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
+        {
+            if (!osqueryResults.TryGetValue("defender_config_registry", out var defenderRegistry) || defenderRegistry.Count == 0)
+            {
+                _logger.LogDebug("No defender_config_registry osquery results available");
+                return;
+            }
+
+            _logger.LogDebug("Processing {Count} Defender registry entries from osquery", defenderRegistry.Count);
+
+            foreach (var entry in defenderRegistry)
+            {
+                var path = GetStringValue(entry, "path").ToLowerInvariant();
+                var name = GetStringValue(entry, "name");
+                var dataVal = GetStringValue(entry, "data");
+
+                // Real-Time Protection settings
+                if (path.Contains("real-time protection"))
+                {
+                    if (name == "DisableRealtimeMonitoring" && dataVal == "0")
+                        data.Antivirus.IsEnabled = true;
+                    if (name == "DisableBehaviorMonitoring") { /* logged but not mapped */ }
+                }
+                
+                // Signature Updates
+                if (path.Contains("signature updates"))
+                {
+                    if (name == "AVSignatureVersion" && !string.IsNullOrEmpty(dataVal))
+                        data.Antivirus.Version = dataVal;
+                }
+            }
+
+            if (data.Antivirus.IsEnabled && string.IsNullOrEmpty(data.Antivirus.Name))
+                data.Antivirus.Name = "Windows Defender";
         }
 
         private async Task ProcessAntivirusInfo(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
@@ -320,11 +363,11 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             try
             {
-                _logger.LogDebug("Collecting Secure Boot status via PowerShell");
+                _logger.LogDebug("Collecting Secure Boot status via PowerShell registry read");
                 
-                // Use PowerShell to check Secure Boot status
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(
-                    "$sb = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue; @{ IsEnabled = $sb } | ConvertTo-Json");
+                // Use PowerShell registry read instead of Confirm-SecureBootUEFI (avoids WMI)
+                var result = await PowerShellRunner.ExecuteAsync(
+                    "$v = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State' -Name UEFISecureBootEnabled -ErrorAction SilentlyContinue).UEFISecureBootEnabled; @{ IsEnabled = ($v -eq 1) } | ConvertTo-Json", _logger);
                 
                 if (!string.IsNullOrEmpty(result))
                 {
@@ -397,21 +440,21 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             try
             {
-                _logger.LogDebug("Collecting Security CVE information via PowerShell");
+                _logger.LogDebug("Collecting Security CVE information");
 
-                // Get OS version and build info for security release info
+                // Get OS version from osquery results or registry (no WMI)
                 var osInfoScript = @"
-                    $os = Get-CimInstance Win32_OperatingSystem
+                    $ntKey = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
                     $result = @{
-                        OsVersion = $os.Version
-                        OsBuild = $os.BuildNumber
-                        ProductVersion = $os.Caption
-                        InstallDate = $os.InstallDate.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+                        OsVersion = ($ntKey.CurrentMajorVersionNumber.ToString() + '.' + $ntKey.CurrentMinorVersionNumber.ToString() + '.' + $ntKey.CurrentBuildNumber)
+                        OsBuild = $ntKey.CurrentBuildNumber
+                        ProductVersion = $ntKey.ProductName
+                        InstallDate = if ($ntKey.InstallDate) { ([DateTimeOffset]::FromUnixTimeSeconds($ntKey.InstallDate)).ToString('yyyy-MM-ddTHH:mm:ss.fffK') } else { $null }
                     }
                     $result | ConvertTo-Json -Compress
                 ";
 
-                var osInfoResult = await _wmiHelperService.ExecutePowerShellCommandAsync(osInfoScript);
+                var osInfoResult = await PowerShellRunner.ExecuteAsync(osInfoScript, _logger);
                 if (!string.IsNullOrEmpty(osInfoResult))
                 {
                     try
@@ -494,7 +537,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 ";
 
-                var pendingResult = await _wmiHelperService.ExecutePowerShellCommandAsync(pendingUpdatesScript);
+                var pendingResult = await PowerShellRunner.ExecuteAsync(pendingUpdatesScript, _logger);
                 if (!string.IsNullOrEmpty(pendingResult))
                 {
                     try
@@ -707,7 +750,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         '[]'
                     }";
 
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
                 _logger.LogInformation("PowerShell security events result length: {Length}, First 100 chars: {Preview}", 
                     result?.Length ?? 0, result?.Substring(0, Math.Min(100, result?.Length ?? 0)));
                 
@@ -802,16 +845,39 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             try
             {
-                _logger.LogDebug("Collecting Windows Defender data via PowerShell Get-MpComputerStatus");
+                _logger.LogDebug("Collecting Windows Defender data via registry (no WMI)");
                 
-                // Execute Get-MpComputerStatus with formatted dates for proper JSON parsing
-                var psCommand = "Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusSignatureVersion, " +
-                               "@{Name='AntivirusSignatureLastUpdated';Expression={$_.AntivirusSignatureLastUpdated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')}}, " +
-                               "@{Name='QuickScanStartTime';Expression={if($_.QuickScanStartTime){$_.QuickScanStartTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK')}else{$null}}}, " +
-                               "@{Name='FullScanStartTime';Expression={if($_.FullScanStartTime){$_.FullScanStartTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK')}else{$null}}}, " +
-                               "BehaviorMonitorEnabled, IoavProtectionEnabled, NISEnabled, AntivirusEnabled, AMServiceEnabled | ConvertTo-Json";
+                // Use registry reads instead of Get-MpComputerStatus to avoid spawning WmiPrvSE.exe
+                var psCommand = @"
+                    $rtp = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Real-Time Protection' -ErrorAction SilentlyContinue
+                    $sig = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Signature Updates' -ErrorAction SilentlyContinue
+                    $scan = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Defender' -ErrorAction SilentlyContinue
+                    $features = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Defender\Features' -ErrorAction SilentlyContinue
+                    
+                    $lastQuickScan = $null
+                    $lastFullScan = $null
+                    try {
+                        $quickEvt = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; ID=1001} -MaxEvents 1 -ErrorAction SilentlyContinue
+                        if ($quickEvt) { $lastQuickScan = $quickEvt.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK') }
+                        $fullEvt = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; ID=1002} -MaxEvents 1 -ErrorAction SilentlyContinue
+                        if ($fullEvt) { $lastFullScan = $fullEvt.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK') }
+                    } catch { }
+                    
+                    @{
+                        RealTimeProtectionEnabled = -not ($rtp.DisableRealtimeMonitoring -eq 1)
+                        AntivirusSignatureVersion = $sig.AVSignatureVersion
+                        AntivirusSignatureLastUpdated = if ($sig.SignaturesLastUpdated) { try { [DateTime]::FromBinary($sig.SignaturesLastUpdated).ToString('yyyy-MM-ddTHH:mm:ss.fffK') } catch { $null } } else { $null }
+                        QuickScanStartTime = $lastQuickScan
+                        FullScanStartTime = $lastFullScan
+                        BehaviorMonitorEnabled = -not ($rtp.DisableBehaviorMonitoring -eq 1)
+                        IoavProtectionEnabled = -not ($rtp.DisableIOAVProtection -eq 1)
+                        NISEnabled = if ($features) { -not ($features.DisableNetworkProtection -eq 1) } else { $true }
+                        AntivirusEnabled = -not ($scan.DisableAntiVirus -eq 1)
+                        AMServiceEnabled = -not ($scan.DisableAntiSpyware -eq 1)
+                    } | ConvertTo-Json -Compress
+                ";
                 
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(psCommand);
+                var result = await PowerShellRunner.ExecuteAsync(psCommand, _logger);
                 
                 if (!string.IsNullOrEmpty(result))
                 {
@@ -1053,7 +1119,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     $result | ConvertTo-Json -Compress
                 ";
 
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
                 
                 if (!string.IsNullOrEmpty(result))
                 {
@@ -1188,7 +1254,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     $result | ConvertTo-Json -Compress
                 ";
 
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
                 
                 if (!string.IsNullOrEmpty(result))
                 {
@@ -1288,9 +1354,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
 
                     try {
-                        # Get OS version to check if Smart App Control is available (Windows 11 22H2+)
-                        $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
-                        $buildNumber = [int]$osInfo.BuildNumber
+                        # Get OS build from registry (no WMI)
+                        $buildNumber = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue).CurrentBuildNumber
                         
                         # Windows 11 22H2 is build 22621+
                         if ($buildNumber -ge 22621) {
@@ -1309,35 +1374,31 @@ namespace ReportMate.WindowsClient.Services.Modules
                             }
                         }
 
-                        # Get Device Guard / VBS status
-                        $dgInfo = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue
-                        if ($dgInfo) {
-                            # VBS status: 0=Not configured, 1=Enabled but not running, 2=Running
-                            if ($dgInfo.VirtualizationBasedSecurityStatus -eq 2) {
-                                $result.VbsEnabled = $true
-                                $result.VbsStatus = 'Running'
-                            } elseif ($dgInfo.VirtualizationBasedSecurityStatus -eq 1) {
+                        # Get Device Guard / VBS status from registry (no WMI)
+                        $dgKey = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -ErrorAction SilentlyContinue
+                        if ($dgKey) {
+                            $vbsEnabled = $dgKey.EnableVirtualizationBasedSecurity
+                            if ($vbsEnabled -eq 1) {
                                 $result.VbsEnabled = $true
                                 $result.VbsStatus = 'Configured'
-                            } else {
-                                $result.VbsStatus = 'Not configured'
                             }
                             
-                            # Running security services (bitmask)
+                            # Check actual VBS running status from System Information
+                            $sysInfo = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -Name 'VirtualizationBasedSecurityStatus' -ErrorAction SilentlyContinue
+                            if ($sysInfo -and $sysInfo.VirtualizationBasedSecurityStatus -eq 2) {
+                                $result.VbsEnabled = $true
+                                $result.VbsStatus = 'Running'
+                            }
+                            
+                            # Check required security properties for services
                             $runningServices = @()
-                            if ($dgInfo.SecurityServicesRunning) {
-                                foreach ($svc in $dgInfo.SecurityServicesRunning) {
-                                    switch ($svc) {
-                                        1 { $runningServices += 'Credential Guard' }
-                                        2 { $runningServices += 'HVCI' }
-                                        3 { $runningServices += 'System Guard Secure Launch' }
-                                        4 { $runningServices += 'SMM Firmware Measurement' }
-                                    }
-                                }
-                            }
-                            $result.VbsServices = $runningServices
+                            $credGuard = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard' -Name 'Enabled' -ErrorAction SilentlyContinue
+                            if ($credGuard -and $credGuard.Enabled -eq 1) { $runningServices += 'Credential Guard' }
                             
-                            # HVCI (Memory Integrity) is running if service 2 is present
+                            $hvciScenario = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' -Name 'Enabled' -ErrorAction SilentlyContinue
+                            if ($hvciScenario -and $hvciScenario.Enabled -eq 1) { $runningServices += 'HVCI' }
+                            
+                            $result.VbsServices = $runningServices
                             if ($runningServices -contains 'HVCI') {
                                 $result.MemoryIntegrityEnabled = $true
                             }
@@ -1363,17 +1424,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 $result.ExploitProtection.SystemStatus = 'Configured'
                             }
                         } catch {
-                            # Get-ProcessMitigation may not be available on all systems
                             $result.ExploitProtection.SystemStatus = 'Unknown'
                         }
                     } catch {
-                        # Silently handle errors - result will contain defaults
                     }
 
                     $result | ConvertTo-Json -Depth 3 -Compress
                 ";
 
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
                 
                 if (!string.IsNullOrEmpty(result))
                 {
@@ -1466,6 +1525,330 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogWarning(ex, "Failed to collect Device Guard status");
             }
+        }
+
+        /// <summary>
+        /// Collect threat detection alerts from all AV/EDR products.
+        /// Primary: PowerShell Get-MpThreatDetection for Defender (rich data).
+        /// Fallback: osquery av_detection_events from Windows Event Log (all products).
+        /// </summary>
+        private async Task ProcessDetections(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
+        {
+            // Primary: Defender threat detection history via PowerShell
+            await ProcessDefenderThreatDetections(data);
+
+            // Secondary: osquery event log entries from any AV/EDR product
+            ProcessAvDetectionEvents(osqueryResults, data);
+
+            _logger.LogInformation("Detections collected: {Count} total", data.Detections.Count);
+        }
+
+        /// <summary>
+        /// Collect Windows Defender threat detections via event log (no WMI).
+        /// Uses Get-WinEvent for Defender-specific detection events with rich data,
+        /// without spawning WmiPrvSE.exe like Get-MpThreatDetection does.
+        /// </summary>
+        private async Task ProcessDefenderThreatDetections(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Windows Defender threat detections via event log (no WMI)");
+
+                // Query Defender operational log for detection events (1116=Detected, 1117=Action taken)
+                // This avoids Get-MpThreatDetection which goes through WMI Defender provider
+                var psCommand = @"
+try {
+    $events = Get-WinEvent -FilterHashtable @{
+        LogName='Microsoft-Windows-Windows Defender/Operational'
+        ID=1116,1117
+        StartTime=(Get-Date).AddDays(-30)
+    } -MaxEvents 100 -ErrorAction SilentlyContinue
+
+    if ($events) {
+        $result = $events | ForEach-Object {
+            $xml = [xml]$_.ToXml()
+            $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
+            $ns.AddNamespace('e', 'http://schemas.microsoft.com/win/2004/08/events/event')
+            
+            $threatName = ($xml.SelectSingleNode('//e:Data[@Name=""""Threat Name""""]', $ns)).'#text'
+            $severityId = ($xml.SelectSingleNode('//e:Data[@Name=""""Severity ID""""]', $ns)).'#text'
+            $categoryId = ($xml.SelectSingleNode('//e:Data[@Name=""""Category ID""""]', $ns)).'#text'
+            $statusId = ($xml.SelectSingleNode('//e:Data[@Name=""""Status Code""""]', $ns)).'#text'
+            $path = ($xml.SelectSingleNode('//e:Data[@Name=""""Path""""]', $ns)).'#text'
+            $process = ($xml.SelectSingleNode('//e:Data[@Name=""""Process Name""""]', $ns)).'#text'
+            $user = ($xml.SelectSingleNode('//e:Data[@Name=""""Detection User""""]', $ns)).'#text'
+            $threatId = ($xml.SelectSingleNode('//e:Data[@Name=""""Threat ID""""]', $ns)).'#text'
+            $action = ($xml.SelectSingleNode('//e:Data[@Name=""""Action Name""""]', $ns)).'#text'
+
+            [PSCustomObject]@{
+                ThreatID = $threatId
+                ThreatName = $threatName
+                SeverityID = [int]$severityId
+                CategoryID = [int]$categoryId
+                ThreatStatusID = if ($_.Id -eq 1117) { 2 } else { 1 }
+                DetectedAt = $_.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+                ProcessName = $process
+                DomainUser = $user
+                FilePath = $path
+                ActionTaken = $action
+            }
+        }
+        $result | ConvertTo-Json -Depth 3
+    }
+} catch { }";
+
+                var result = await PowerShellRunner.ExecuteAsync(psCommand, _logger);
+
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    _logger.LogDebug("No Defender threat detections found");
+                    return;
+                }
+
+                try
+                {
+                    // Handle both single object and array from PowerShell
+                    var trimmed = result.Trim();
+                    List<Dictionary<string, object>>? detections = null;
+
+                    if (trimmed.StartsWith("["))
+                    {
+                        detections = System.Text.Json.JsonSerializer.Deserialize(trimmed, 
+                            ReportMateJsonContext.Default.ListDictionaryStringObject);
+                    }
+                    else if (trimmed.StartsWith("{"))
+                    {
+                        var single = System.Text.Json.JsonSerializer.Deserialize(trimmed, 
+                            ReportMateJsonContext.Default.DictionaryStringObject);
+                        if (single != null) detections = new List<Dictionary<string, object>> { single };
+                    }
+
+                    if (detections == null) return;
+
+                    foreach (var d in detections)
+                    {
+                        var alert = new DetectionAlert
+                        {
+                            ThreatId = GetStringValue(d, "ThreatID"),
+                            ThreatName = GetStringValue(d, "ThreatName"),
+                            Severity = MapDefenderSeverity(GetIntValue(d, "SeverityID")),
+                            Category = MapDefenderCategory(GetIntValue(d, "CategoryID")),
+                            Status = MapDefenderThreatStatus(GetIntValue(d, "ThreatStatusID")),
+                            ActionTaken = MapDefenderThreatStatus(GetIntValue(d, "ThreatStatusID")),
+                            Source = "WindowsDefender",
+                            FilePath = GetStringValue(d, "FilePath"),
+                            ProcessName = GetStringValue(d, "ProcessName"),
+                            User = GetStringValue(d, "DomainUser")
+                        };
+
+                        var detectedAt = GetStringValue(d, "DetectedAt");
+                        if (!string.IsNullOrEmpty(detectedAt) && DateTime.TryParse(detectedAt, out var dt))
+                            alert.DetectedAt = dt;
+
+                        var resolvedAt = GetStringValue(d, "ResolvedAt");
+                        if (!string.IsNullOrEmpty(resolvedAt) && DateTime.TryParse(resolvedAt, out var rt))
+                            alert.ResolvedAt = rt;
+
+                        data.Detections.Add(alert);
+                    }
+
+                    _logger.LogInformation("Collected {Count} Defender threat detections", detections.Count);
+                }
+                catch (Exception parseEx)
+                {
+                    _logger.LogWarning(parseEx, "Failed to parse Defender threat detection JSON");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Get-MpThreatDetection not available or failed");
+            }
+        }
+
+        /// <summary>
+        /// Process AV detection events from osquery windows_events (covers all AV/EDR products)
+        /// </summary>
+        private void ProcessAvDetectionEvents(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
+        {
+            if (!osqueryResults.TryGetValue("av_detection_events", out var events) || events.Count == 0)
+            {
+                _logger.LogDebug("No AV detection events from osquery");
+                return;
+            }
+
+            _logger.LogDebug("Processing {Count} AV detection events from osquery", events.Count);
+
+            // Build a set of existing Defender ThreatIds to avoid duplicates with PowerShell collection
+            var existingDefenderIds = new HashSet<string>(
+                data.Detections.Where(d => d.Source == "WindowsDefender" && !string.IsNullOrEmpty(d.ThreatId))
+                    .Select(d => d.ThreatId));
+
+            foreach (var evt in events)
+            {
+                var eventId = GetIntValue(evt, "eventid");
+                var source = GetStringValue(evt, "source");
+                var eventData = GetStringValue(evt, "data");
+
+                // Determine AV source from event log source name
+                var avSource = MapEventSourceToAvProduct(source);
+
+                // Skip Defender events if we already got richer data from PowerShell
+                if (avSource == "WindowsDefender" && existingDefenderIds.Count > 0)
+                    continue;
+
+                var alert = new DetectionAlert
+                {
+                    EventId = eventId,
+                    Source = avSource,
+                    ThreatName = ExtractThreatNameFromEventData(eventData),
+                    Severity = MapEventIdToSeverity(eventId),
+                    Status = MapEventIdToStatus(eventId),
+                    ActionTaken = MapEventIdToAction(eventId)
+                };
+
+                var datetimeStr = GetStringValue(evt, "datetime");
+                if (!string.IsNullOrEmpty(datetimeStr) && DateTime.TryParse(datetimeStr, out var eventTime))
+                    alert.DetectedAt = eventTime;
+
+                data.Detections.Add(alert);
+            }
+        }
+
+        // Defender SeverityID mapping
+        private static string MapDefenderSeverity(int severityId) => severityId switch
+        {
+            1 => "Low",
+            2 => "Moderate",
+            4 => "High",
+            5 => "Severe",
+            _ => "Unknown"
+        };
+
+        // Defender CategoryID mapping
+        private static string MapDefenderCategory(int categoryId) => categoryId switch
+        {
+            0 => "Invalid",
+            1 => "Adware",
+            2 => "Spyware",
+            3 => "PasswordStealer",
+            4 => "Trojan Downloader",
+            5 => "Worm",
+            6 => "Backdoor",
+            7 => "Remote Access Trojan",
+            8 => "Trojan",
+            9 => "Email Flooder",
+            10 => "Keylogger",
+            11 => "Dialer",
+            12 => "Monitoring Software",
+            13 => "Browser Modifier",
+            14 => "Cookie",
+            15 => "Browser Plugin",
+            16 => "AOL Exploit",
+            17 => "Nuker",
+            18 => "Security Disabler",
+            19 => "Joke Program",
+            20 => "Hostile ActiveX Control",
+            21 => "Software Bundler",
+            22 => "Stealth Notifier",
+            23 => "Settings Modifier",
+            24 => "Toolbar",
+            25 => "Remote Control Software",
+            26 => "Trojan FTP",
+            27 => "PUA",
+            28 => "ICQ Exploit",
+            29 => "Trojan Telnet",
+            30 => "Exploit",
+            31 => "Filesharing Program",
+            32 => "Malware Creation Tool",
+            33 => "Remote Control",
+            34 => "Tool",
+            36 => "Trojan Denial of Service",
+            37 => "Trojan Dropper",
+            38 => "Trojan Mass Mailer",
+            39 => "Trojan Monitoring",
+            40 => "Trojan Proxy Server",
+            42 => "Virus",
+            43 => "Known",
+            44 => "Unknown",
+            45 => "SPP",
+            46 => "Behavior",
+            47 => "Vulnerability",
+            48 => "Policy",
+            49 => "Enterprise Unwanted Software",
+            50 => "Ransomware",
+            51 => "ASR Rule",
+            _ => "Other"
+        };
+
+        // Defender ThreatStatusID mapping
+        private static string MapDefenderThreatStatus(int statusId) => statusId switch
+        {
+            0 => "Unknown",
+            1 => "Detected",
+            2 => "Cleaned",
+            3 => "Quarantined",
+            4 => "Removed",
+            5 => "Allowed",
+            6 => "Blocked",
+            102 => "QuarantineFailed",
+            103 => "RemoveFailed",
+            104 => "AllowFailed",
+            105 => "Abandoned",
+            107 => "BlockFailed",
+            _ => "Unknown"
+        };
+
+        private static string MapEventSourceToAvProduct(string source) => source switch
+        {
+            var s when s.Contains("Defender", StringComparison.OrdinalIgnoreCase) => "WindowsDefender",
+            var s when s.Contains("CrowdStrike", StringComparison.OrdinalIgnoreCase) => "CrowdStrike",
+            var s when s.Contains("Sophos", StringComparison.OrdinalIgnoreCase) => "Sophos",
+            var s when s.Contains("Arctic Wolf", StringComparison.OrdinalIgnoreCase) => "ArcticWolf",
+            var s when s.Contains("HitmanPro", StringComparison.OrdinalIgnoreCase) => "HitmanPro",
+            _ => source
+        };
+
+        private static string MapEventIdToSeverity(int eventId) => eventId switch
+        {
+            1116 or 1117 => "High",
+            1118 or 1119 => "Moderate",
+            1006 or 1007 or 1008 or 1010 => "High",
+            1013 or 1015 => "Moderate",
+            _ => "Unknown"
+        };
+
+        private static string MapEventIdToStatus(int eventId) => eventId switch
+        {
+            1116 => "Detected",
+            1117 => "ActionTaken",
+            1118 => "Remediated",
+            1119 => "RemediationFailed",
+            _ => "Detected"
+        };
+
+        private static string MapEventIdToAction(int eventId) => eventId switch
+        {
+            1117 => "Quarantine",
+            1118 => "Clean",
+            1119 => "RemediationFailed",
+            1120 => "Removed",
+            1121 => "Blocked",
+            _ => "NoAction"
+        };
+
+        private static string ExtractThreatNameFromEventData(string eventData)
+        {
+            if (string.IsNullOrEmpty(eventData)) return string.Empty;
+            // Defender event data contains "Name: ThreatName" pattern
+            var nameIdx = eventData.IndexOf("Name:", StringComparison.OrdinalIgnoreCase);
+            if (nameIdx >= 0)
+            {
+                var start = nameIdx + 5;
+                var end = eventData.IndexOfAny(new[] { '\r', '\n', ';' }, start);
+                if (end < 0) end = Math.Min(start + 100, eventData.Length);
+                return eventData.Substring(start, end - start).Trim();
+            }
+            return string.Empty;
         }
 
         private void ProcessCertificates(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
