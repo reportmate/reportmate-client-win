@@ -82,6 +82,26 @@
       "query": "SELECT eventid, source, level, datetime, data FROM windows_events WHERE source IN ('Microsoft-Windows-Windows Defender/Operational', 'CrowdStrike Falcon Sensor', 'Sophos Anti-Virus', 'Sophos Endpoint Defense', 'HitmanPro.Alert', 'Arctic Wolf Agent') AND eventid IN (1006, 1007, 1008, 1009, 1010, 1013, 1015, 1116, 1117, 1118, 1119, 1120, 1121) AND datetime > datetime('now', '-30 days');",
       "interval": 3600,
       "description": "AV/EDR threat detection events from all security products (last 30 days)"
+    },
+    "os_version_info": {
+      "query": "SELECT version, major, minor, build, patch, platform, name FROM os_version;",
+      "interval": 3600,
+      "description": "Operating system version for CVE correlation"
+    },
+    "secure_boot_registry": {
+      "query": "SELECT name, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State' AND name = 'UEFISecureBootEnabled';",
+      "interval": 3600,
+      "description": "Secure Boot status from registry"
+    },
+    "device_guard_registry": {
+      "query": "SELECT name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity\\%';",
+      "interval": 3600,
+      "description": "Device Guard and VBS status from registry"
+    },
+    "defender_config_registry": {
+      "query": "SELECT path, name, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender\\Signature Updates\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender\\Scan\\%' OR path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows Defender\\Features\\%';",
+      "interval": 600,
+      "description": "Windows Defender configuration from registry (replaces Get-MpComputerStatus WMI)"
     }
   }
 }
