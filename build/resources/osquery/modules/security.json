@@ -77,6 +77,11 @@
       "query": "SELECT eventid, source, level, datetime, data FROM windows_events WHERE eventid IN (4624, 4625, 4648, 4719, 4720, 4722, 4723, 4724, 4725, 4726, 4727, 4728, 4729, 4730, 4731, 4732, 4733, 4734, 4735, 4737, 4738, 4739, 4740, 4741, 4742, 4743, 4756, 4757, 4758, 4764, 4765, 4766, 4767, 4768, 4769, 4770, 4771, 4772, 4776, 4777, 4778, 4779, 4781, 4793) AND datetime > datetime('now', '-24 hours');",
       "interval": 1800,
       "description": "Recent security events from Windows Event Log"
+    },
+    "av_detection_events": {
+      "query": "SELECT eventid, source, level, datetime, data FROM windows_events WHERE source IN ('Microsoft-Windows-Windows Defender/Operational', 'CrowdStrike Falcon Sensor', 'Sophos Anti-Virus', 'Sophos Endpoint Defense', 'HitmanPro.Alert', 'Arctic Wolf Agent') AND eventid IN (1006, 1007, 1008, 1009, 1010, 1013, 1015, 1116, 1117, 1118, 1119, 1120, 1121) AND datetime > datetime('now', '-30 days');",
+      "interval": 3600,
+      "description": "AV/EDR threat detection events from all security products (last 30 days)"
     }
   }
 }

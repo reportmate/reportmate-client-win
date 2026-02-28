@@ -21,6 +21,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<SecurityCve> SecurityCves { get; set; } = new();
         public SecurityReleaseInfo SecurityReleaseInfo { get; set; } = new();
         public List<SecurityEvent> SecurityEvents { get; set; } = new();
+        public List<DetectionAlert> Detections { get; set; } = new();
         public List<CertificateInfo> Certificates { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
     }
@@ -264,5 +265,26 @@ namespace ReportMate.WindowsClient.Models.Modules
         public bool SehopEnabled { get; set; } // Structured Exception Handling Overwrite Protection
         public bool HeapIntegrityEnabled { get; set; }
         public string SystemStatus { get; set; } = string.Empty; // Overall system-wide status
+    }
+
+    /// <summary>
+    /// Threat detection alert from any AV/EDR product (Defender, CrowdStrike, Arctic Wolf, Sophos, etc.)
+    /// Collected via PowerShell Get-MpThreatDetection (Defender) and Windows Event Log (all products)
+    /// </summary>
+    public class DetectionAlert
+    {
+        public string ThreatId { get; set; } = string.Empty;
+        public string ThreatName { get; set; } = string.Empty;
+        public string Severity { get; set; } = string.Empty; // Severe, High, Moderate, Low, Unknown
+        public string Category { get; set; } = string.Empty; // Malware, Spyware, Trojan, PUA, Ransomware, etc.
+        public string Status { get; set; } = string.Empty; // Cleaned, Quarantined, Removed, Allowed, Blocked, Missed
+        public string ActionTaken { get; set; } = string.Empty; // NoAction, Clean, Quarantine, Remove, Block, Allow
+        public string Source { get; set; } = string.Empty; // WindowsDefender, CrowdStrike, ArcticWolf, Sophos, etc.
+        public string FilePath { get; set; } = string.Empty;
+        public string ProcessName { get; set; } = string.Empty;
+        public string User { get; set; } = string.Empty;
+        public DateTime? DetectedAt { get; set; }
+        public DateTime? ResolvedAt { get; set; }
+        public int EventId { get; set; } // Windows Event Log EventID (1116=Detection, 1117=Action)
     }
 }
