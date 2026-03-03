@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -54,8 +55,11 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process login history from security events
             await ProcessLoginHistory(data);
 
-            // Process directory services info
+            // Process directory services, SSO state, and device identity from dsregcmd
             await ProcessDirectoryServices(data);
+
+            // Process domain trust relationship
+            await ProcessDomainTrust(data);
 
             // Process Windows Hello info
             await ProcessWindowsHelloInfo(osqueryResults, data);
@@ -743,21 +747,17 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             try
             {
-                var script = @"
+                // Get domain/workgroup info from WMI
+                var domainScript = @"
                     $result = @{
                         IsDomainJoined = $false
                         DomainName = ''
                         DnsDomainName = ''
                         Workgroup = ''
-                        IsAadJoined = $false
-                        IsAadRegistered = $false
-                        TenantId = ''
                     }
-                    
                     try {
                         $computerSystem = Get-WmiObject -Class Win32_ComputerSystem
                         $result.IsDomainJoined = ($computerSystem.PartOfDomain -eq $true)
-                        
                         if ($result.IsDomainJoined) {
                             $result.DomainName = $computerSystem.Domain
                             $result.DnsDomainName = $env:USERDNSDOMAIN
@@ -765,55 +765,188 @@ namespace ReportMate.WindowsClient.Services.Modules
                             $result.Workgroup = $computerSystem.Workgroup
                         }
                     } catch { }
-                    
-                    # Check Entra ID join status via dsregcmd
-                    try {
-                        $dsreg = dsregcmd /status 2>&1
-                        if ($dsreg -match 'AzureAdJoined\s*:\s*YES') {
-                            $result.IsAadJoined = $true
-                        }
-                        if ($dsreg -match 'WorkplaceJoined\s*:\s*YES') {
-                            $result.IsAadRegistered = $true
-                        }
-                        if ($dsreg -match 'TenantId\s*:\s*([a-f0-9-]+)') {
-                            $result.TenantId = $matches[1]
-                        }
-                    } catch { }
-                    
                     $result | ConvertTo-Json -Compress
                 ";
 
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
-
-                if (!string.IsNullOrEmpty(result))
+                var domainResult = await _wmiHelperService.ExecutePowerShellCommandAsync(domainScript);
+                if (!string.IsNullOrEmpty(domainResult))
                 {
-                    var trimmedResult = result.Trim();
-                    var jsonStart = trimmedResult.IndexOf('{');
-
+                    var trimmed = domainResult.Trim();
+                    var jsonStart = trimmed.IndexOf('{');
                     if (jsonStart >= 0)
                     {
-                        var jsonContent = trimmedResult.Substring(jsonStart);
-
-                        using var document = JsonDocument.Parse(jsonContent);
+                        using var document = JsonDocument.Parse(trimmed.Substring(jsonStart));
                         var root = document.RootElement;
-
                         data.DirectoryServices.ActiveDirectory.IsDomainJoined = GetJsonBoolValue(root, "IsDomainJoined");
                         data.DirectoryServices.ActiveDirectory.DomainName = GetJsonStringValue(root, "DomainName");
                         data.DirectoryServices.ActiveDirectory.DnsDomainName = GetJsonStringValue(root, "DnsDomainName");
                         data.DirectoryServices.Workgroup = GetJsonStringValue(root, "Workgroup");
-                        data.DirectoryServices.EntraId.IsEntraJoined = GetJsonBoolValue(root, "IsAadJoined");
-                        data.DirectoryServices.EntraId.IsEntraRegistered = GetJsonBoolValue(root, "IsAadRegistered");
-                        data.DirectoryServices.EntraId.TenantId = GetJsonStringValue(root, "TenantId");
-
-                        _logger.LogDebug("Directory services: DomainJoined={IsDomain}, EntraJoined={IsEntra}",
-                            data.DirectoryServices.ActiveDirectory.IsDomainJoined,
-                            data.DirectoryServices.EntraId.IsEntraJoined);
                     }
                 }
+
+                // Get full dsregcmd output and parse all sections in C#
+                var dsregOutput = await _wmiHelperService.ExecutePowerShellCommandAsync("dsregcmd /status");
+                if (string.IsNullOrEmpty(dsregOutput))
+                {
+                    _logger.LogWarning("dsregcmd /status returned no output");
+                    return;
+                }
+
+                // Parse Device State section for join status
+                var deviceStateSection = ExtractDsregSection(dsregOutput, "Device State");
+                if (!string.IsNullOrEmpty(deviceStateSection))
+                {
+                    data.DirectoryServices.EntraId.IsEntraJoined = ParseDsregBool(deviceStateSection, "AzureAdJoined");
+                    data.DirectoryServices.EntraId.IsEntraRegistered = ParseDsregBool(deviceStateSection, "WorkplaceJoined");
+                }
+
+                // Parse Tenant Details section
+                var tenantSection = ExtractDsregSection(dsregOutput, "Tenant Details");
+                if (!string.IsNullOrEmpty(tenantSection))
+                {
+                    data.DirectoryServices.EntraId.TenantId = ParseDsregString(tenantSection, "TenantId");
+                    data.DirectoryServices.EntraId.TenantName = ParseDsregString(tenantSection, "TenantName");
+                }
+
+                // Parse Device Details section for certificate and auth info
+                var deviceDetailsSection = ExtractDsregSection(dsregOutput, "Device Details");
+                if (!string.IsNullOrEmpty(deviceDetailsSection))
+                {
+                    data.DirectoryServices.EntraId.DeviceId = ParseDsregString(deviceDetailsSection, "DeviceId");
+                    data.DirectoryServices.EntraId.Thumbprint = ParseDsregString(deviceDetailsSection, "Thumbprint");
+                    data.DirectoryServices.EntraId.DeviceCertificateValidity = ParseDsregString(deviceDetailsSection, "DeviceCertificateValidity");
+                    data.DirectoryServices.EntraId.DeviceAuthStatus = ParseDsregString(deviceDetailsSection, "DeviceAuthStatus");
+                }
+
+                // Parse SSO State section
+                var ssoSection = ExtractDsregSection(dsregOutput, "SSO State");
+                if (!string.IsNullOrEmpty(ssoSection))
+                {
+                    data.SsoState.EntraPrt = ParseDsregBool(ssoSection, "AzureAdPrt");
+                    data.SsoState.EnterprisePrt = ParseDsregBool(ssoSection, "EnterprisePrt");
+                    data.SsoState.OnPremTgt = ParseDsregBool(ssoSection, "OnPremTgt");
+                    data.SsoState.CloudTgt = ParseDsregBool(ssoSection, "CloudTgt");
+                    data.SsoState.EntraPrtAuthority = ParseDsregString(ssoSection, "AzureAdPrtAuthority");
+                    data.SsoState.EnterprisePrtAuthority = ParseDsregString(ssoSection, "EnterprisePrtAuthority");
+                    data.SsoState.KerbTopLevelNames = ParseDsregString(ssoSection, "KerbTopLevelNames");
+
+                    var prtUpdateTime = ParseDsregString(ssoSection, "AzureAdPrtUpdateTime");
+                    if (!string.IsNullOrEmpty(prtUpdateTime))
+                    {
+                        if (DateTime.TryParse(prtUpdateTime, out var updateTime))
+                            data.SsoState.EntraPrtUpdateTime = updateTime.ToUniversalTime();
+                        else if (DateTime.TryParseExact(prtUpdateTime, "yyyy-MM-dd HH:mm:ss.fff UTC", null, DateTimeStyles.AssumeUniversal, out updateTime))
+                            data.SsoState.EntraPrtUpdateTime = updateTime.ToUniversalTime();
+                    }
+
+                    var prtExpiryTime = ParseDsregString(ssoSection, "AzureAdPrtExpiryTime");
+                    if (!string.IsNullOrEmpty(prtExpiryTime))
+                    {
+                        if (DateTime.TryParse(prtExpiryTime, out var expiryTime))
+                            data.SsoState.EntraPrtExpiryTime = expiryTime.ToUniversalTime();
+                        else if (DateTime.TryParseExact(prtExpiryTime, "yyyy-MM-dd HH:mm:ss.fff UTC", null, DateTimeStyles.AssumeUniversal, out expiryTime))
+                            data.SsoState.EntraPrtExpiryTime = expiryTime.ToUniversalTime();
+                    }
+                }
+
+                _logger.LogDebug("Directory services: DomainJoined={IsDomain}, EntraJoined={IsEntra}, CloudTgt={CloudTgt}, EntraPrt={EntraPrt}",
+                    data.DirectoryServices.ActiveDirectory.IsDomainJoined,
+                    data.DirectoryServices.EntraId.IsEntraJoined,
+                    data.SsoState.CloudTgt,
+                    data.SsoState.EntraPrt);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to collect directory services info");
+            }
+        }
+
+        private async Task ProcessDomainTrust(IdentityData data)
+        {
+            if (!data.DirectoryServices.ActiveDirectory.IsDomainJoined)
+            {
+                data.DomainTrust.TrustStatus = "Not Applicable";
+                return;
+            }
+
+            try
+            {
+                _logger.LogDebug("Checking domain trust relationship");
+                data.DomainTrust.LastChecked = DateTime.UtcNow;
+
+                var trustScript = @"
+try {
+    $cs = Get-WmiObject Win32_ComputerSystem
+    if ($cs.PartOfDomain) {
+        Write-Output ""DOMAIN:$($cs.Domain)""
+        try {
+            $dc = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().FindDomainController()
+            Write-Output ""DC:$($dc.Name)""
+        } catch {
+            Write-Output ""DC:Unknown""
+        }
+        $result = Test-ComputerSecureChannel -ErrorAction Stop
+        Write-Output ""TRUST:$result""
+    } else {
+        Write-Output ""TRUST:NotApplicable""
+    }
+} catch {
+    Write-Output ""ERROR:$($_.Exception.Message)""
+}
+";
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(trustScript);
+
+                if (!string.IsNullOrEmpty(result))
+                {
+                    foreach (var line in result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        if (line.StartsWith("DOMAIN:"))
+                        {
+                            var domainValue = line.Substring(7);
+                            if (domainValue != "WORKGROUP")
+                                data.DomainTrust.DomainName = domainValue;
+                        }
+                        else if (line.StartsWith("DC:"))
+                        {
+                            data.DomainTrust.DomainController = line.Substring(3);
+                        }
+                        else if (line.StartsWith("TRUST:"))
+                        {
+                            var trustValue = line.Substring(6).Trim();
+                            if (trustValue.Equals("True", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.DomainTrust.SecureChannelValid = true;
+                                data.DomainTrust.TrustStatus = "Healthy";
+                                data.DomainTrust.ComputerAccountExists = true;
+                            }
+                            else if (trustValue.Equals("False", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.DomainTrust.SecureChannelValid = false;
+                                data.DomainTrust.TrustStatus = "Broken";
+                            }
+                            else if (trustValue.Equals("NotApplicable", StringComparison.OrdinalIgnoreCase))
+                            {
+                                data.DomainTrust.TrustStatus = "Not Applicable";
+                            }
+                        }
+                        else if (line.StartsWith("ERROR:"))
+                        {
+                            data.DomainTrust.ErrorMessage = line.Substring(6);
+                            data.DomainTrust.TrustStatus = "Broken";
+                            data.DomainTrust.SecureChannelValid = false;
+                            _logger.LogWarning("Domain trust check failed: {Error}", data.DomainTrust.ErrorMessage);
+                        }
+                    }
+                }
+
+                _logger.LogInformation("Domain trust: Status={TrustStatus}, Domain={Domain}, DC={DC}",
+                    data.DomainTrust.TrustStatus, data.DomainTrust.DomainName, data.DomainTrust.DomainController);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to check domain trust relationship");
+                data.DomainTrust.TrustStatus = "Unknown";
+                data.DomainTrust.ErrorMessage = ex.Message;
             }
         }
 
@@ -1444,6 +1577,65 @@ try {
                     return value;
             }
             return 0;
+        }
+
+        #endregion
+
+        #region dsregcmd Parsing Helpers
+
+        private string ExtractDsregSection(string dsregOutput, string sectionName)
+        {
+            var lines = dsregOutput.Split('\n');
+            var inSection = false;
+            var sectionLines = new List<string>();
+
+            foreach (var line in lines)
+            {
+                if (line.Contains($"| {sectionName}"))
+                {
+                    inSection = true;
+                    continue;
+                }
+
+                if (inSection)
+                {
+                    if (line.Trim().StartsWith("|") && line.Contains("---"))
+                        break;
+                    sectionLines.Add(line);
+                }
+            }
+
+            return string.Join('\n', sectionLines);
+        }
+
+        private bool ParseDsregBool(string section, string key)
+        {
+            foreach (var line in section.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Contains($"{key} :") ||
+                    trimmed.Replace(" ", "").Contains($"{key.Replace(" ", "")}:"))
+                {
+                    return trimmed.ToLowerInvariant().Contains("yes") || trimmed.ToLowerInvariant().Contains("true");
+                }
+            }
+            return false;
+        }
+
+        private string ParseDsregString(string section, string key)
+        {
+            foreach (var line in section.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Contains($"{key} :") ||
+                    trimmed.Replace(" ", "").Contains($"{key.Replace(" ", "")}:"))
+                {
+                    var colonIndex = trimmed.IndexOf(':');
+                    if (colonIndex > 0 && colonIndex < trimmed.Length - 1)
+                        return trimmed.Substring(colonIndex + 1).Trim();
+                }
+            }
+            return string.Empty;
         }
 
         #endregion

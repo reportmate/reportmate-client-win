@@ -15,6 +15,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<LoggedInUser> LoggedInUsers { get; set; } = new();
         public List<LoginHistoryEntry> LoginHistory { get; set; } = new();
         public DirectoryServicesInfo DirectoryServices { get; set; } = new();
+        public SsoState SsoState { get; set; } = new();
+        public DomainTrust DomainTrust { get; set; } = new();
         public WindowsHelloInfo WindowsHello { get; set; } = new();
         public IdentitySummary Summary { get; set; } = new();
     }
@@ -216,6 +218,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string TenantId { get; set; } = string.Empty;
         public string TenantName { get; set; } = string.Empty;
         public string DeviceId { get; set; } = string.Empty;
+        public string Thumbprint { get; set; } = string.Empty;
+        public string DeviceCertificateValidity { get; set; } = string.Empty;
+        public string DeviceAuthStatus { get; set; } = string.Empty;
         public DateTime? JoinDate { get; set; }
     }
 
