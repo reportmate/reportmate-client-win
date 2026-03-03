@@ -50,9 +50,6 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Secondary data sources: osquery and WMI fallbacks
             await ProcessLegacyMdmDataAsync(osqueryResults, data);
 
-            // Check domain trust for domain-joined or hybrid-joined machines
-            await ProcessDomainTrustAsync(data);
-
             // Process MDM configuration profiles (policy areas applied to device)
             await ProcessMdmConfigurationProfilesAsync(osqueryResults, data);
 
@@ -68,8 +65,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.LastSync = DateTime.UtcNow;
             }
 
-            _logger.LogInformation("Management module processed - Status: {Status}, Entra: {Entra}, Enterprise: {Enterprise}, Domain: {Domain}, DomainTrust: {TrustStatus}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, CompliancePolicies: {PolicyCount}", 
-                data.DeviceState.Status, data.DeviceState.EntraJoined, data.DeviceState.EnterpriseJoined, data.DeviceState.DomainJoined, data.DomainTrust.TrustStatus, data.Profiles.Count, data.ManagedApps.Count, data.CompliancePolicies.Count);
+            _logger.LogInformation("Management module processed - Status: {Status}, Entra: {Entra}, Enterprise: {Enterprise}, Domain: {Domain}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, CompliancePolicies: {PolicyCount}", 
+                data.DeviceState.Status, data.DeviceState.EntraJoined, data.DeviceState.EnterpriseJoined, data.DeviceState.DomainJoined, data.Profiles.Count, data.ManagedApps.Count, data.CompliancePolicies.Count);
 
             return data;
         }
@@ -96,7 +93,6 @@ namespace ReportMate.WindowsClient.Services.Modules
                 ParseDeviceDetails(dsregOutput, data.DeviceDetails);
                 ParseTenantDetails(dsregOutput, data.TenantDetails);
                 ParseUserState(dsregOutput, data.UserState);
-                ParseSsoState(dsregOutput, data.SsoState);
                 ParseDiagnosticData(dsregOutput, data.DiagnosticData);
 
                 _logger.LogDebug("dsregcmd data processed successfully");
@@ -104,194 +100,6 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to process dsregcmd data");
-            }
-        }
-
-        /// <summary>
-        /// Check domain trust relationship for domain-joined or hybrid-joined machines.
-        /// Uses Test-ComputerSecureChannel to verify the trust relationship with AD.
-        /// </summary>
-        private async Task ProcessDomainTrustAsync(ManagementData data)
-        {
-            // Only check trust for domain-joined machines (on-prem or hybrid)
-            if (!data.DeviceState.DomainJoined)
-            {
-                data.DomainTrust.TrustStatus = "Not Applicable";
-                _logger.LogDebug("Domain trust check skipped - device is not domain joined");
-                return;
-            }
-
-            try
-            {
-                _logger.LogDebug("Checking domain trust relationship for domain-joined device");
-                data.DomainTrust.LastChecked = DateTime.UtcNow;
-
-                // Get domain information first
-                var domainInfoScript = @"
-try {
-    $cs = Get-WmiObject Win32_ComputerSystem
-    if ($cs.PartOfDomain) {
-        Write-Output ""DOMAIN:$($cs.Domain)""
-        
-        # Try to get the domain controller
-        try {
-            $dc = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().FindDomainController()
-            Write-Output ""DC:$($dc.Name)""
-        } catch {
-            Write-Output ""DC:Unknown""
-        }
-        
-        # Check secure channel
-        $result = Test-ComputerSecureChannel -ErrorAction Stop
-        Write-Output ""TRUST:$result""
-    } else {
-        Write-Output ""DOMAIN:WORKGROUP""
-        Write-Output ""TRUST:NotApplicable""
-    }
-} catch {
-    Write-Output ""ERROR:$($_.Exception.Message)""
-}
-";
-
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(domainInfoScript);
-
-                if (!string.IsNullOrEmpty(result))
-                {
-                    var lines = result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var line in lines)
-                    {
-                        if (line.StartsWith("DOMAIN:"))
-                        {
-                            var domainValue = line.Substring(7);
-                            if (domainValue != "WORKGROUP")
-                            {
-                                data.DomainTrust.DomainName = domainValue;
-                            }
-                        }
-                        else if (line.StartsWith("DC:"))
-                        {
-                            data.DomainTrust.DomainController = line.Substring(3);
-                        }
-                        else if (line.StartsWith("TRUST:"))
-                        {
-                            var trustValue = line.Substring(6).Trim();
-                            if (trustValue.Equals("True", StringComparison.OrdinalIgnoreCase))
-                            {
-                                data.DomainTrust.SecureChannelValid = true;
-                                data.DomainTrust.TrustStatus = "Healthy";
-                                data.DomainTrust.ComputerAccountExists = true;
-                            }
-                            else if (trustValue.Equals("False", StringComparison.OrdinalIgnoreCase))
-                            {
-                                data.DomainTrust.SecureChannelValid = false;
-                                data.DomainTrust.TrustStatus = "Broken";
-                            }
-                            else if (trustValue.Equals("NotApplicable", StringComparison.OrdinalIgnoreCase))
-                            {
-                                data.DomainTrust.TrustStatus = "Not Applicable";
-                            }
-                        }
-                        else if (line.StartsWith("ERROR:"))
-                        {
-                            data.DomainTrust.ErrorMessage = line.Substring(6);
-                            data.DomainTrust.TrustStatus = "Broken";
-                            data.DomainTrust.SecureChannelValid = false;
-                            _logger.LogWarning("Domain trust check failed: {Error}", data.DomainTrust.ErrorMessage);
-                        }
-                    }
-                }
-
-                // Get machine account password age (stale passwords can cause trust issues)
-                await GetMachinePasswordAgeAsync(data);
-
-                _logger.LogInformation("Domain trust check complete - Status: {TrustStatus}, Domain: {Domain}, DC: {DC}, SecureChannel: {SecureChannel}", 
-                    data.DomainTrust.TrustStatus, data.DomainTrust.DomainName, data.DomainTrust.DomainController, data.DomainTrust.SecureChannelValid);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to check domain trust relationship");
-                data.DomainTrust.TrustStatus = "Unknown";
-                data.DomainTrust.ErrorMessage = ex.Message;
-            }
-        }
-
-        /// <summary>
-        /// Get the machine account password age. Passwords older than 30 days may indicate potential trust issues.
-        /// </summary>
-        private async Task GetMachinePasswordAgeAsync(ManagementData data)
-        {
-            try
-            {
-                // Get the machine account password last set date from registry
-                var passwordAgeScript = @"
-try {
-    # Method 1: Check registry for password change date
-    $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
-    if (Test-Path $regPath) {
-        $maxAge = (Get-ItemProperty -Path $regPath -Name 'MaximumPasswordAge' -ErrorAction SilentlyContinue).MaximumPasswordAge
-        if ($maxAge) {
-            Write-Output ""MAXAGE:$maxAge""
-        }
-    }
-    
-    # Method 2: Get from nltest (more reliable)
-    $nltest = nltest /sc_query:$env:USERDOMAIN 2>&1
-    if ($nltest -match 'Trusted DC Name') {
-        Write-Output ""NLTEST:Success""
-    } elseif ($nltest -match 'ERROR_NO_TRUST_SAM_ACCOUNT|ERROR_ACCESS_DENIED') {
-        Write-Output ""NLTEST:TrustBroken""
-    }
-    
-    # Method 3: Get the actual password last set date via WMI/AD if accessible
-    try {
-        $searcher = [adsisearcher]""(&(objectCategory=computer)(name=$env:COMPUTERNAME))""
-        $computer = $searcher.FindOne()
-        if ($computer) {
-            $pwdLastSet = $computer.Properties['pwdlastset'][0]
-            if ($pwdLastSet) {
-                $lastSetDate = [datetime]::FromFileTime($pwdLastSet)
-                $ageInDays = [math]::Round(((Get-Date) - $lastSetDate).TotalDays)
-                Write-Output ""PWDAGE:$ageInDays""
-            }
-        }
-    } catch {
-        # AD query failed - likely due to broken trust
-    }
-} catch {
-    Write-Output ""ERROR:$($_.Exception.Message)""
-}
-";
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(passwordAgeScript);
-
-                if (!string.IsNullOrEmpty(result))
-                {
-                    var lines = result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    foreach (var line in lines)
-                    {
-                        if (line.StartsWith("PWDAGE:"))
-                        {
-                            if (int.TryParse(line.Substring(7), out var ageDays))
-                            {
-                                data.DomainTrust.MachinePasswordAgeDays = ageDays;
-                                _logger.LogDebug("Machine password age: {AgeDays} days", ageDays);
-                            }
-                        }
-                        else if (line.StartsWith("NLTEST:TrustBroken"))
-                        {
-                            // If nltest indicates broken trust, update status
-                            if (data.DomainTrust.TrustStatus != "Broken")
-                            {
-                                data.DomainTrust.TrustStatus = "Broken";
-                                data.DomainTrust.SecureChannelValid = false;
-                                _logger.LogWarning("nltest indicates domain trust is broken");
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug("Failed to get machine password age: {Error}", ex.Message);
             }
         }
 
@@ -370,49 +178,6 @@ try {
             userState.WamDefaultAuthority = ParseStringValue(userStateSection, "WamDefaultAuthority");
             userState.WamDefaultId = ParseStringValue(userStateSection, "WamDefaultId");
             userState.WamDefaultGUID = ParseStringValue(userStateSection, "WamDefaultGUID");
-        }
-
-        private void ParseSsoState(string dsregOutput, SsoState ssoState)
-        {
-            var ssoStateSection = ExtractSection(dsregOutput, "SSO State");
-            if (string.IsNullOrEmpty(ssoStateSection)) return;
-
-            ssoState.EntraPrt = ParseBooleanValue(ssoStateSection, "AzureAdPrt");
-            ssoState.EnterprisePrt = ParseBooleanValue(ssoStateSection, "EnterprisePrt");
-            ssoState.OnPremTgt = ParseBooleanValue(ssoStateSection, "OnPremTgt");
-            ssoState.CloudTgt = ParseBooleanValue(ssoStateSection, "CloudTgt");
-            ssoState.EntraPrtAuthority = ParseStringValue(ssoStateSection, "AzureAdPrtAuthority");
-            ssoState.EnterprisePrtAuthority = ParseStringValue(ssoStateSection, "EnterprisePrtAuthority");
-            ssoState.KerbTopLevelNames = ParseStringValue(ssoStateSection, "KerbTopLevelNames");
-
-            // Parse PRT update and expiry times with improved parsing
-            var prtUpdateTime = ParseStringValue(ssoStateSection, "AzureAdPrtUpdateTime");
-            if (!string.IsNullOrEmpty(prtUpdateTime))
-            {
-                // Try multiple datetime formats
-                if (DateTime.TryParse(prtUpdateTime, out var updateTime))
-                {
-                    ssoState.EntraPrtUpdateTime = updateTime;
-                }
-                else if (DateTime.TryParseExact(prtUpdateTime, "yyyy-MM-dd HH:mm:ss.fff UTC", null, System.Globalization.DateTimeStyles.AssumeUniversal, out updateTime))
-                {
-                    ssoState.EntraPrtUpdateTime = updateTime.ToUniversalTime();
-                }
-            }
-
-            var prtExpiryTime = ParseStringValue(ssoStateSection, "AzureAdPrtExpiryTime");
-            if (!string.IsNullOrEmpty(prtExpiryTime))
-            {
-                // Try multiple datetime formats
-                if (DateTime.TryParse(prtExpiryTime, out var expiryTime))
-                {
-                    ssoState.EntraPrtExpiryTime = expiryTime;
-                }
-                else if (DateTime.TryParseExact(prtExpiryTime, "yyyy-MM-dd HH:mm:ss.fff UTC", null, System.Globalization.DateTimeStyles.AssumeUniversal, out expiryTime))
-                {
-                    ssoState.EntraPrtExpiryTime = expiryTime.ToUniversalTime();
-                }
-            }
         }
 
         private void ParseDiagnosticData(string dsregOutput, DiagnosticData diagnosticData)
@@ -511,11 +276,11 @@ try {
                 _logger.LogDebug("No mdm_enrollment data found in osquery results");
             }
 
-            // Enhanced detection: If device has Entra PRT and management certificates, it's enrolled
-            _logger.LogInformation($"Certificate-based detection check: EntraJoined={data.DeviceState.EntraJoined}, EntraPrt={data.SsoState.EntraPrt}, IsEnrolled={data.MdmEnrollment.IsEnrolled}");
+            // Enhanced detection: If device is Entra-joined and has management certificates, it's enrolled
+            _logger.LogInformation($"Certificate-based detection check: EntraJoined={data.DeviceState.EntraJoined}, IsEnrolled={data.MdmEnrollment.IsEnrolled}");
             _logger.LogInformation($"Metadata keys: {string.Join(", ", data.Metadata.Keys)}");
             
-            if (data.DeviceState.EntraJoined && data.SsoState.EntraPrt && 
+            if (data.DeviceState.EntraJoined && 
                 data.Metadata.ContainsKey("Certificates") && 
                 !data.MdmEnrollment.IsEnrolled)
             {
