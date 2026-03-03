@@ -784,8 +784,8 @@ $coreTaskLogic
         # Replace the placeholder with the comprehensive logic
         $enhancedPostinstallContent = $basePostinstallContent -replace 'INLINE_SCHEDULED_TASKS_PLACEHOLDER', $scheduledTasksContent
         
-        # Write the enhanced postinstall.ps1
-        Set-Content $postinstallTemplatePath $enhancedPostinstallContent -Encoding UTF8
+        # Write the enhanced postinstall.ps1 (will be restored to clean template after NUPKG build)
+        Set-Content $postinstallTemplatePath $enhancedPostinstallContent -Encoding UTF8 -NoNewline
         Write-Success "Enhanced postinstall.ps1 with inline scheduled tasks installation"
     } else {
         Write-Warning "Could not extract task installation logic from install-tasks.ps1"
@@ -804,14 +804,13 @@ if (Test-Path $installTasksInPayload) {
 # cimian-pkg will generate the chocolatey install script automatically
 # The enhanced postinstall.ps1 in scripts/ directory will be appended to it
 
-# Update package build-info.yaml for NUPKG
+# Update package build-info.yaml for NUPKG (replaces {{VERSION}} placeholder; restored after build)
 $buildInfoPath = Join-Path $NupkgDir "build-info.yaml"
+$nupkgBuildInfoOriginal = $null
 if (Test-Path $buildInfoPath) {
-    $content = Get-Content $buildInfoPath -Raw
-    $content = $content -replace 'version:.*', "version: $Version"
-    # Remove any trailing newlines and add exactly one
-    $content = $content.TrimEnd(@("`r", "`n")) + "`n"
-    Set-Content $buildInfoPath $content -Encoding UTF8 -NoNewline
+    $nupkgBuildInfoOriginal = Get-Content $buildInfoPath -Raw
+    $modified = $nupkgBuildInfoOriginal -replace '\{\{VERSION\}\}', $Version
+    Set-Content $buildInfoPath $modified -Encoding UTF8 -NoNewline
     Write-Verbose "Updated NUPKG build-info.yaml version to: $Version"
 }
 
@@ -923,11 +922,21 @@ if (-not $SkipNUPKG) {
             
             # Keep osquery files in payload - they're required for installation
             # The osquery configuration files must remain in the payload for deployment
-            Write-Verbose "✅ Keeping osquery files in payload for package deployment"
+            Write-Verbose "Keeping osquery files in payload for package deployment"
         }
     }
 } else {
     Write-Info "Skipping NUPKG creation"
+}
+
+# Restore NUPKG build-info.yaml and postinstall.ps1 to placeholder state
+if ($nupkgBuildInfoOriginal) {
+    Set-Content $buildInfoPath $nupkgBuildInfoOriginal -Encoding UTF8 -NoNewline
+    Write-Verbose "Restored NUPKG build-info.yaml to placeholder"
+}
+if (Test-Path $postinstallCleanPath) {
+    Copy-Item $postinstallCleanPath $postinstallTemplatePath -Force
+    Write-Verbose "Restored postinstall.ps1 to clean template"
 }
 
 Write-Output ""
@@ -989,13 +998,13 @@ Commit: $env:GITHUB_SHA
 "@
     $versionContent | Out-File (Join-Path $PkgPayloadDir "version.txt") -Encoding UTF8
     
-    # Update PKG build-info.yaml version
+    # Update PKG build-info.yaml version (replaces {{VERSION}} placeholder; restored after build)
     $pkgBuildInfoPath = Join-Path $PkgDir "build-info.yaml"
+    $pkgBuildInfoOriginal = $null
     if (Test-Path $pkgBuildInfoPath) {
-        $content = Get-Content $pkgBuildInfoPath -Raw
-        $content = $content -replace 'version:.*', "version: $Version"
-        $content = $content.TrimEnd(@("`r", "`n")) + "`n"
-        Set-Content $pkgBuildInfoPath $content -Encoding UTF8 -NoNewline
+        $pkgBuildInfoOriginal = Get-Content $pkgBuildInfoPath -Raw
+        $modified = $pkgBuildInfoOriginal -replace '\{\{VERSION\}\}', $Version
+        Set-Content $pkgBuildInfoPath $modified -Encoding UTF8 -NoNewline
         Write-Verbose "Updated PKG build-info.yaml version to: $Version"
     }
     
@@ -1038,6 +1047,7 @@ Commit: $env:GITHUB_SHA
         try {
             Write-Verbose "Creating PKG with cimipkg from: $cimipkgPath"
             Push-Location $PkgDir
+
             
             # Build PKG using cimipkg (default format is .pkg, not .nupkg)
             # NOTE: -e flag has issues with argument parsing, skip for now
@@ -1088,6 +1098,12 @@ Commit: $env:GITHUB_SHA
     }
 } else {
     Write-Info "Skipping PKG creation"
+}
+
+# Restore PKG build-info.yaml to placeholder state
+if ($pkgBuildInfoOriginal) {
+    Set-Content $pkgBuildInfoPath $pkgBuildInfoOriginal -Encoding UTF8 -NoNewline
+    Write-Verbose "Restored PKG build-info.yaml to placeholder"
 }
 
 Write-Output ""
