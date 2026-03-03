@@ -977,7 +977,7 @@ try {
             }
             else
             {
-                data.Summary.DomainStatus = "Standalone";
+                data.Summary.DomainStatus = "Standard";
             }
         }
 

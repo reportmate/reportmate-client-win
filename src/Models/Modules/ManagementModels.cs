@@ -14,9 +14,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DeviceDetails DeviceDetails { get; set; } = new();
         public TenantDetails TenantDetails { get; set; } = new();
         public UserState UserState { get; set; } = new();
-        public SsoState SsoState { get; set; } = new();
         public DiagnosticData DiagnosticData { get; set; } = new();
-        public DomainTrust DomainTrust { get; set; } = new();
         public MdmEnrollmentInfo MdmEnrollment { get; set; } = new MdmEnrollmentInfo();
         public List<MdmProfile> Profiles { get; set; } = new List<MdmProfile>();
         public List<CompliancePolicy> CompliancePolicies { get; set; } = new List<CompliancePolicy>();
