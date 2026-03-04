@@ -530,7 +530,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         
                         @{
                             PendingCount = $SearchResult.Updates.Count
-                            Updates = $updates
+                            Updates = @($updates)
                         } | ConvertTo-Json -Depth 4
                     } catch {
                         @{ PendingCount = 0; Updates = @(); Error = $_.Exception.Message } | ConvertTo-Json
@@ -558,9 +558,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                             }
 
                             // Process pending updates and their CVEs
-                            if (root.TryGetProperty("Updates", out var updatesProp) && updatesProp.ValueKind == JsonValueKind.Array)
+                            if (root.TryGetProperty("Updates", out var updatesProp))
                             {
-                                foreach (var update in updatesProp.EnumerateArray())
+                                var updates = updatesProp.ValueKind == JsonValueKind.Array
+                                    ? updatesProp.EnumerateArray().ToList()
+                                    : updatesProp.ValueKind == JsonValueKind.Object
+                                        ? new List<JsonElement> { updatesProp }
+                                        : new List<JsonElement>();
+                                
+                                foreach (var update in updates)
                                 {
                                     var title = update.TryGetProperty("Title", out var titleProp) ? titleProp.GetString() ?? "" : "";
                                     var description = update.TryGetProperty("Description", out var descProp) ? descProp.GetString() ?? "" : "";
@@ -569,11 +575,35 @@ namespace ReportMate.WindowsClient.Services.Modules
                                     var isMandatory = update.TryGetProperty("IsMandatory", out var mandProp) && mandProp.GetBoolean();
 
                                     // Process CVEs from this update
-                                    if (update.TryGetProperty("CVEs", out var cvesProp) && cvesProp.ValueKind == JsonValueKind.Array)
+                                    if (update.TryGetProperty("CVEs", out var cvesProp))
                                     {
-                                        foreach (var cve in cvesProp.EnumerateArray())
+                                        if (cvesProp.ValueKind == JsonValueKind.Array)
                                         {
-                                            var cveId = cve.GetString();
+                                            foreach (var cve in cvesProp.EnumerateArray())
+                                            {
+                                                var cveId = cve.GetString();
+                                                if (!string.IsNullOrEmpty(cveId))
+                                                {
+                                                    data.SecurityCves.Add(new SecurityCve
+                                                    {
+                                                        Cve = cveId,
+                                                        OsVersion = data.SecurityReleaseInfo.OsVersion,
+                                                        PatchedVersion = kbArticles,
+                                                        ActivelyExploited = isMandatory,
+                                                        Severity = severity,
+                                                        Description = title,
+                                                        Url = $"https://msrc.microsoft.com/update-guide/vulnerability/{cveId}",
+                                                        Source = "msrc",
+                                                        Status = "Unpatched",
+                                                        KbArticle = kbArticles
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        else if (cvesProp.ValueKind == JsonValueKind.String)
+                                        {
+                                            // Single CVE serialized as string instead of array
+                                            var cveId = cvesProp.GetString();
                                             if (!string.IsNullOrEmpty(cveId))
                                             {
                                                 data.SecurityCves.Add(new SecurityCve
@@ -581,19 +611,22 @@ namespace ReportMate.WindowsClient.Services.Modules
                                                     Cve = cveId,
                                                     OsVersion = data.SecurityReleaseInfo.OsVersion,
                                                     PatchedVersion = kbArticles,
-                                                    ActivelyExploited = isMandatory, // Mandatory updates often address actively exploited CVEs
+                                                    ActivelyExploited = isMandatory,
                                                     Severity = severity,
                                                     Description = title,
                                                     Url = $"https://msrc.microsoft.com/update-guide/vulnerability/{cveId}",
-                                                    Source = "msrc"
+                                                    Source = "msrc",
+                                                    Status = "Unpatched",
+                                                    KbArticle = kbArticles
                                                 });
                                             }
                                         }
                                     }
 
                                     // If no CVEs extracted but it's a security update, add placeholder
-                                    if (!update.TryGetProperty("CVEs", out _) || 
-                                        (update.TryGetProperty("CVEs", out var cvesCheck) && cvesCheck.GetArrayLength() == 0))
+                                    if (!update.TryGetProperty("CVEs", out var cvesCheck2) || 
+                                        (cvesCheck2.ValueKind == JsonValueKind.Array && cvesCheck2.GetArrayLength() == 0) ||
+                                        (cvesCheck2.ValueKind != JsonValueKind.Array && cvesCheck2.ValueKind != JsonValueKind.String))
                                     {
                                         // Only add if title indicates security update
                                         if (title.Contains("Security", StringComparison.OrdinalIgnoreCase) ||
@@ -610,7 +643,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                                                 Url = !string.IsNullOrEmpty(kbArticles) 
                                                     ? $"https://support.microsoft.com/help/{kbArticles.Replace("KB", "")}"
                                                     : "",
-                                                Source = "msrc"
+                                                Source = "msrc",
+                                                Status = "Unpatched",
+                                                KbArticle = kbArticles
                                             });
                                         }
                                     }
@@ -624,11 +659,140 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
+                // Collect recently installed security updates (last 90 days) to show patched CVEs
+                var installedUpdatesScript = @"
+                    try {
+                        $UpdateSession = New-Object -ComObject Microsoft.Update.Session
+                        $UpdateSearcher = $UpdateSession.CreateUpdateSearcher()
+                        
+                        $SearchResult = $UpdateSearcher.Search('IsInstalled=1 and CategoryIDs contains ''0FA1201D-4330-4FA8-8AE9-B877473B6441''')
+                        
+                        $cutoff = (Get-Date).AddDays(-90)
+                        $updates = @()
+                        foreach ($Update in $SearchResult.Updates) {
+                            # Only include updates from last 90 days
+                            if ($Update.LastDeploymentChangeTime -and $Update.LastDeploymentChangeTime -lt $cutoff) { continue }
+                            
+                            $severity = 'Unknown'
+                            if ($Update.MsrcSeverity) { $severity = $Update.MsrcSeverity }
+                            
+                            $cvePattern = 'CVE-\d{4}-\d{4,}'
+                            $cves = @()
+                            if ($Update.Title -match $cvePattern) {
+                                $cves += [regex]::Matches($Update.Title, $cvePattern) | ForEach-Object { $_.Value }
+                            }
+                            if ($Update.Description -match $cvePattern) {
+                                $cves += [regex]::Matches($Update.Description, $cvePattern) | ForEach-Object { $_.Value }
+                            }
+                            
+                            $kbArticleIds = @()
+                            foreach ($kb in $Update.KBArticleIDs) { $kbArticleIds += 'KB' + $kb }
+                            
+                            if ($cves.Count -gt 0) {
+                                $updates += @{
+                                    Title = $Update.Title
+                                    Severity = $severity
+                                    CVEs = $cves | Select-Object -Unique
+                                    KBArticles = $kbArticleIds -join ', '
+                                    InstalledDate = if($Update.LastDeploymentChangeTime) { $Update.LastDeploymentChangeTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK') } else { $null }
+                                }
+                            }
+                        }
+                        
+                        @{ Updates = @($updates) } | ConvertTo-Json -Depth 4
+                    } catch {
+                        @{ Updates = @(); Error = $_.Exception.Message } | ConvertTo-Json
+                    }
+                ";
+
+                var installedResult = await PowerShellRunner.ExecuteAsync(installedUpdatesScript, _logger);
+                if (!string.IsNullOrEmpty(installedResult))
+                {
+                    try
+                    {
+                        var trimmed = installedResult.Trim();
+                        var jsonStart = trimmed.IndexOf('{');
+                        if (jsonStart >= 0)
+                        {
+                            var jsonContent = trimmed.Substring(jsonStart);
+                            using var doc = JsonDocument.Parse(jsonContent);
+                            var root = doc.RootElement;
+
+                            // Collect existing unpatched CVE IDs to avoid duplicates
+                            var unpatchedCveIds = new HashSet<string>(
+                                data.SecurityCves.Where(c => c.Status == "Unpatched").Select(c => c.Cve),
+                                StringComparer.OrdinalIgnoreCase);
+
+                            if (root.TryGetProperty("Updates", out var updatesProp))
+                            {
+                                var updates = updatesProp.ValueKind == JsonValueKind.Array
+                                    ? updatesProp.EnumerateArray().ToList()
+                                    : updatesProp.ValueKind == JsonValueKind.Object
+                                        ? new List<JsonElement> { updatesProp }
+                                        : new List<JsonElement>();
+                                
+                                foreach (var update in updates)
+                                {
+                                    var title = update.TryGetProperty("Title", out var titleProp) ? titleProp.GetString() ?? "" : "";
+                                    var severity = update.TryGetProperty("Severity", out var sevProp) ? sevProp.GetString() ?? "Unknown" : "Unknown";
+                                    var kbArticles = update.TryGetProperty("KBArticles", out var kbProp) ? kbProp.GetString() ?? "" : "";
+
+                                    DateTime? installedDate = null;
+                                    if (update.TryGetProperty("InstalledDate", out var dateProp) && dateProp.ValueKind == JsonValueKind.String)
+                                    {
+                                        if (DateTime.TryParse(dateProp.GetString(), out var dt))
+                                            installedDate = dt;
+                                    }
+
+                                    if (update.TryGetProperty("CVEs", out var cvesProp))
+                                    {
+                                        var cveElements = cvesProp.ValueKind == JsonValueKind.Array
+                                            ? cvesProp.EnumerateArray().ToList()
+                                            : cvesProp.ValueKind == JsonValueKind.String
+                                                ? new List<JsonElement> { cvesProp }
+                                                : new List<JsonElement>();
+                                        
+                                        foreach (var cve in cveElements)
+                                        {
+                                            var cveId = cve.GetString();
+                                            if (string.IsNullOrEmpty(cveId)) continue;
+
+                                            // If this CVE was also found as unpatched, it means a newer update supersedes - skip
+                                            if (unpatchedCveIds.Contains(cveId)) continue;
+
+                                            data.SecurityCves.Add(new SecurityCve
+                                            {
+                                                Cve = cveId,
+                                                OsVersion = data.SecurityReleaseInfo.OsVersion,
+                                                PatchedVersion = kbArticles,
+                                                Severity = severity,
+                                                Description = title,
+                                                Url = $"https://msrc.microsoft.com/update-guide/vulnerability/{cveId}",
+                                                Source = "msrc",
+                                                Status = "Patched",
+                                                InstalledDate = installedDate,
+                                                KbArticle = kbArticles
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse installed security updates");
+                    }
+                }
+
                 // Set CVE count in release info
                 data.SecurityReleaseInfo.UniqueCvesCount = data.SecurityCves.Count;
 
-                _logger.LogInformation("Security CVE collection complete - {CveCount} pending CVEs found, Update available: {UpdateAvailable}",
-                    data.SecurityCves.Count, data.SecurityReleaseInfo.UpdateAvailable);
+                _logger.LogInformation("Security CVE collection complete - {TotalCves} CVEs ({Unpatched} unpatched, {Patched} patched), Update available: {UpdateAvailable}",
+                    data.SecurityCves.Count, 
+                    data.SecurityCves.Count(c => c.Status == "Unpatched"),
+                    data.SecurityCves.Count(c => c.Status == "Patched"),
+                    data.SecurityReleaseInfo.UpdateAvailable);
             }
             catch (Exception ex)
             {
@@ -1337,10 +1501,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var script = @"
                     $result = @{
                         VbsEnabled = $false
-                        VbsStatus = 'Unknown'
+                        VbsSupported = $false
+                        VbsStatus = 'Not configured'
                         VbsServices = @()
                         CoreIsolationEnabled = $false
+                        CoreIsolationStatus = 'Not configured'
                         MemoryIntegrityEnabled = $false
+                        MemoryIntegrityStatus = 'Not configured'
+                        KernelDmaProtectionEnabled = $false
                         SmartAppControlAvailable = $false
                         SmartAppControlState = 'Off'
                         ExploitProtection = @{
@@ -1374,23 +1542,44 @@ namespace ReportMate.WindowsClient.Services.Modules
                             }
                         }
 
-                        # Get Device Guard / VBS status from registry (no WMI)
+                        # Check firmware VBS support via RequirePlatformSecurityFeatures
                         $dgKey = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -ErrorAction SilentlyContinue
                         if ($dgKey) {
+                            # Check if hardware supports VBS (firmware features configured)
+                            $reqFeatures = $dgKey.RequirePlatformSecurityFeatures
+                            if ($null -ne $reqFeatures -and $reqFeatures -ge 1) {
+                                $result.VbsSupported = $true
+                            }
+                            
                             $vbsEnabled = $dgKey.EnableVirtualizationBasedSecurity
                             if ($vbsEnabled -eq 1) {
                                 $result.VbsEnabled = $true
+                                $result.VbsSupported = $true
                                 $result.VbsStatus = 'Configured'
                             }
                             
-                            # Check actual VBS running status from System Information
-                            $sysInfo = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -Name 'VirtualizationBasedSecurityStatus' -ErrorAction SilentlyContinue
-                            if ($sysInfo -and $sysInfo.VirtualizationBasedSecurityStatus -eq 2) {
-                                $result.VbsEnabled = $true
-                                $result.VbsStatus = 'Running'
+                            # Check actual VBS running status
+                            $vbsRunning = $dgKey.VirtualizationBasedSecurityStatus
+                            if ($null -ne $vbsRunning) {
+                                switch ([int]$vbsRunning) {
+                                    0 { 
+                                        $result.VbsStatus = 'Not running'
+                                        $result.VbsSupported = $true
+                                    }
+                                    1 { 
+                                        $result.VbsEnabled = $true
+                                        $result.VbsSupported = $true
+                                        $result.VbsStatus = 'Configured'
+                                    }
+                                    2 { 
+                                        $result.VbsEnabled = $true
+                                        $result.VbsSupported = $true
+                                        $result.VbsStatus = 'Running'
+                                    }
+                                }
                             }
                             
-                            # Check required security properties for services
+                            # Check VBS services
                             $runningServices = @()
                             $credGuard = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\CredentialGuard' -Name 'Enabled' -ErrorAction SilentlyContinue
                             if ($credGuard -and $credGuard.Enabled -eq 1) { $runningServices += 'Credential Guard' }
@@ -1399,17 +1588,44 @@ namespace ReportMate.WindowsClient.Services.Modules
                             if ($hvciScenario -and $hvciScenario.Enabled -eq 1) { $runningServices += 'HVCI' }
                             
                             $result.VbsServices = $runningServices
-                            if ($runningServices -contains 'HVCI') {
-                                $result.MemoryIntegrityEnabled = $true
-                            }
+                        } else {
+                            # DeviceGuard key doesn't exist at all
+                            $result.VbsStatus = 'Not configured'
                         }
 
-                        # Check Core Isolation / Memory Integrity via registry
+                        # Core Isolation / Memory Integrity via HVCI scenario registry key
                         $hvciKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
                         $hvciEnabled = Get-ItemProperty -Path $hvciKey -Name 'Enabled' -ErrorAction SilentlyContinue
                         if ($hvciEnabled -and $hvciEnabled.Enabled -eq 1) {
                             $result.CoreIsolationEnabled = $true
+                            $result.CoreIsolationStatus = 'Enabled'
                             $result.MemoryIntegrityEnabled = $true
+                            $result.MemoryIntegrityStatus = 'Enabled'
+                        } elseif (Test-Path $hvciKey) {
+                            # Key exists but disabled
+                            $result.CoreIsolationStatus = 'Disabled'
+                            $result.MemoryIntegrityStatus = 'Disabled'
+                        }
+                        
+                        # Also check alternate Memory Integrity key path
+                        $miKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity'
+                        $miEnabled = Get-ItemProperty -Path $miKey -Name 'Enabled' -ErrorAction SilentlyContinue
+                        if ($miEnabled -and $miEnabled.Enabled -eq 1) {
+                            $result.CoreIsolationEnabled = $true
+                            $result.CoreIsolationStatus = 'Enabled'
+                            $result.MemoryIntegrityEnabled = $true
+                            $result.MemoryIntegrityStatus = 'Enabled'
+                        }
+
+                        # Kernel DMA Protection
+                        $dmaGuardKey = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Kernel DMA Protection' -Name 'DeviceEnumerationPolicy' -ErrorAction SilentlyContinue
+                        if ($dmaGuardKey -and $dmaGuardKey.DeviceEnumerationPolicy -eq 0) {
+                            $result.KernelDmaProtectionEnabled = $true
+                        }
+                        # Also check via SystemGuard key
+                        $sgKey = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\KernelShadowStacks' -Name 'Enabled' -ErrorAction SilentlyContinue
+                        if ($sgKey -and $sgKey.Enabled -eq 1) {
+                            $result.KernelDmaProtectionEnabled = $true
                         }
 
                         # Get Exploit Protection system settings
@@ -1473,9 +1689,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                         }
 
                         data.DeviceGuard.VbsEnabled = GetBoolProp(root, "VbsEnabled");
+                        data.DeviceGuard.VbsSupported = GetBoolProp(root, "VbsSupported");
                         data.DeviceGuard.VbsStatus = GetStringProp(root, "VbsStatus");
                         data.DeviceGuard.CoreIsolationEnabled = GetBoolProp(root, "CoreIsolationEnabled");
+                        data.DeviceGuard.CoreIsolationStatus = GetStringProp(root, "CoreIsolationStatus");
                         data.DeviceGuard.MemoryIntegrityEnabled = GetBoolProp(root, "MemoryIntegrityEnabled");
+                        data.DeviceGuard.MemoryIntegrityStatus = GetStringProp(root, "MemoryIntegrityStatus");
+                        data.DeviceGuard.KernelDmaProtectionEnabled = GetBoolProp(root, "KernelDmaProtectionEnabled");
                         data.DeviceGuard.SmartAppControlAvailable = GetBoolProp(root, "SmartAppControlAvailable");
                         data.DeviceGuard.SmartAppControlState = GetStringProp(root, "SmartAppControlState");
 
@@ -1540,7 +1760,24 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Secondary: osquery event log entries from any AV/EDR product
             ProcessAvDetectionEvents(osqueryResults, data);
 
-            _logger.LogInformation("Detections collected: {Count} total", data.Detections.Count);
+            // Collect Defender configuration alerts (protection disabled events)
+            await ProcessDefenderConfigAlerts(data);
+
+            // Compute detection summary
+            var thirtyDaysAgo = DateTime.UtcNow.AddDays(-30);
+            var recentDetections = data.Detections.Where(d => d.DetectedAt.HasValue && d.DetectedAt.Value >= thirtyDaysAgo).ToList();
+            data.DetectionSummary = new DetectionSummary
+            {
+                TotalDetections30d = recentDetections.Count,
+                TotalBlocked30d = recentDetections.Count(d => d.Status == "Blocked" || d.Status == "Quarantined" || d.Status == "Removed"),
+                TotalCleaned30d = recentDetections.Count(d => d.Status == "Cleaned"),
+                TotalAllowed30d = recentDetections.Count(d => d.Status == "Allowed"),
+                LastThreatDetectedAt = data.Detections.Where(d => d.DetectedAt.HasValue).OrderByDescending(d => d.DetectedAt).FirstOrDefault()?.DetectedAt,
+                HasActiveThreats = recentDetections.Any(d => d.Status == "Detected" || d.Status == "Allowed")
+            };
+
+            _logger.LogInformation("Detections collected: {Count} total, {Blocked} blocked, {Cleaned} cleaned (30d)",
+                data.DetectionSummary.TotalDetections30d, data.DetectionSummary.TotalBlocked30d, data.DetectionSummary.TotalCleaned30d);
         }
 
         /// <summary>
@@ -1798,6 +2035,101 @@ try {
             _ => "Unknown"
         };
 
+        /// <summary>
+        /// Collect Defender configuration alerts (protection disabled, scan disabled) and ASR rule triggers
+        /// </summary>
+        private async Task ProcessDefenderConfigAlerts(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Defender config alerts and ASR triggers");
+
+                // Event IDs: 5001=Real-time protection disabled, 5010=Scan disabled,
+                // 5012=Virus scanning disabled, 1121=ASR block, 1122=ASR audit
+                var psCommand = @"
+try {
+    $alerts = @()
+    $events = Get-WinEvent -FilterHashtable @{
+        LogName='Microsoft-Windows-Windows Defender/Operational'
+        ID=5001,5010,5012,1121,1122
+        StartTime=(Get-Date).AddDays(-30)
+    } -MaxEvents 50 -ErrorAction SilentlyContinue
+
+    if ($events) {
+        foreach ($evt in $events) {
+            $alerts += @{
+                EventId = $evt.Id
+                Message = $evt.Message.Substring(0, [Math]::Min(200, $evt.Message.Length))
+                Timestamp = $evt.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+            }
+        }
+    }
+    $alerts | ConvertTo-Json -Depth 2
+} catch { }";
+
+                var result = await PowerShellRunner.ExecuteAsync(psCommand, _logger);
+
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    _logger.LogDebug("No Defender config alerts found");
+                    return;
+                }
+
+                try
+                {
+                    var trimmed = result.Trim();
+                    List<Dictionary<string, object>>? alerts = null;
+
+                    if (trimmed.StartsWith("["))
+                    {
+                        alerts = System.Text.Json.JsonSerializer.Deserialize(trimmed,
+                            ReportMateJsonContext.Default.ListDictionaryStringObject);
+                    }
+                    else if (trimmed.StartsWith("{"))
+                    {
+                        var single = System.Text.Json.JsonSerializer.Deserialize(trimmed,
+                            ReportMateJsonContext.Default.DictionaryStringObject);
+                        if (single != null) alerts = new List<Dictionary<string, object>> { single };
+                    }
+
+                    if (alerts == null) return;
+
+                    foreach (var a in alerts)
+                    {
+                        var eventId = GetIntValue(a, "EventId");
+                        var isAsrEvent = eventId == 1121 || eventId == 1122;
+
+                        var alert = new DetectionAlert
+                        {
+                            EventId = eventId,
+                            Source = "WindowsDefender",
+                            ThreatName = isAsrEvent ? "ASR Rule Trigger" : "Configuration Alert",
+                            Severity = isAsrEvent ? "Moderate" : "High",
+                            Category = isAsrEvent ? "ASR Rule" : "Configuration",
+                            Status = isAsrEvent ? (eventId == 1121 ? "Blocked" : "Audit") : "Detected",
+                            ActionTaken = isAsrEvent ? (eventId == 1121 ? "Block" : "Audit") : "Alert"
+                        };
+
+                        var timestamp = GetStringValue(a, "Timestamp");
+                        if (!string.IsNullOrEmpty(timestamp) && DateTime.TryParse(timestamp, out var dt))
+                            alert.DetectedAt = dt;
+
+                        data.Detections.Add(alert);
+                    }
+
+                    _logger.LogInformation("Collected {Count} Defender config alerts / ASR triggers", alerts.Count);
+                }
+                catch (Exception parseEx)
+                {
+                    _logger.LogWarning(parseEx, "Failed to parse Defender config alert JSON");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Defender config alerts collection failed");
+            }
+        }
+
         private static string MapEventSourceToAvProduct(string source) => source switch
         {
             var s when s.Contains("Defender", StringComparison.OrdinalIgnoreCase) => "WindowsDefender",
@@ -1941,6 +2273,12 @@ try {
                         certInfo.Status = "Unknown";
                     }
 
+                    // Tag OS-bundled root CA certificates
+                    var storeNameLower = certInfo.StoreName.ToLowerInvariant();
+                    certInfo.IsOsTrustedRoot = 
+                        certInfo.StoreLocation.Equals("LocalMachine", StringComparison.OrdinalIgnoreCase) &&
+                        (storeNameLower.Contains("root") || storeNameLower == "authroot" || storeNameLower == "ca");
+
                     data.Certificates.Add(certInfo);
                 }
                 catch (Exception ex)
@@ -1949,11 +2287,24 @@ try {
                 }
             }
 
-            _logger.LogInformation("Processed {Count} certificates - Expired: {Expired}, ExpiringSoon: {ExpiringSoon}, Valid: {Valid}",
+            // Compute certificate summary
+            data.CertificateSummary = new CertificateSummary
+            {
+                TotalCount = data.Certificates.Count,
+                ValidCount = data.Certificates.Count(c => c.Status == "Valid"),
+                ExpiredCount = data.Certificates.Count(c => c.IsExpired),
+                ExpiringSoonCount = data.Certificates.Count(c => c.IsExpiringSoon),
+                OsRootExpiredCount = data.Certificates.Count(c => c.IsExpired && c.IsOsTrustedRoot),
+                UserExpiredCount = data.Certificates.Count(c => c.IsExpired && !c.IsOsTrustedRoot)
+            };
+
+            _logger.LogInformation("Processed {Count} certificates - Expired: {Expired} (OS root: {OsRootExpired}, User: {UserExpired}), ExpiringSoon: {ExpiringSoon}, Valid: {Valid}",
                 data.Certificates.Count,
-                data.Certificates.Count(c => c.IsExpired),
-                data.Certificates.Count(c => c.IsExpiringSoon),
-                data.Certificates.Count(c => c.Status == "Valid"));
+                data.CertificateSummary.ExpiredCount,
+                data.CertificateSummary.OsRootExpiredCount,
+                data.CertificateSummary.UserExpiredCount,
+                data.CertificateSummary.ExpiringSoonCount,
+                data.CertificateSummary.ValidCount);
         }
     }
 }
