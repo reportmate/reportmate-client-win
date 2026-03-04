@@ -22,7 +22,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public SecurityReleaseInfo SecurityReleaseInfo { get; set; } = new();
         public List<SecurityEvent> SecurityEvents { get; set; } = new();
         public List<DetectionAlert> Detections { get; set; } = new();
+        public DetectionSummary DetectionSummary { get; set; } = new();
         public List<CertificateInfo> Certificates { get; set; } = new();
+        public CertificateSummary CertificateSummary { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
     }
 
@@ -71,6 +73,20 @@ namespace ReportMate.WindowsClient.Models.Modules
         public bool IsExpiringSoon { get; set; } // Within 30 days
         public int DaysUntilExpiry { get; set; }
         public string Status { get; set; } = string.Empty; // Valid, Expired, ExpiringSoon
+        public bool IsOsTrustedRoot { get; set; } // OS-bundled root CA cert (LocalMachine Root/AuthRoot stores)
+    }
+
+    /// <summary>
+    /// Summary statistics for certificates, computed at collection time
+    /// </summary>
+    public class CertificateSummary
+    {
+        public int TotalCount { get; set; }
+        public int ValidCount { get; set; }
+        public int ExpiredCount { get; set; }
+        public int ExpiringSoonCount { get; set; }
+        public int OsRootExpiredCount { get; set; } // Expired OS trusted root certs (noise)
+        public int UserExpiredCount { get; set; } // Expired user/org certs (actionable)
     }
 
     public class AntivirusInfo
@@ -172,6 +188,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Url { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
         public string Source { get; set; } = "msrc"; // msrc = Microsoft Security Response Center
+        public string Status { get; set; } = string.Empty; // Patched, Unpatched, Pending
+        public DateTime? InstalledDate { get; set; }
+        public string KbArticle { get; set; } = string.Empty; // KB number
     }
 
     /// <summary>
@@ -237,11 +256,17 @@ namespace ReportMate.WindowsClient.Models.Modules
         // Core Isolation / Memory Integrity (HVCI)
         public bool CoreIsolationEnabled { get; set; }
         public bool MemoryIntegrityEnabled { get; set; }
+        public string CoreIsolationStatus { get; set; } = string.Empty; // Enabled, Disabled, Not supported
+        public string MemoryIntegrityStatus { get; set; } = string.Empty; // Enabled, Disabled, Not supported
         
         // Virtualization-based Security (VBS)
         public bool VbsEnabled { get; set; }
-        public string VbsStatus { get; set; } = string.Empty; // Running, Configured, Not configured
+        public bool VbsSupported { get; set; } // Hardware supports VBS
+        public string VbsStatus { get; set; } = string.Empty; // Running, Configured, Not configured, Not supported
         public List<string> VbsServices { get; set; } = new(); // Credential Guard, HVCI, etc.
+        
+        // Kernel DMA Protection
+        public bool KernelDmaProtectionEnabled { get; set; }
         
         // Smart App Control (Windows 11 22H2+)
         public bool SmartAppControlAvailable { get; set; } // False if OS < Win11 22H2
@@ -286,5 +311,18 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? DetectedAt { get; set; }
         public DateTime? ResolvedAt { get; set; }
         public int EventId { get; set; } // Windows Event Log EventID (1116=Detection, 1117=Action)
+    }
+
+    /// <summary>
+    /// Summary of threat detection activity, computed at collection time
+    /// </summary>
+    public class DetectionSummary
+    {
+        public int TotalDetections30d { get; set; }
+        public int TotalBlocked30d { get; set; }
+        public int TotalCleaned30d { get; set; }
+        public int TotalAllowed30d { get; set; }
+        public DateTime? LastThreatDetectedAt { get; set; }
+        public bool HasActiveThreats { get; set; }
     }
 }
