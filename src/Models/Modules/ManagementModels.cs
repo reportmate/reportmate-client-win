@@ -22,6 +22,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public Dictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
         public string OwnershipType { get; set; } = string.Empty; // Corporate, Personal, etc.
         public DateTime? LastSync { get; set; }
+        public AutopilotConfig AutopilotConfig { get; set; } = new();
 
         // Temporary compatibility properties to support migration - will be removed
         public class MdmEnrollmentInfo
@@ -212,5 +213,36 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// Machine account password age in days (stale passwords can cause trust issues)
         /// </summary>
         public int? MachinePasswordAgeDays { get; set; }
+    }
+
+    /// <summary>
+    /// Windows AutoPilot enrollment configuration detected from registry
+    /// </summary>
+    public class AutopilotConfig
+    {
+        /// <summary>
+        /// Whether AutoPilot policy cache exists (device was provisioned via AutoPilot)
+        /// </summary>
+        public bool Activated { get; set; }
+
+        /// <summary>
+        /// AutoPilot tenant ID from policy cache
+        /// </summary>
+        public string TenantId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// AutoPilot tenant domain name
+        /// </summary>
+        public string TenantDomain { get; set; } = string.Empty;
+
+        /// <summary>
+        /// AutoPilot profile assigned to the device
+        /// </summary>
+        public string ProfileName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Whether the device was cloud-assigned (OOBE provisioned)
+        /// </summary>
+        public bool CloudAssigned { get; set; }
     }
 }
