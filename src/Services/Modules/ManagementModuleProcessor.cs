@@ -59,14 +59,17 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process compliance policies
             await ProcessCompliancePoliciesAsync(osqueryResults, data);
 
+            // Detect AutoPilot provisioning from registry
+            ProcessAutopilotConfig(data);
+
             // Set last sync time
             if (data.DeviceState.EntraJoined || data.DeviceState.EnterpriseJoined || data.DeviceState.DomainJoined)
             {
                 data.LastSync = DateTime.UtcNow;
             }
 
-            _logger.LogInformation("Management module processed - Status: {Status}, Entra: {Entra}, Enterprise: {Enterprise}, Domain: {Domain}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, CompliancePolicies: {PolicyCount}", 
-                data.DeviceState.Status, data.DeviceState.EntraJoined, data.DeviceState.EnterpriseJoined, data.DeviceState.DomainJoined, data.Profiles.Count, data.ManagedApps.Count, data.CompliancePolicies.Count);
+            _logger.LogInformation("Management module processed - Status: {Status}, Entra: {Entra}, Enterprise: {Enterprise}, Domain: {Domain}, AutoPilot: {AutoPilot}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, CompliancePolicies: {PolicyCount}", 
+                data.DeviceState.Status, data.DeviceState.EntraJoined, data.DeviceState.EnterpriseJoined, data.DeviceState.DomainJoined, data.AutopilotConfig.Activated, data.Profiles.Count, data.ManagedApps.Count, data.CompliancePolicies.Count);
 
             return data;
         }
@@ -733,6 +736,76 @@ $providers | ConvertTo-Json -Compress
             }
 
             return provider;
+        }
+
+        /// <summary>
+        /// Detect Windows AutoPilot provisioning from registry keys.
+        /// AutoPilot policy cache at HKLM\SOFTWARE\Microsoft\Provisioning\AutopilotPolicyCache
+        /// and diagnostics at HKLM\SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot
+        /// </summary>
+        private void ProcessAutopilotConfig(ManagementData data)
+        {
+            try
+            {
+                using var policyCacheKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Provisioning\AutopilotPolicyCache");
+
+                if (policyCacheKey != null)
+                {
+                    data.AutopilotConfig.Activated = true;
+                    _logger.LogDebug("AutoPilot policy cache found - device was provisioned via AutoPilot");
+
+                    // Read policy cache values
+                    var policyJson = policyCacheKey.GetValue("PolicyJsonCache") as string;
+                    if (!string.IsNullOrEmpty(policyJson))
+                    {
+                        try
+                        {
+                            var policyDoc = System.Text.Json.JsonDocument.Parse(policyJson);
+                            var root = policyDoc.RootElement;
+
+                            if (root.TryGetProperty("CloudAssignedTenantId", out var tenantId))
+                                data.AutopilotConfig.TenantId = tenantId.GetString() ?? string.Empty;
+
+                            if (root.TryGetProperty("CloudAssignedTenantDomain", out var tenantDomain))
+                                data.AutopilotConfig.TenantDomain = tenantDomain.GetString() ?? string.Empty;
+
+                            if (root.TryGetProperty("CloudAssignedOobeConfig", out _))
+                                data.AutopilotConfig.CloudAssigned = true;
+                        }
+                        catch (System.Text.Json.JsonException ex)
+                        {
+                            _logger.LogDebug("Could not parse AutoPilot policy JSON: {Error}", ex.Message);
+                        }
+                    }
+                }
+
+                // Also check diagnostics key for profile name
+                using var diagKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot");
+                if (diagKey != null)
+                {
+                    // If we have diagnostics but no policy cache, still mark as activated
+                    if (!data.AutopilotConfig.Activated)
+                    {
+                        data.AutopilotConfig.Activated = true;
+                        _logger.LogDebug("AutoPilot diagnostics found without policy cache");
+                    }
+
+                    var profileName = diagKey.GetValue("CloudAssignedAutopilotProfileName") as string;
+                    if (!string.IsNullOrEmpty(profileName))
+                        data.AutopilotConfig.ProfileName = profileName;
+                }
+
+                if (!data.AutopilotConfig.Activated)
+                {
+                    _logger.LogDebug("No AutoPilot registry keys found - device was not provisioned via AutoPilot");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error reading AutoPilot registry keys");
+            }
         }
 
         /// <summary>
