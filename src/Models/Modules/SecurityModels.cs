@@ -308,6 +308,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string FilePath { get; set; } = string.Empty;
         public string ProcessName { get; set; } = string.Empty;
         public string User { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty; // Full detail text for accordion/drill-down
         public DateTime? DetectedAt { get; set; }
         public DateTime? ResolvedAt { get; set; }
         public int EventId { get; set; } // Windows Event Log EventID (1116=Detection, 1117=Action)
