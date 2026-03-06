@@ -151,6 +151,10 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process run log
             ProcessRunLog(data);
 
+            // Enrich Cimian items with category/developer from catalog YAML files.
+            // Also populates Cimian.Catalogs from the catalogs directory (mirrors Mac client approach).
+            EnrichItemsWithCatalogData(data);
+
             data.LastCheckIn = DateTime.UtcNow;
 
             _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Items: {ItemCount}", 
@@ -3583,6 +3587,215 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogWarning(ex, "Failed to read Cimian run log");
             }
+        }
+
+        // MARK: - Catalog Enrichment
+
+        /// <summary>
+        /// Enriches CimianInfo with data from catalog YAML files:
+        ///   1. Populates Cimian.Catalogs with the names of available catalog files
+        ///      (mirrors Mac client's collectManifestCatalogs — lists filenames from
+        ///       C:\ProgramData\ManagedInstalls\catalogs\ without .yaml extension).
+        ///   2. Enriches each CimianItem with category/developer from pkgsinfo entries
+        ///      inside those catalogs (mirrors Mac client's enrichInstallsWithCatalogData).
+        /// </summary>
+        private void EnrichItemsWithCatalogData(InstallsData data)
+        {
+            if (data.Cimian == null)
+                return;
+
+            var (catalogMetadata, catalogNames) = CollectCatalogMetadata();
+
+            // Populate Catalogs from directory (override manifest-parsed list with the
+            // authoritative directory listing, same as Mac client approach)
+            if (catalogNames.Count > 0)
+            {
+                data.Cimian.Catalogs = catalogNames;
+                _logger.LogInformation("Set Cimian.Catalogs from directory: [{Catalogs}]", string.Join(", ", catalogNames));
+            }
+
+            // Enrich items with category/developer
+            if (catalogMetadata.Count == 0 || data.Cimian.Items == null || data.Cimian.Items.Count == 0)
+            {
+                _logger.LogDebug("No catalog metadata or no items to enrich");
+                return;
+            }
+
+            _logger.LogInformation("Enriching {ItemCount} items with catalog metadata ({MetadataCount} packages with category/developer)",
+                data.Cimian.Items.Count, catalogMetadata.Count);
+
+            int enrichedCount = 0;
+            foreach (var item in data.Cimian.Items)
+            {
+                var lookupName = item.ItemName ?? item.Id;
+                if (!string.IsNullOrEmpty(lookupName) && catalogMetadata.TryGetValue(lookupName, out var meta))
+                {
+                    if (string.IsNullOrEmpty(item.Category)) item.Category = meta.Category;
+                    if (string.IsNullOrEmpty(item.Developer)) item.Developer = meta.Developer;
+                    enrichedCount++;
+                }
+            }
+
+            _logger.LogInformation("Enriched {EnrichedCount}/{TotalCount} Cimian items with catalog metadata",
+                enrichedCount, data.Cimian.Items.Count);
+        }
+
+        /// <summary>
+        /// Reads all *.yaml files from C:\ProgramData\ManagedInstalls\catalogs\, returning:
+        ///   - metadata: package name → (category, developer) lookup for item enrichment
+        ///   - catalogNames: sorted list of catalog names (filenames without .yaml extension)
+        ///     matches what the Mac client returns from collectManifestCatalogs()
+        /// </summary>
+        private (Dictionary<string, CatalogEntryMetadata> metadata, List<string> catalogNames) CollectCatalogMetadata()
+        {
+            var metadata = new Dictionary<string, CatalogEntryMetadata>(StringComparer.OrdinalIgnoreCase);
+            var catalogNames = new List<string>();
+            const string catalogsPath = @"C:\ProgramData\ManagedInstalls\catalogs";
+
+            try
+            {
+                if (!Directory.Exists(catalogsPath))
+                {
+                    _logger.LogDebug("Cimian catalogs directory not found: {Path}", catalogsPath);
+                    return (metadata, catalogNames);
+                }
+
+                var catalogFiles = Directory.GetFiles(catalogsPath, "*.yaml");
+                _logger.LogDebug("Found {Count} catalog YAML files in {Path}", catalogFiles.Length, catalogsPath);
+
+                catalogNames = catalogFiles
+                    .Select(f => Path.GetFileNameWithoutExtension(f))
+                    .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                foreach (var catalogFile in catalogFiles)
+                {
+                    try
+                    {
+                        ParseCatalogYaml(catalogFile, metadata);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse catalog file: {Path}", catalogFile);
+                    }
+                }
+
+                _logger.LogInformation("Catalog metadata: {PackageCount} packages with metadata from {FileCount} catalogs [{CatalogNames}]",
+                    metadata.Count, catalogFiles.Length, string.Join(", ", catalogNames));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect catalog metadata from {Path}", catalogsPath);
+            }
+
+            return (metadata, catalogNames);
+        }
+
+        /// <summary>
+        /// Parses a single Cimian catalog YAML file (a sequence of pkgsinfo entries):
+        ///   - name: Git
+        ///     category: Utilities
+        ///     developer: Git Project
+        ///     version: 2.51.0.1
+        ///     ...
+        /// Only name, category, and developer are extracted.
+        /// </summary>
+        private void ParseCatalogYaml(string filePath, Dictionary<string, CatalogEntryMetadata> metadata)
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+
+            string? currentName = null;
+            string? currentCategory = null;
+            string? currentDeveloper = null;
+            int entryCount = 0;
+
+            string? line;
+            while ((line = reader.ReadLine()) != null)
+            {
+                if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#"))
+                    continue;
+
+                // New array entry: starts with "- " at root level (no leading whitespace before dash)
+                if (line.Length >= 2 && line[0] == '-' && (line[1] == ' ' || line[1] == '\t'))
+                {
+                    SaveCatalogEntry(metadata, currentName, currentCategory, currentDeveloper, ref entryCount);
+                    currentName = null;
+                    currentCategory = null;
+                    currentDeveloper = null;
+
+                    // Inline field on the same line as the dash, e.g. "- name: Git"
+                    var afterDash = line.Substring(2).Trim();
+                    ExtractCatalogField(afterDash, ref currentName, ref currentCategory, ref currentDeveloper);
+                }
+                else if (line[0] == ' ' || line[0] == '\t')
+                {
+                    // Indented continuation of the current entry
+                    ExtractCatalogField(line.Trim(), ref currentName, ref currentCategory, ref currentDeveloper);
+                }
+            }
+
+            SaveCatalogEntry(metadata, currentName, currentCategory, currentDeveloper, ref entryCount);
+
+            _logger.LogDebug("Parsed catalog {File}: {Count} entries with category/developer metadata",
+                Path.GetFileName(filePath), entryCount);
+        }
+
+        private static void SaveCatalogEntry(
+            Dictionary<string, CatalogEntryMetadata> metadata,
+            string? name, string? category, string? developer, ref int count)
+        {
+            if (string.IsNullOrEmpty(name))
+                return;
+            if (string.IsNullOrEmpty(category) && string.IsNullOrEmpty(developer))
+                return;
+
+            metadata[name] = new CatalogEntryMetadata
+            {
+                Category = category ?? string.Empty,
+                Developer = developer ?? string.Empty
+            };
+            count++;
+        }
+
+        private static void ExtractCatalogField(string trimmedLine, ref string? name, ref string? category, ref string? developer)
+        {
+            // Skip nested YAML sequences/mappings and complex values
+            if (trimmedLine.StartsWith("- ") || trimmedLine.StartsWith("{") || trimmedLine.StartsWith("["))
+                return;
+
+            if (trimmedLine.StartsWith("name:", StringComparison.OrdinalIgnoreCase))
+                name = ExtractCatalogYamlValue(trimmedLine);
+            else if (trimmedLine.StartsWith("category:", StringComparison.OrdinalIgnoreCase))
+                category = ExtractCatalogYamlValue(trimmedLine);
+            else if (trimmedLine.StartsWith("developer:", StringComparison.OrdinalIgnoreCase))
+                developer = ExtractCatalogYamlValue(trimmedLine);
+        }
+
+        private static string ExtractCatalogYamlValue(string line)
+        {
+            var colonIdx = line.IndexOf(':');
+            if (colonIdx < 0 || colonIdx >= line.Length - 1)
+                return string.Empty;
+
+            var value = line.Substring(colonIdx + 1).Trim();
+            if (value.Length == 0)
+                return string.Empty;
+
+            // Strip surrounding quotes
+            if (value.Length >= 2 &&
+                ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\'')))
+            {
+                value = value[1..^1];
+            }
+
+            return value;
+        }
+
+        private sealed class CatalogEntryMetadata
+        {
+            public string Category { get; set; } = string.Empty;
+            public string Developer { get; set; } = string.Empty;
         }
     }
 }
