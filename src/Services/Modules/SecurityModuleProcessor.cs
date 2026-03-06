@@ -498,15 +498,23 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 $severity = $Update.MsrcSeverity
                             }
                             
-                            # Extract CVE IDs from update title and description
-                            $cvePattern = 'CVE-\d{4}-\d{4,}'
+                            # Use CveIDs COM property (most reliable), fall back to regex on title/description
                             $cves = @()
-                            
-                            if ($Update.Title -match $cvePattern) {
-                                $cves += [regex]::Matches($Update.Title, $cvePattern) | ForEach-Object { $_.Value }
-                            }
-                            if ($Update.Description -match $cvePattern) {
-                                $cves += [regex]::Matches($Update.Description, $cvePattern) | ForEach-Object { $_.Value }
+                            try {
+                                if ($Update.CveIDs -and $Update.CveIDs.Count -gt 0) {
+                                    for ($ci = 0; $ci -lt $Update.CveIDs.Count; $ci++) {
+                                        $cves += $Update.CveIDs.Item($ci)
+                                    }
+                                }
+                            } catch {}
+                            if ($cves.Count -eq 0) {
+                                $cvePattern = 'CVE-\d{4}-\d{4,}'
+                                if ($Update.Title -match $cvePattern) {
+                                    $cves += [regex]::Matches($Update.Title, $cvePattern) | ForEach-Object { $_.Value }
+                                }
+                                if ($Update.Description -match $cvePattern) {
+                                    $cves += [regex]::Matches($Update.Description, $cvePattern) | ForEach-Object { $_.Value }
+                                }
                             }
                             
                             # Also check KB article info
@@ -676,26 +684,35 @@ namespace ReportMate.WindowsClient.Services.Modules
                             $severity = 'Unknown'
                             if ($Update.MsrcSeverity) { $severity = $Update.MsrcSeverity }
                             
-                            $cvePattern = 'CVE-\d{4}-\d{4,}'
+                            # Use CveIDs COM property (most reliable), fall back to regex
                             $cves = @()
-                            if ($Update.Title -match $cvePattern) {
-                                $cves += [regex]::Matches($Update.Title, $cvePattern) | ForEach-Object { $_.Value }
-                            }
-                            if ($Update.Description -match $cvePattern) {
-                                $cves += [regex]::Matches($Update.Description, $cvePattern) | ForEach-Object { $_.Value }
+                            try {
+                                if ($Update.CveIDs -and $Update.CveIDs.Count -gt 0) {
+                                    for ($ci = 0; $ci -lt $Update.CveIDs.Count; $ci++) {
+                                        $cves += $Update.CveIDs.Item($ci)
+                                    }
+                                }
+                            } catch {}
+                            if ($cves.Count -eq 0) {
+                                $cvePattern = 'CVE-\d{4}-\d{4,}'
+                                if ($Update.Title -match $cvePattern) {
+                                    $cves += [regex]::Matches($Update.Title, $cvePattern) | ForEach-Object { $_.Value }
+                                }
+                                if ($Update.Description -match $cvePattern) {
+                                    $cves += [regex]::Matches($Update.Description, $cvePattern) | ForEach-Object { $_.Value }
+                                }
                             }
                             
                             $kbArticleIds = @()
                             foreach ($kb in $Update.KBArticleIDs) { $kbArticleIds += 'KB' + $kb }
                             
-                            if ($cves.Count -gt 0) {
-                                $updates += @{
-                                    Title = $Update.Title
-                                    Severity = $severity
-                                    CVEs = $cves | Select-Object -Unique
-                                    KBArticles = $kbArticleIds -join ', '
-                                    InstalledDate = if($Update.LastDeploymentChangeTime) { $Update.LastDeploymentChangeTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK') } else { $null }
-                                }
+                            # Include all security updates (even without individual CVEs - KB entry still valuable)
+                            $updates += @{
+                                Title = $Update.Title
+                                Severity = $severity
+                                CVEs = $cves | Select-Object -Unique
+                                KBArticles = $kbArticleIds -join ', '
+                                InstalledDate = if($Update.LastDeploymentChangeTime) { $Update.LastDeploymentChangeTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK') } else { $null }
                             }
                         }
                         
@@ -752,22 +769,44 @@ namespace ReportMate.WindowsClient.Services.Modules
                                                 ? new List<JsonElement> { cvesProp }
                                                 : new List<JsonElement>();
                                         
-                                        foreach (var cve in cveElements)
+                                        // Filter to actual CVE strings
+                                        var validCves = cveElements.Where(c => c.GetString()?.StartsWith("CVE-") == true).ToList();
+                                        
+                                        if (validCves.Count > 0)
                                         {
-                                            var cveId = cve.GetString();
-                                            if (string.IsNullOrEmpty(cveId)) continue;
+                                            foreach (var cve in validCves)
+                                            {
+                                                var cveId = cve.GetString()!;
 
-                                            // If this CVE was also found as unpatched, it means a newer update supersedes - skip
-                                            if (unpatchedCveIds.Contains(cveId)) continue;
+                                                // If this CVE was also found as unpatched, it means a newer update supersedes - skip
+                                                if (unpatchedCveIds.Contains(cveId)) continue;
 
+                                                data.SecurityCves.Add(new SecurityCve
+                                                {
+                                                    Cve = cveId,
+                                                    OsVersion = data.SecurityReleaseInfo.OsVersion,
+                                                    PatchedVersion = kbArticles,
+                                                    Severity = severity,
+                                                    Description = title,
+                                                    Url = $"https://msrc.microsoft.com/update-guide/vulnerability/{cveId}",
+                                                    Source = "msrc",
+                                                    Status = "Patched",
+                                                    InstalledDate = installedDate,
+                                                    KbArticle = kbArticles
+                                                });
+                                            }
+                                        }
+                                        else if (!string.IsNullOrEmpty(kbArticles))
+                                        {
+                                            // No individual CVEs but this is still a security update - add as KB entry
                                             data.SecurityCves.Add(new SecurityCve
                                             {
-                                                Cve = cveId,
+                                                Cve = kbArticles,
                                                 OsVersion = data.SecurityReleaseInfo.OsVersion,
                                                 PatchedVersion = kbArticles,
                                                 Severity = severity,
                                                 Description = title,
-                                                Url = $"https://msrc.microsoft.com/update-guide/vulnerability/{cveId}",
+                                                Url = $"https://support.microsoft.com/help/{kbArticles.Replace("KB", "")}",
                                                 Source = "msrc",
                                                 Status = "Patched",
                                                 InstalledDate = installedDate,
@@ -2044,10 +2083,32 @@ try {
             {
                 _logger.LogDebug("Collecting Defender config alerts and ASR triggers");
 
+                // ASR Rule GUID to human-readable name mapping
                 // Event IDs: 5001=Real-time protection disabled, 5010=Scan disabled,
                 // 5012=Virus scanning disabled, 1121=ASR block, 1122=ASR audit
                 var psCommand = @"
 try {
+    $asrRuleNames = @{
+        '56a863a9-875e-4185-98a7-b882c64b5ce5' = 'Block abuse of exploited vulnerable signed drivers'
+        '7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c' = 'Block Adobe Reader from creating child processes'
+        'd4f940ab-401b-4efc-aadc-ad5f3c50688a' = 'Block all Office applications from creating child processes'
+        '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2' = 'Block credential stealing from LSASS'
+        'be9ba2d9-53ea-4cdc-84e5-9b1eeee46550' = 'Block executable content from email client and webmail'
+        '01443614-cd74-433a-b99e-2ecdc07bfc25' = 'Block executables unless they meet prevalence/age/trusted list'
+        '5beb7efe-fd9a-4556-801d-275e5ffc04cc' = 'Block execution of potentially obfuscated scripts'
+        'd3e037e1-3eb8-44c8-a917-57927947596d' = 'Block JavaScript/VBScript from launching downloaded executables'
+        '3b576869-a4ec-4529-8536-b80a7769e899' = 'Block Office applications from creating executable content'
+        '75668c1f-73b5-4cf0-bb93-3ecf5cb7cc84' = 'Block Office applications from injecting code into other processes'
+        '26190899-1602-49e8-8b27-eb1d0a1ce869' = 'Block Office communication app from creating child processes'
+        'e6db77e5-3df2-4cf1-b95a-636979351e5b' = 'Block persistence through WMI event subscription'
+        'd1e49aac-8f56-4280-b9ba-993a6d77406c' = 'Block process creations from PSExec and WMI commands'
+        'b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4' = 'Block untrusted/unsigned processes from USB'
+        '92e97fa1-2edf-4476-bdd6-9dd0b4dddc7b' = 'Block Win32 API calls from Office macros'
+        'c1db55ab-c21a-4637-bb3f-a12568109d35' = 'Use advanced protection against ransomware'
+        'a8f5898e-1dc8-49a9-9878-85004b8a61e6' = 'Block Webshell creation for Servers'
+        '33ddedf1-c6e0-47cb-833e-de6133960387' = 'Block rebooting machine in Safe Mode'
+    }
+
     $alerts = @()
     $events = Get-WinEvent -FilterHashtable @{
         LogName='Microsoft-Windows-Windows Defender/Operational'
@@ -2057,10 +2118,40 @@ try {
 
     if ($events) {
         foreach ($evt in $events) {
-            $alerts += @{
-                EventId = $evt.Id
-                Message = $evt.Message.Substring(0, [Math]::Min(200, $evt.Message.Length))
-                Timestamp = $evt.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+            $isAsr = $evt.Id -eq 1121 -or $evt.Id -eq 1122
+            if ($isAsr) {
+                # Parse XML for rich ASR event data
+                $xml = [xml]$evt.ToXml()
+                $dataNodes = $xml.Event.EventData.Data
+                $fields = @{}
+                foreach ($node in $dataNodes) {
+                    $fields[$node.Name] = $node.'#text'
+                }
+                $ruleId = ($fields['ID'] ?? '').ToLower()
+                $ruleName = if ($asrRuleNames.ContainsKey($ruleId)) { $asrRuleNames[$ruleId] } else { 'ASR Rule ' + $ruleId }
+
+                $alerts += @{
+                    EventId = $evt.Id
+                    Timestamp = $evt.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+                    IsAsr = $true
+                    ThreatId = $ruleId
+                    ThreatName = $ruleName
+                    Path = $fields['Path'] ?? ''
+                    ProcessName = $fields['Process Name'] ?? ''
+                    User = $fields['User'] ?? ''
+                    TargetCommandline = $fields['Target Commandline'] ?? ''
+                    ParentCommandline = $fields['Parent Commandline'] ?? ''
+                    InvolvedFile = $fields['Involved File'] ?? ''
+                    DetectionTime = $fields['Detection Time'] ?? ''
+                }
+            } else {
+                # Config alerts (5001, 5010, 5012) - keep simpler format
+                $alerts += @{
+                    EventId = $evt.Id
+                    Timestamp = $evt.TimeCreated.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+                    IsAsr = $false
+                    Message = $evt.Message.Substring(0, [Math]::Min(500, $evt.Message.Length))
+                }
             }
         }
     }
@@ -2097,24 +2188,68 @@ try {
                     foreach (var a in alerts)
                     {
                         var eventId = GetIntValue(a, "EventId");
-                        var isAsrEvent = eventId == 1121 || eventId == 1122;
+                        var isAsr = GetBoolValue(a, "IsAsr");
 
-                        var alert = new DetectionAlert
+                        if (isAsr)
                         {
-                            EventId = eventId,
-                            Source = "WindowsDefender",
-                            ThreatName = isAsrEvent ? "ASR Rule Trigger" : "Configuration Alert",
-                            Severity = isAsrEvent ? "Moderate" : "High",
-                            Category = isAsrEvent ? "ASR Rule" : "Configuration",
-                            Status = isAsrEvent ? (eventId == 1121 ? "Blocked" : "Audit") : "Detected",
-                            ActionTaken = isAsrEvent ? (eventId == 1121 ? "Block" : "Audit") : "Alert"
-                        };
+                            var alert = new DetectionAlert
+                            {
+                                EventId = eventId,
+                                Source = "WindowsDefender",
+                                ThreatId = GetStringValue(a, "ThreatId"),
+                                ThreatName = GetStringValue(a, "ThreatName"),
+                                Severity = "Moderate",
+                                Category = "ASR Rule",
+                                Status = eventId == 1121 ? "Blocked" : "Audit",
+                                ActionTaken = eventId == 1121 ? "Block" : "Audit",
+                                FilePath = GetStringValue(a, "Path"),
+                                ProcessName = GetStringValue(a, "ProcessName"),
+                                User = GetStringValue(a, "User")
+                            };
 
-                        var timestamp = GetStringValue(a, "Timestamp");
-                        if (!string.IsNullOrEmpty(timestamp) && DateTime.TryParse(timestamp, out var dt))
-                            alert.DetectedAt = dt;
+                            // Build description from all available fields
+                            var descParts = new List<string>();
+                            var targetCmd = GetStringValue(a, "TargetCommandline");
+                            var parentCmd = GetStringValue(a, "ParentCommandline");
+                            var involvedFile = GetStringValue(a, "InvolvedFile");
+                            if (!string.IsNullOrEmpty(targetCmd)) descParts.Add($"Target: {targetCmd}");
+                            if (!string.IsNullOrEmpty(parentCmd)) descParts.Add($"Parent: {parentCmd}");
+                            if (!string.IsNullOrEmpty(involvedFile)) descParts.Add($"File: {involvedFile}");
+                            alert.Description = string.Join(" | ", descParts);
 
-                        data.Detections.Add(alert);
+                            var detTime = GetStringValue(a, "DetectionTime");
+                            if (!string.IsNullOrEmpty(detTime) && DateTime.TryParse(detTime, out var dt))
+                                alert.DetectedAt = dt;
+                            else
+                            {
+                                var timestamp = GetStringValue(a, "Timestamp");
+                                if (!string.IsNullOrEmpty(timestamp) && DateTime.TryParse(timestamp, out var ts))
+                                    alert.DetectedAt = ts;
+                            }
+
+                            data.Detections.Add(alert);
+                        }
+                        else
+                        {
+                            // Configuration alerts (real-time protection disabled, etc.)
+                            var alert = new DetectionAlert
+                            {
+                                EventId = eventId,
+                                Source = "WindowsDefender",
+                                ThreatName = "Configuration Alert",
+                                Severity = "High",
+                                Category = "Configuration",
+                                Status = "Detected",
+                                ActionTaken = "Alert",
+                                Description = GetStringValue(a, "Message")
+                            };
+
+                            var timestamp = GetStringValue(a, "Timestamp");
+                            if (!string.IsNullOrEmpty(timestamp) && DateTime.TryParse(timestamp, out var dt))
+                                alert.DetectedAt = dt;
+
+                            data.Detections.Add(alert);
+                        }
                     }
 
                     _logger.LogInformation("Collected {Count} Defender config alerts / ASR triggers", alerts.Count);
