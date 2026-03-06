@@ -2127,7 +2127,7 @@ try {
                 foreach ($node in $dataNodes) {
                     $fields[$node.Name] = $node.'#text'
                 }
-                $ruleId = ($fields['ID'] ?? '').ToLower()
+                $ruleId = if ($fields['ID']) { $fields['ID'].ToLower() } else { '' }
                 $ruleName = if ($asrRuleNames.ContainsKey($ruleId)) { $asrRuleNames[$ruleId] } else { 'ASR Rule ' + $ruleId }
 
                 $alerts += @{
@@ -2136,13 +2136,13 @@ try {
                     IsAsr = $true
                     ThreatId = $ruleId
                     ThreatName = $ruleName
-                    Path = $fields['Path'] ?? ''
-                    ProcessName = $fields['Process Name'] ?? ''
-                    User = $fields['User'] ?? ''
-                    TargetCommandline = $fields['Target Commandline'] ?? ''
-                    ParentCommandline = $fields['Parent Commandline'] ?? ''
-                    InvolvedFile = $fields['Involved File'] ?? ''
-                    DetectionTime = $fields['Detection Time'] ?? ''
+                    Path = if ($fields['Path']) { $fields['Path'] } else { '' }
+                    ProcessName = if ($fields['Process Name']) { $fields['Process Name'] } else { '' }
+                    User = if ($fields['User']) { $fields['User'] } else { '' }
+                    TargetCommandline = if ($fields['Target Commandline']) { $fields['Target Commandline'] } else { '' }
+                    ParentCommandline = if ($fields['Parent Commandline']) { $fields['Parent Commandline'] } else { '' }
+                    InvolvedFile = if ($fields['Involved File']) { $fields['Involved File'] } else { '' }
+                    DetectionTime = if ($fields['Detection Time']) { $fields['Detection Time'] } else { '' }
                 }
             } else {
                 # Config alerts (5001, 5010, 5012) - keep simpler format
