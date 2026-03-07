@@ -814,6 +814,16 @@ if (Test-Path $buildInfoPath) {
     Write-Verbose "Updated NUPKG build-info.yaml version to: $Version"
 }
 
+# Update reportmate.nuspec for NUPKG (replaces {{VERSION}} placeholder; restored after build)
+$nuspecPath = Join-Path $NupkgDir "reportmate.nuspec"
+$nupkgNuspecOriginal = $null
+if (Test-Path $nuspecPath) {
+    $nupkgNuspecOriginal = Get-Content $nuspecPath -Raw
+    $modified = $nupkgNuspecOriginal -replace '\{\{VERSION\}\}', $Version
+    Set-Content $nuspecPath $modified -Encoding UTF8 -NoNewline
+    Write-Verbose "Updated reportmate.nuspec version to: $Version"
+}
+
 # Copy .env file from root to NUPKG build directory for cimipkg
 $rootEnvFile = Join-Path $RootDir ".env"
 $nupkgEnvFile = Join-Path $NupkgDir ".env"
@@ -929,10 +939,14 @@ if (-not $SkipNUPKG) {
     Write-Info "Skipping NUPKG creation"
 }
 
-# Restore NUPKG build-info.yaml and postinstall.ps1 to placeholder state
+# Restore NUPKG build-info.yaml, reportmate.nuspec, and postinstall.ps1 to placeholder state
 if ($nupkgBuildInfoOriginal) {
     Set-Content $buildInfoPath $nupkgBuildInfoOriginal -Encoding UTF8 -NoNewline
     Write-Verbose "Restored NUPKG build-info.yaml to placeholder"
+}
+if ($nupkgNuspecOriginal) {
+    Set-Content $nuspecPath $nupkgNuspecOriginal -Encoding UTF8 -NoNewline
+    Write-Verbose "Restored reportmate.nuspec to placeholder"
 }
 if (Test-Path $postinstallCleanPath) {
     Copy-Item $postinstallCleanPath $postinstallTemplatePath -Force
