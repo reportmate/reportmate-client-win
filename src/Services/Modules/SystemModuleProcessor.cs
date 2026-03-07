@@ -1,7 +1,9 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -861,9 +863,19 @@ Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmware
             return layouts.Distinct().ToList();
         }
 
+        private static readonly string PreviousOSVersionPath = 
+            Path.Combine(@"C:\ProgramData\ManagedReports\cache", "previous_os_version.json");
+
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(SystemData data)
         {
             var events = new List<ReportMateEvent>();
+
+            // Detect OS version changes
+            var osUpdateEvent = DetectOSVersionChange(data);
+            if (osUpdateEvent != null)
+            {
+                events.Add(osUpdateEvent);
+            }
 
             if (data != null && !string.IsNullOrEmpty(data.OperatingSystem?.Name))
             {
@@ -888,6 +900,98 @@ Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmware
             }
 
             return Task.FromResult(events);
+        }
+
+        /// <summary>
+        /// Detects OS version changes by comparing current data against stored previous version.
+        /// Returns a system event if the version changed, null otherwise.
+        /// Persists current version for next comparison.
+        /// </summary>
+        private ReportMateEvent? DetectOSVersionChange(SystemData data)
+        {
+            if (data?.OperatingSystem == null || string.IsNullOrEmpty(data.OperatingSystem.DisplayVersion))
+                return null;
+
+            var currentDisplay = data.OperatingSystem.DisplayVersion;
+            var currentBuild = data.OperatingSystem.Build ?? "";
+            var currentVersion = data.OperatingSystem.Version ?? "";
+            var osName = data.OperatingSystem.Name ?? "Windows";
+
+            string? previousDisplay = null;
+            string? previousBuild = null;
+
+            // Read previous version state
+            try
+            {
+                if (File.Exists(PreviousOSVersionPath))
+                {
+                    var json = File.ReadAllText(PreviousOSVersionPath);
+                    var stored = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                    if (stored != null)
+                    {
+                        stored.TryGetValue("display_version", out previousDisplay);
+                        stored.TryGetValue("build", out previousBuild);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not read previous OS version state");
+            }
+
+            // Always write current version for next comparison
+            try
+            {
+                var stateDir = Path.GetDirectoryName(PreviousOSVersionPath);
+                if (!string.IsNullOrEmpty(stateDir) && !Directory.Exists(stateDir))
+                    Directory.CreateDirectory(stateDir);
+
+                var state = new Dictionary<string, string>
+                {
+                    ["name"] = osName,
+                    ["version"] = currentVersion,
+                    ["display_version"] = currentDisplay,
+                    ["build"] = currentBuild,
+                    ["platform"] = "Windows",
+                    ["recorded_at"] = DateTime.UtcNow.ToString("o")
+                };
+                var stateJson = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(PreviousOSVersionPath, stateJson);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not write OS version state");
+            }
+
+            // No previous version stored (first run)
+            if (string.IsNullOrEmpty(previousDisplay))
+            {
+                _logger.LogInformation("No previous OS version recorded, storing {DisplayVersion}", currentDisplay);
+                return null;
+            }
+
+            // Version unchanged
+            if (previousDisplay == currentDisplay)
+                return null;
+
+            // Version changed — generate event
+            var message = $"{osName} updated {previousDisplay} \u2192 {currentDisplay}";
+            _logger.LogInformation("{Message}", message);
+
+            return new ReportMateEvent
+            {
+                ModuleId = "os_update",
+                EventType = "system",
+                Message = message,
+                Timestamp = DateTime.UtcNow,
+                Details = new Dictionary<string, object>
+                {
+                    ["previous_version"] = previousDisplay,
+                    ["new_version"] = currentDisplay,
+                    ["previous_build"] = previousBuild ?? "",
+                    ["new_build"] = currentBuild
+                }
+            };
         }
 
         /// <summary>
