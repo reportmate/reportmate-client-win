@@ -524,7 +524,7 @@ public class Program
         // Global options - these are used across all commands
         // Note: We handle -v, -vv, -vvv parsing manually in GetVerboseLevelFromArgs()
         // This option only handles --verbose=N format to avoid conflicts
-        var verboseOption = new Option<int>("--verbose", () => 0, "Set verbose level (0=Error, 1=Warning, 2=Info, 3=Debug). Use -v, -vv, -vvv, -vvvv or --verbose=N")
+        var verboseOption = new Option<int>("--verbose", () => 0, "Set verbose level (0=Error, 1=Warning, 2=Info, 3=Debug). --verbose / -vv enables progress bars; use --verbose=N or -vvv for debug")
         {
             Arity = ArgumentArity.ZeroOrOne
         };
@@ -1008,6 +1008,11 @@ public class Program
                 var level = arg.Count(c => c == 'v');
                 level = Math.Max(0, Math.Min(3, level)); // Clamp to 0-3
                 processedArgs.Add($"--verbose={level}");
+            }
+            // --verbose standalone (no =N suffix) is equivalent to -vv (level 2, enables progress bars)
+            else if (arg == "--verbose")
+            {
+                processedArgs.Add("--verbose=2");
             }
             else
             {
