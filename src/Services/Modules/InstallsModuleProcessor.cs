@@ -2463,9 +2463,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             return null;
         }
 
-        /// Priority: Error > Warning > Success (only generate one event per device)
-        /// FIXED: Now counts from items.json current_status to match what Items table displays
-        /// This ensures event message counts match the items table filter counts
+        /// Generates per-item events from Cimian session events (events.jsonl).
+        /// Mirrors the Mac client pattern: use actual install/removal results as source of truth,
+        /// not session counts or item status snapshots which may be stale.
         /// </summary>
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(InstallsData data)
         {
@@ -2473,266 +2473,224 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             try
             {
-                _logger.LogInformation("Starting consolidated event generation for device {DeviceId}", data.DeviceId);
+                _logger.LogInformation("Starting per-item event generation for device {DeviceId}", data.DeviceId);
                 
-                // Get session events (for logging only)
+                // Source of truth: Cimian session events from events.jsonl
+                // These record what actually happened this run (installs, removals, updates, errors)
                 var sessionEvents = data.Cimian?.Events ?? new List<CimianEvent>();
-                
-                // Get all items from items.json - this is the SOURCE OF TRUTH for counts
-                // The Items table displays items based on their current_status from items.json
-                // Event message counts MUST match what the Items table shows
                 var allItems = data.Cimian?.Items ?? new List<CimianItem>();
                 
-                // Count FAILED items from items.json current_status
-                // These are the items that will show as "Error" in the Items table
-                var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
-                var failedItems = allItems
-                    .Where(i => 
-                        failedItemStatuses.Any(s =>
-                            i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
-                            (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)) ||
-                        // CRITICAL: Also check if LastError is populated - this indicates a real failure
-                        !string.IsNullOrEmpty(i.LastError))
-                    .Select(i => i.ItemName)
-                    .Where(n => !string.IsNullOrEmpty(n))
-                    .Distinct()
+                _logger.LogInformation("Session events: {Count}, Managed items: {ItemCount}", 
+                    sessionEvents.Count, allItems.Count);
+                
+                // Successful installs from this session
+                var installedEvents = sessionEvents
+                    .Where(e => e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) &&
+                                (e.Status.Equals("Success", StringComparison.OrdinalIgnoreCase) ||
+                                 e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)))
+                    .Where(e => !string.IsNullOrEmpty(e.Package))
+                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
                     .ToList();
                 
-                // Count WARNING items from items.json current_status
-                // These are the items that will show as "Warning" in the Items table
-                var warningItemStatuses = new[] { "Warning", "Not Available" };
-                var warningItems = allItems
-                    .Where(i => 
-                        warningItemStatuses.Any(s =>
-                            i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
-                            (i.MappedStatus?.Equals("Warning", StringComparison.OrdinalIgnoreCase) == true)) ||
-                        // Also check if LastWarning is populated (but not if LastError is set - errors take precedence)
-                        (!string.IsNullOrEmpty(i.LastWarning) && string.IsNullOrEmpty(i.LastError)))
-                    .Where(i => !failedItems.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase)) // Don't double-count
-                    .Select(i => i.ItemName)
-                    .Where(n => !string.IsNullOrEmpty(n))
-                    .Distinct()
+                // Successful updates from this session
+                var updatedEvents = sessionEvents
+                    .Where(e => e.EventType.Equals("update", StringComparison.OrdinalIgnoreCase) &&
+                                (e.Status.Equals("Success", StringComparison.OrdinalIgnoreCase) ||
+                                 e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)))
+                    .Where(e => !string.IsNullOrEmpty(e.Package))
+                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
                     .ToList();
                 
-                // Build set of known item names
-                var knownItemNames = allItems
-                    .Select(i => i.ItemName)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                // Successful removals from this session
+                var removedEvents = sessionEvents
+                    .Where(e => e.EventType.Equals("remove", StringComparison.OrdinalIgnoreCase) &&
+                                (e.Status.Equals("Success", StringComparison.OrdinalIgnoreCase) ||
+                                 e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)))
+                    .Where(e => !string.IsNullOrEmpty(e.Package))
+                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
+                    .ToList();
                 
-                // Session-level warnings are no longer tracked separately
-                // Only item-level errors and warnings matter for module status
-                var sessionLevelWarnings = new List<CimianEvent>(); // Empty - not used
+                // Failed events from this session
+                var failedEvents = sessionEvents
+                    .Where(e => e.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
+                                e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase))
+                    .Where(e => !string.IsNullOrEmpty(e.Package))
+                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
+                    .ToList();
                 
-                // Get installed item names for context
-                var installedItemNames = allItems
-                    .Where(i => i.CurrentStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase) ||
-                               i.MappedStatus?.Equals("Installed", StringComparison.OrdinalIgnoreCase) == true)
-                    .Select(i => i.ItemName)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                _logger.LogInformation("Session activity - Installs: {Installs}, Updates: {Updates}, Removals: {Removals}, Failures: {Failures}",
+                    installedEvents.Count, updatedEvents.Count, removedEvents.Count, failedEvents.Count);
                 
-                // Get ACTUAL session activity counts from the latest session
-                // This is what happened in THIS run, not total items managed
-                var latestSessionForCounts = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
-                var sessionInstalls = latestSessionForCounts?.Installs ?? 0;
-                var sessionUpdates = latestSessionForCounts?.Updates ?? 0;
-                var sessionSuccesses = latestSessionForCounts?.Successes ?? 0;
-                var sessionActivityCount = sessionInstalls + sessionUpdates;
-                
-                // Also track total managed items for context (but not for messaging)
-                var totalManagedItems = allItems.Count;
-                var totalInstalledItems = installedItemNames.Count;
-                
-                _logger.LogInformation("Event count analysis from items.json - Failed Items: {ErrorCount} ({FailedItems}), Warning Items: {WarningCount} ({WarnItems}), Installed: {InstalledCount}, Session Warnings: {SessionWarnCount}, Session Activity: {SessionActivity} (installs: {Installs}, updates: {Updates})", 
-                    failedItems.Count, string.Join(", ", failedItems.Take(5)),
-                    warningItems.Count, string.Join(", ", warningItems.Take(5)),
-                    totalInstalledItems,
-                    sessionLevelWarnings.Count,
-                    sessionActivityCount, sessionInstalls, sessionUpdates);
-                
-                // Build consolidated message and determine event type
-                string eventType;
-                string message;
-                var details = new Dictionary<string, object>();
-                
-                // Add session info to details if available
-                var latestSession = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
-                if (latestSession != null)
+                // Helper to get version string for a package
+                string GetVersion(CimianEvent evt)
                 {
-                    details["session_id"] = latestSession.SessionId ?? "unknown";
-                    details["run_type"] = latestSession.RunType ?? "unknown";
-                    details["duration_seconds"] = latestSession.DurationSeconds;
+                    if (!string.IsNullOrEmpty(evt.Version)) return evt.Version;
+                    var item = allItems.FirstOrDefault(i => i.ItemName.Equals(evt.Package, StringComparison.OrdinalIgnoreCase));
+                    return item?.LatestVersion ?? item?.InstalledVersion ?? "";
                 }
                 
-                // REMOVED: operational_warnings no longer tracked - only item errors/warnings matter
-                
-                // PRIORITY 1: ERROR - If there are any failed items in this session
-                if (failedItems.Any())
+                // Generate install event (matches Mac pattern: "{name} {version} installed")
+                if (installedEvents.Any())
                 {
-                    eventType = "error";
-                    var messageParts = new List<string>();
-                    
-                    // Success part: "{item} v{ver}, {item} v{ver} installed"
-                    if (sessionActivityCount > 0)
+                    string message;
+                    if (installedEvents.Count == 1)
                     {
-                        var handledNames = latestSessionForCounts?.PackagesHandled ?? new List<string>();
-                        var successStrings = handledNames
-                            .Where(n => !failedItems.Contains(n, StringComparer.OrdinalIgnoreCase) && !warningItems.Contains(n, StringComparer.OrdinalIgnoreCase))
-                            .Select(n => {
-                                var item = allItems.FirstOrDefault(i => i.ItemName.Equals(n, StringComparison.OrdinalIgnoreCase));
-                                var ver = item?.LatestVersion ?? item?.InstalledVersion ?? "";
-                                return string.IsNullOrEmpty(ver) ? n : $"{n} v{ver}";
-                            }).ToList();
-                        if (successStrings.Any())
-                            messageParts.Add($"{string.Join(", ", successStrings)} installed");
+                        var ver = GetVersion(installedEvents[0]);
+                        message = string.IsNullOrEmpty(ver) 
+                            ? $"{installedEvents[0].Package} installed" 
+                            : $"{installedEvents[0].Package} {ver} installed";
                     }
-                    
-                    // Warning part: "{item} has a warning" or "{item}, {item} have warnings"
-                    if (warningItems.Any())
-                    {
-                        if (warningItems.Count == 1)
-                            messageParts.Add($"{warningItems[0]} has a warning");
-                        else
-                            messageParts.Add($"{string.Join(", ", warningItems)} have warnings");
-                    }
-                    
-                    // Error part: "{item} has an error!" or "{item}, {item} have errors!"
-                    if (failedItems.Count == 1)
-                        messageParts.Add($"{failedItems[0]} has an error!");
                     else
-                        messageParts.Add($"{string.Join(", ", failedItems)} have errors!");
-                    
-                    message = string.Join(", ", messageParts);
-                    
-                    details["error_count"] = failedItems.Count;
-                    details["warning_count"] = warningItems.Count;
-                    details["session_installs"] = sessionInstalls;
-                    details["session_updates"] = sessionUpdates;
-                    details["session_successes"] = sessionSuccesses;
-                    details["total_managed_items"] = totalManagedItems;
-                    details["module_status"] = "error";
-                    details["failed_items"] = failedItems.Take(10).ToList();
-                    
-                    _logger.LogInformation("Generated single ERROR event: {Message}", message);
-                }
-                // PRIORITY 2: WARNING - If there are item warnings but no errors
-                else if (warningItems.Any())
-                {
-                    eventType = "warning";
-                    var messageParts = new List<string>();
-                    
-                    // Success part: "{item} v{ver}, {item} v{ver} installed"
-                    if (sessionActivityCount > 0)
                     {
-                        var handledNames = latestSessionForCounts?.PackagesHandled ?? new List<string>();
-                        var successStrings = handledNames
-                            .Where(n => !warningItems.Contains(n, StringComparer.OrdinalIgnoreCase))
-                            .Select(n => {
-                                var item = allItems.FirstOrDefault(i => i.ItemName.Equals(n, StringComparison.OrdinalIgnoreCase));
-                                var ver = item?.LatestVersion ?? item?.InstalledVersion ?? "";
-                                return string.IsNullOrEmpty(ver) ? n : $"{n} v{ver}";
-                            }).ToList();
-                        if (successStrings.Any())
-                            messageParts.Add($"{string.Join(", ", successStrings)} installed");
-                    }
-                    
-                    // Warning part: "{item} has a warning" or "{item}, {item} have warnings"
-                    if (warningItems.Count == 1)
-                        messageParts.Add($"{warningItems[0]} has a warning");
-                    else
-                        messageParts.Add($"{string.Join(", ", warningItems)} have warnings");
-                    
-                    message = string.Join(", ", messageParts);
-                    
-                    details["warning_count"] = warningItems.Count;
-                    details["session_installs"] = sessionInstalls;
-                    details["session_updates"] = sessionUpdates;
-                    details["session_successes"] = sessionSuccesses;
-                    details["total_managed_items"] = totalManagedItems;
-                    details["module_status"] = "warning";
-                    details["warning_items"] = warningItems.Take(10).ToList();
-                    
-                    _logger.LogInformation("Generated single WARNING event: {Message}", message);
-                }
-                // PRIORITY 3: SUCCESS - if there was actual session activity (installs/updates)
-                else if (sessionActivityCount > 0)
-                {
-                    eventType = "success";
-                    var messageParts = new List<string>();
-                    
-                    // Build named items with versions: "{item} v{ver}, {item} v{ver} installed"
-                    var handledNames = latestSessionForCounts?.PackagesHandled ?? new List<string>();
-                    if (handledNames.Any())
-                    {
-                        var itemStrings = handledNames.Select(n => {
-                            var item = allItems.FirstOrDefault(i => i.ItemName.Equals(n, StringComparison.OrdinalIgnoreCase));
-                            var ver = item?.LatestVersion ?? item?.InstalledVersion ?? "";
-                            return string.IsNullOrEmpty(ver) ? n : $"{n} v{ver}";
+                        var itemStrings = installedEvents.Select(e => {
+                            var ver = GetVersion(e);
+                            return string.IsNullOrEmpty(ver) ? e.Package : $"{e.Package} {ver}";
                         }).ToList();
-                        messageParts.Add($"{string.Join(", ", itemStrings)} installed");
+                        message = $"{string.Join(", ", itemStrings)} installed";
+                    }
+                    
+                    var details = new Dictionary<string, object>
+                    {
+                        ["action"] = "install",
+                        ["count"] = installedEvents.Count,
+                        ["packages"] = installedEvents.Select(e => e.Package).ToList()
+                    };
+                    events.Add(CreateEvent("success", message, details, DateTime.UtcNow));
+                    _logger.LogInformation("Generated install event: {Message}", message);
+                }
+                
+                // Generate update event (matches Mac pattern: "{name} {version} updated")
+                if (updatedEvents.Any())
+                {
+                    string message;
+                    if (updatedEvents.Count == 1)
+                    {
+                        var ver = GetVersion(updatedEvents[0]);
+                        message = string.IsNullOrEmpty(ver)
+                            ? $"{updatedEvents[0].Package} updated"
+                            : $"{updatedEvents[0].Package} {ver} updated";
                     }
                     else
                     {
-                        // Fallback if no named items but count > 0
-                        if (sessionInstalls > 0 && sessionUpdates > 0)
-                            messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}, {sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
-                        else if (sessionInstalls > 0)
-                            messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}");
-                        else if (sessionUpdates > 0)
-                            messageParts.Add($"{sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
+                        var itemStrings = updatedEvents.Select(e => {
+                            var ver = GetVersion(e);
+                            return string.IsNullOrEmpty(ver) ? e.Package : $"{e.Package} {ver}";
+                        }).ToList();
+                        message = $"{string.Join(", ", itemStrings)} updated";
                     }
                     
-                    message = string.Join(", ", messageParts);
-                    
-                    details["session_installs"] = sessionInstalls;
-                    details["session_updates"] = sessionUpdates;
-                    details["session_successes"] = sessionSuccesses;
-                    details["total_managed_items"] = totalManagedItems;
-                    details["module_status"] = "success";
-                    
-                    _logger.LogInformation("Generated single SUCCESS event: {Message}", message);
-                }
-                // NO SESSION ACTIVITY - report as maintenance check
-                // REMOVED: Session-level warnings no longer trigger status changes
-                // NO SESSION ACTIVITY AND NO WARNINGS: All items are managed, nothing to do
-                else if (totalManagedItems > 0)
-                {
-                    // Don't generate events for "all managed" state - it's normal operation
-                    // The items are all accounted for in the items.json, no action needed
-                    _logger.LogInformation("All {TotalItems} managed items accounted for, no session activity - no event generated", totalManagedItems);
-                    return Task.FromResult(events); // Return empty list
-                }
-                // NO ITEMS AND NO ACTIVITY
-                else
-                {
-                    // Only generate an event if Cimian is not installed (warning case)
-                    if (data.Cimian?.IsInstalled != true)
+                    var details = new Dictionary<string, object>
                     {
-                        eventType = "warning";
-                        message = "Installs system not available";
-                        details["recommendation"] = "Install Cimian for managed software deployment";
-                        details["module_status"] = "warning";
-                        
-                        _logger.LogInformation("Generated single WARNING event - Cimian not detected");
+                        ["action"] = "update",
+                        ["count"] = updatedEvents.Count,
+                        ["packages"] = updatedEvents.Select(e => e.Package).ToList()
+                    };
+                    events.Add(CreateEvent("success", message, details, DateTime.UtcNow));
+                    _logger.LogInformation("Generated update event: {Message}", message);
+                }
+                
+                // Generate removal event (matches Mac pattern: "{name} {version} removed")
+                if (removedEvents.Any())
+                {
+                    string message;
+                    if (removedEvents.Count == 1)
+                    {
+                        var ver = GetVersion(removedEvents[0]);
+                        message = string.IsNullOrEmpty(ver)
+                            ? $"{removedEvents[0].Package} removed"
+                            : $"{removedEvents[0].Package} {ver} removed";
                     }
                     else
                     {
-                        // Cimian is installed but no items configured - could be initial setup
-                        _logger.LogInformation("No managed items configured - no event generated");
-                        return Task.FromResult(events); // Return empty list
+                        var itemStrings = removedEvents.Select(e => {
+                            var ver = GetVersion(e);
+                            return string.IsNullOrEmpty(ver) ? e.Package : $"{e.Package} {ver}";
+                        }).ToList();
+                        message = $"{string.Join(", ", itemStrings)} removed";
+                    }
+                    
+                    var details = new Dictionary<string, object>
+                    {
+                        ["action"] = "remove",
+                        ["count"] = removedEvents.Count,
+                        ["packages"] = removedEvents.Select(e => e.Package).ToList()
+                    };
+                    events.Add(CreateEvent("success", message, details, DateTime.UtcNow));
+                    _logger.LogInformation("Generated removal event: {Message}", message);
+                }
+                
+                // Generate error event for failed packages
+                if (failedEvents.Any())
+                {
+                    string message;
+                    if (failedEvents.Count == 1)
+                    {
+                        var err = !string.IsNullOrEmpty(failedEvents[0].Error) ? $": {failedEvents[0].Error}" : "";
+                        message = $"{failedEvents[0].Package} failed to install{err}";
+                    }
+                    else
+                    {
+                        message = $"{string.Join(", ", failedEvents.Select(e => e.Package))} failed to install";
+                    }
+                    
+                    var details = new Dictionary<string, object>
+                    {
+                        ["action"] = "error",
+                        ["count"] = failedEvents.Count,
+                        ["failed_items"] = failedEvents.Select(e => e.Package).ToList()
+                    };
+                    events.Add(CreateEvent("error", message, details, DateTime.UtcNow));
+                    _logger.LogInformation("Generated error event: {Message}", message);
+                }
+                
+                // If no session events but items have persistent errors from items.json, report those
+                if (!events.Any() && allItems.Any())
+                {
+                    var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
+                    var itemsWithErrors = allItems
+                        .Where(i => failedItemStatuses.Any(s =>
+                            i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase)) ||
+                            !string.IsNullOrEmpty(i.LastError))
+                        .Select(i => i.ItemName)
+                        .Where(n => !string.IsNullOrEmpty(n))
+                        .Distinct()
+                        .ToList();
+                    
+                    if (itemsWithErrors.Any())
+                    {
+                        var message = itemsWithErrors.Count == 1
+                            ? $"{itemsWithErrors[0]} has an error"
+                            : $"{string.Join(", ", itemsWithErrors)} have errors";
+                        events.Add(CreateEvent("error", message, new Dictionary<string, object>
+                        {
+                            ["failed_items"] = itemsWithErrors.Take(10).ToList(),
+                            ["module_status"] = "error"
+                        }, DateTime.UtcNow));
+                        _logger.LogInformation("Generated persistent error event: {Message}", message);
                     }
                 }
                 
-                // Create the single consolidated event
-                events.Add(CreateEvent(eventType, message, details, DateTime.UtcNow));
+                // If Cimian is not installed, warn
+                if (!events.Any() && data.Cimian?.IsInstalled != true && !(allItems.Any()))
+                {
+                    events.Add(CreateEvent("warning", "Installs system not available", new Dictionary<string, object>
+                    {
+                        ["recommendation"] = "Install Cimian for managed software deployment",
+                        ["module_status"] = "warning"
+                    }, DateTime.UtcNow));
+                    _logger.LogInformation("Generated warning event - Cimian not detected");
+                }
                 
-                _logger.LogInformation("Generated 1 consolidated event of type '{EventType}' for device {DeviceId}", 
-                    eventType, data.DeviceId);
+                _logger.LogInformation("Generated {Count} event(s) for device {DeviceId}", 
+                    events.Count, data.DeviceId);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error generating consolidated event from Cimian data");
-                
-                // Add error event for the generation failure itself
+                _logger.LogError(ex, "Error generating events from Cimian data");
                 events.Add(CreateEvent("error", "Installs monitoring error", 
                     new Dictionary<string, object> { 
                         ["error"] = ex.Message,
