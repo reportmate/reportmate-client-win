@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>reportmate</id>
-    <version>2026.2.26.1446</version>
+    <version>{{VERSION}}</version>
     <title>ReportMate</title>
     <authors>Windows Admins Open Source</authors>
     <owners>Windows Admins Open Source</owners>
