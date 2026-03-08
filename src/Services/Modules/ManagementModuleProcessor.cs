@@ -84,8 +84,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.LastSync = DateTime.UtcNow;
             }
 
-            _logger.LogInformation("Management module processed - Enrolled: {Enrolled}, Method: {Method}, Provider: {Provider}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, IntunePolicies: {IntunePolicyCount}, SecurityPolicies: {SecurityPolicyCount}, TotalPolicies: {TotalPolicies}", 
-                data.MdmEnrollment.IsEnrolled, data.MdmEnrollment.EnrollmentMethod ?? "unknown", data.MdmEnrollment.Provider ?? "unknown", data.Profiles.Count, data.ManagedApps.Count, data.IntunePolicies.Count, data.SecurityPolicies.Count, data.TotalPoliciesApplied);
+            _logger.LogInformation("Management module processed - Enrolled: {Enrolled}, Method: {Method}, Provider: {Provider}, ManagedApps: {AppCount}, IntunePolicies: {IntunePolicyCount}, SecurityPolicies: {SecurityPolicyCount}, TotalPolicies: {TotalPolicies}", 
+                data.MdmEnrollment.IsEnrolled, data.MdmEnrollment.EnrollmentMethod ?? "unknown", data.MdmEnrollment.Provider ?? "unknown", data.ManagedApps.Count, data.IntunePolicies.Count, data.SecurityPolicies.Count, data.TotalPoliciesApplied);
 
             return data;
         }
@@ -1072,20 +1072,19 @@ if (Test-Path $policyPath) {
                         var trimmedArea = area.Trim();
                         if (!string.IsNullOrEmpty(trimmedArea))
                         {
-                            data.Profiles.Add(new ManagementData.MdmProfile
+                            data.IntunePolicies.Add(new IntunePolicy
                             {
-                                Name = FormatPolicyAreaName(trimmedArea),
-                                Identifier = trimmedArea,
-                                Type = DeterminePolicyType(trimmedArea),
+                                PolicyId = trimmedArea,
+                                PolicyName = FormatPolicyAreaName(trimmedArea),
+                                PolicyType = DeterminePolicyType(trimmedArea),
                                 Status = "Applied",
-                                Provider = "MDM",
-                                SettingCount = 0
+                                Platform = "MDM"
                             });
                         }
                     }
                 }
                 
-                _logger.LogInformation("Processed {ProfileCount} MDM configuration profiles", data.Profiles.Count);
+                _logger.LogInformation("Processed {PolicyCount} MDM configuration policies", data.IntunePolicies.Count);
             }
             catch (OperationCanceledException)
             {
