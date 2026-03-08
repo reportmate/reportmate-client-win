@@ -1,0 +1,49 @@
+# Normalise line endings in the repository to LF.
+# Windows-native files (PowerShell, batch) are checked out as CRLF.
+# Everything else is checked out as LF regardless of core.autocrlf.
+
+# Default: detect text files and store as LF
+* text=auto eol=lf
+
+# ── Windows scripts: checkout as CRLF ──────────────────────────────────────
+*.ps1     text eol=crlf
+*.psm1    text eol=crlf
+*.psd1    text eol=crlf
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+
+# ── Visual Studio / .NET project files ─────────────────────────────────────
+*.sln     text eol=crlf
+*.csproj  text eol=crlf
+*.props   text eol=crlf
+*.targets text eol=crlf
+*.ruleset text eol=crlf
+
+# ── WiX installer sources ───────────────────────────────────────────────────
+*.wxs     text eol=crlf
+*.wxi     text eol=crlf
+*.wixproj text eol=crlf
+*.rtf     text eol=crlf
+
+# ── Config / data / docs – store and checkout as LF ────────────────────────
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.txt     text eol=lf
+*.sh      text eol=lf
+
+# ── Binary files – never mangle ────────────────────────────────────────────
+*.exe     binary
+*.dll     binary
+*.pdb     binary
+*.nupkg   binary
+*.msi     binary
+*.zip     binary
+*.pkg     binary
+*.png     binary
+*.ico     binary
+*.icns    binary
+*.p12     binary
+*.pfx     binary
+*.snk     binary
