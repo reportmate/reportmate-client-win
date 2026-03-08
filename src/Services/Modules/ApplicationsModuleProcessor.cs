@@ -158,6 +158,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                         data.Usage.TotalLaunches,
                         data.Usage.ActiveSessions.Count,
                         data.ApplicationsWithUsage);
+
+                    // Build daily per-app summaries for historical retention
+                    data.DailyUsageHistory = _usageService.BuildDailySummaries(data.Usage.ActiveSessions);
                 }
                 else
                 {

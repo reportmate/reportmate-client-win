@@ -57,6 +57,8 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(ApplicationUsageSession))]
 [JsonSerializable(typeof(List<ApplicationUsageSummary>), TypeInfoPropertyName = "ApplicationUsageSummaryList")]
 [JsonSerializable(typeof(List<ApplicationUsageSession>), TypeInfoPropertyName = "ApplicationUsageSessionList")]
+[JsonSerializable(typeof(DailyUsageSummary))]
+[JsonSerializable(typeof(List<DailyUsageSummary>), TypeInfoPropertyName = "DailyUsageSummaryList")]
 [JsonSerializable(typeof(HardwareData), TypeInfoPropertyName = "ModularHardwareData")]
 [JsonSerializable(typeof(InventoryData))]
 [JsonSerializable(typeof(InstallsData))]
