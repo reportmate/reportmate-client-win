@@ -198,9 +198,9 @@ jobs:
       with:
         name: reportmate-${{ steps.version.outputs.DISPLAY_VERSION }}
         path: |
-          dist/*.nupkg
-          dist/*.zip
-          dist/*.msi
+          release/*.nupkg
+          release/*.zip
+          release/*.msi
           .publish/managedreportsrunner.exe
         retention-days: 30
         
@@ -208,7 +208,7 @@ jobs:
       shell: pwsh
       run: |
         echo "Final build artifacts:"
-        Get-ChildItem "dist" -Recurse | ForEach-Object { 
+        Get-ChildItem "release" -Recurse | ForEach-Object { 
           $sizeKB = [math]::Round($_.Length / 1KB, 1)
           echo "  $($_.Name) ($sizeKB KB)" 
         }
