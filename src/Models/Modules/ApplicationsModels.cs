@@ -18,7 +18,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public int TotalApplications { get; set; }
         public DateTime LastInventoryUpdate { get; set; }
         public ApplicationUsageSnapshot Usage { get; set; } = ApplicationUsageSnapshot.CreateUnavailable();
-    public int ApplicationsWithUsage => InstalledApplications.Count(app => app.Usage is not null);
+        public List<DailyUsageSummary> DailyUsageHistory { get; set; } = new();
+        public int ApplicationsWithUsage => InstalledApplications.Count(app => app.Usage is not null);
     }
 
     public class InstalledApplication
@@ -136,5 +137,19 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? EndTime { get; set; }
         public double DurationSeconds { get; set; }
         public bool IsActive { get; set; }
+    }
+
+    /// <summary>
+    /// Per-application daily usage summary for historical retention.
+    /// Cumulative: last collection of the day wins (UPSERT semantics).
+    /// </summary>
+    public class DailyUsageSummary
+    {
+        public string Date { get; set; } = string.Empty; // YYYY-MM-DD
+        public string AppName { get; set; } = string.Empty;
+        public string Publisher { get; set; } = string.Empty;
+        public int Launches { get; set; }
+        public double TotalSeconds { get; set; }
+        public List<string> Users { get; set; } = new();
     }
 }
