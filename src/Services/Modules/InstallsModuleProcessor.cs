@@ -3668,28 +3668,48 @@ namespace ReportMate.WindowsClient.Services.Modules
             string? currentDeveloper = null;
             int entryCount = 0;
 
+            // Detect the indent level of list items.  Catalogs may use either
+            // a bare sequence  ("- name: …" at column 0)  or be wrapped under
+            // an "items:" key  ("  - name: …" indented 2+ spaces).  We discover
+            // the pattern from the first "- " we encounter.
+            int listIndent = -1;  // -1 = not yet detected
+
             string? line;
             while ((line = reader.ReadLine()) != null)
             {
                 if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#"))
                     continue;
 
-                // New array entry: starts with "- " at root level (no leading whitespace before dash)
-                if (line.Length >= 2 && line[0] == '-' && (line[1] == ' ' || line[1] == '\t'))
-                {
-                    SaveCatalogEntry(metadata, currentName, currentCategory, currentDeveloper, ref entryCount);
-                    currentName = null;
-                    currentCategory = null;
-                    currentDeveloper = null;
+                var trimmed = line.TrimStart();
 
-                    // Inline field on the same line as the dash, e.g. "- name: Git"
-                    var afterDash = line.Substring(2).Trim();
-                    ExtractCatalogField(afterDash, ref currentName, ref currentCategory, ref currentDeveloper);
-                }
-                else if (line[0] == ' ' || line[0] == '\t')
+                // Detect new array entry: "- " at any indentation level
+                if (trimmed.Length >= 2 && trimmed[0] == '-' && (trimmed[1] == ' ' || trimmed[1] == '\t'))
                 {
-                    // Indented continuation of the current entry
-                    ExtractCatalogField(line.Trim(), ref currentName, ref currentCategory, ref currentDeveloper);
+                    int currentIndent = line.Length - trimmed.Length;
+
+                    // First list item determines the expected indent
+                    if (listIndent < 0)
+                        listIndent = currentIndent;
+
+                    // Only treat as a new entry if at the detected list indent
+                    if (currentIndent == listIndent)
+                    {
+                        SaveCatalogEntry(metadata, currentName, currentCategory, currentDeveloper, ref entryCount);
+                        currentName = null;
+                        currentCategory = null;
+                        currentDeveloper = null;
+
+                        // Inline field on the same line as the dash, e.g. "- name: Git"
+                        var afterDash = trimmed.Substring(2).Trim();
+                        ExtractCatalogField(afterDash, ref currentName, ref currentCategory, ref currentDeveloper);
+                        continue;
+                    }
+                }
+
+                // Indented continuation of the current entry (or wrapper keys like "items:")
+                if (line[0] == ' ' || line[0] == '\t' || listIndent < 0)
+                {
+                    ExtractCatalogField(trimmed, ref currentName, ref currentCategory, ref currentDeveloper);
                 }
             }
 
