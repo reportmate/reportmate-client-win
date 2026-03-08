@@ -52,7 +52,11 @@ function Enable-ReportMateKernelProcessLog {
                 continue
             }
 
-            & wevtutil sl $logName /q:true /e:true > $null 2>&1
+            # Analytic/Debug logs must be disabled before changing settings
+            if ($logName -like '*Analytic*' -or $logName -like '*Debug*') {
+                & wevtutil sl $logName /e:false > $null 2>&1
+            }
+            & wevtutil sl $logName /e:true > $null 2>&1
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "Kernel process telemetry log enabled: $logName"
                 return $true
@@ -73,8 +77,28 @@ function Enable-ReportMateKernelProcessLog {
 # =================================================================
 # Configuration is sourced from:
 # 1. Environment variables (highest precedence)
-# 2. CSP/OMA-URI registry settings
-# 3. Production defaults (Container Apps API endpoint)
+# 2. Bundled .env file in install directory
+# 3. CSP/OMA-URI registry settings
+# 4. Production defaults (Container Apps API endpoint)
+
+# Load bundled .env file if environment variables aren't already set
+$envFile = Join-Path "C:\Program Files\ReportMate" ".env"
+if (-not (Test-Path $envFile)) {
+    # During PKG install, .env may be alongside the scripts directory
+    $envFile = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
+}
+if (Test-Path $envFile) {
+    Get-Content $envFile | Where-Object { $_ -match '^[^#].*=' } | ForEach-Object {
+        $parts = $_ -split '=', 2
+        $key = $parts[0].Trim()
+        $val = $parts[1].Trim()
+        if (-not [Environment]::GetEnvironmentVariable($key, 'Process')) {
+            [Environment]::SetEnvironmentVariable($key, $val, 'Process')
+        }
+    }
+    Write-Host "Loaded configuration from bundled .env file"
+}
+
 $PROD_API_URL = if ($env:REPORTMATE_API_URL) { $env:REPORTMATE_API_URL } else { $env:PROD_API_URL }
 $PROD_PASSPHRASE = if ($env:REPORTMATE_PASSPHRASE) { $env:REPORTMATE_PASSPHRASE } else { $env:PROD_PASSPHRASE }
 $AUTO_CONFIGURE = if (-not [string]::IsNullOrEmpty($env:REPORTMATE_AUTO_CONFIGURE)) { [bool]::Parse($env:REPORTMATE_AUTO_CONFIGURE) } else { $true }
