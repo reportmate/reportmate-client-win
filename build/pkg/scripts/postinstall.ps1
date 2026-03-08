@@ -42,8 +42,27 @@ function Enable-ReportMateKernelProcessLog {
         )
     )
 
+    # Security Log (Event 4688/4689) is the preferred source for process telemetry on
+    # Windows 10/11. Check for it first before attempting kernel log setup.
+    try {
+        $auditResult = & auditpol.exe /get /subcategory:"Process Creation" 2>&1
+        if ($LASTEXITCODE -eq 0 -and ($auditResult -join "" -match "Success|Failure")) {
+            Write-Host "Process telemetry: Security Log (Event 4688) audit is active"
+            return $true
+        }
+        # Attempt to enable Security Log process creation auditing
+        & auditpol.exe /set /subcategory:"Process Creation" /success:enable > $null 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Process telemetry: Enabled Security Log (Event 4688) process creation audit"
+            return $true
+        }
+    } catch {
+        Write-Verbose "Security Log audit check failed: $_"
+    }
+
+    # Fall back to kernel process event logs (older Windows versions)
     foreach ($logName in $LogNames) {
-        Write-Host "Configuring kernel process telemetry log: $logName"
+        Write-Verbose "Attempting kernel process telemetry log: $logName"
 
         try {
             & wevtutil gl $logName > $null 2>&1
@@ -58,17 +77,15 @@ function Enable-ReportMateKernelProcessLog {
             }
             & wevtutil sl $logName /e:true > $null 2>&1
             if ($LASTEXITCODE -eq 0) {
-                Write-Host "Kernel process telemetry log enabled: $logName"
+                Write-Host "Process telemetry: Kernel log enabled ($logName)"
                 return $true
             }
-
-            Write-Warning "Telemetry log command returned exit code $LASTEXITCODE for $logName"
         } catch {
-            Write-Warning ("Failed to configure telemetry log {0}: {1}" -f $logName, $_.Exception.Message)
+            Write-Verbose ("Failed to configure kernel log {0}: {1}" -f $logName, $_.Exception.Message)
         }
     }
 
-    Write-Warning "Unable to enable kernel process telemetry logs. Application usage tracking may be unavailable."
+    Write-Warning "Process telemetry unavailable: Security Log audit and kernel logs could not be configured. Application usage tracking will be limited."
     return $false
 }
 
