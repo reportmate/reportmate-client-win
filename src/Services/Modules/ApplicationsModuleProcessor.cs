@@ -68,12 +68,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         app.InstallDate = installDate;
                     }
 
-                    // Parse size if available
-                    var sizeStr = GetStringValue(program, "estimated_size");
-                    if (!string.IsNullOrEmpty(sizeStr) && long.TryParse(sizeStr, out var size))
-                    {
-                        app.Size = size;
-                    }
+                    // Size not available from osquery programs table
+                    // Could be derived from install_location directory size if needed
 
                     data.InstalledApplications.Add(app);
                 }
