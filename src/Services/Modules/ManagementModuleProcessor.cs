@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services.Modules;
 
@@ -56,11 +57,26 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process managed applications (Win32, MSI apps deployed via Intune)
             await ProcessManagedAppsAsync(osqueryResults, data);
 
-            // Process compliance policies
-            await ProcessCompliancePoliciesAsync(osqueryResults, data);
-
             // Detect AutoPilot provisioning from registry
             ProcessAutopilotConfig(data);
+
+            // --- Policy & configuration collection (consolidated from deprecated profiles module) ---
+            ProcessGroupPolicySettings(osqueryResults, data);
+            ProcessMDMConfigurations(osqueryResults, data);
+            ProcessIntunePolicies(osqueryResults, data);
+            await CollectMDMPoliciesViaPowerShellAsync(data);
+            ProcessOMAURISettings(osqueryResults, data);
+            ProcessSecurityPolicies(osqueryResults, data);
+            ProcessCompliancePolicies(osqueryResults, data);
+            ProcessBrowserPolicies(osqueryResults, data);
+            ProcessOfficePolicies(osqueryResults, data);
+
+            // Populate settingCount on legacy MdmProfile objects from IntunePolicies
+            PopulateProfileSettingCounts(data);
+
+            // Calculate policy summary
+            CalculatePolicySummary(data);
+            data.LastPolicyUpdate = DateTime.UtcNow;
 
             // Set last sync time
             if (data.DeviceState.EntraJoined || data.DeviceState.EnterpriseJoined || data.DeviceState.DomainJoined)
@@ -68,8 +84,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.LastSync = DateTime.UtcNow;
             }
 
-            _logger.LogInformation("Management module processed - Status: {Status}, Entra: {Entra}, Enterprise: {Enterprise}, Domain: {Domain}, AutoPilot: {AutoPilot}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, CompliancePolicies: {PolicyCount}", 
-                data.DeviceState.Status, data.DeviceState.EntraJoined, data.DeviceState.EnterpriseJoined, data.DeviceState.DomainJoined, data.AutopilotConfig.Activated, data.Profiles.Count, data.ManagedApps.Count, data.CompliancePolicies.Count);
+            _logger.LogInformation("Management module processed - Enrolled: {Enrolled}, Method: {Method}, Provider: {Provider}, Profiles: {ProfileCount}, ManagedApps: {AppCount}, IntunePolicies: {IntunePolicyCount}, SecurityPolicies: {SecurityPolicyCount}, TotalPolicies: {TotalPolicies}", 
+                data.MdmEnrollment.IsEnrolled, data.MdmEnrollment.EnrollmentMethod ?? "unknown", data.MdmEnrollment.Provider ?? "unknown", data.Profiles.Count, data.ManagedApps.Count, data.IntunePolicies.Count, data.SecurityPolicies.Count, data.TotalPoliciesApplied);
 
             return data;
         }
@@ -233,44 +249,102 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (osqueryResults.TryGetValue("mdm_enrollment", out var mdmEnrollment))
             {
                 _logger.LogDebug($"Found {mdmEnrollment.Count} mdm_enrollment entries");
+
+                // Group by enrollment GUID so we can pick the primary enrollment.
+                // There are many internal/system enrollment GUIDs (type 1); the real user
+                // MDM enrollment is identified by having a UPN.
+                var byGuid = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
                 foreach (var entry in mdmEnrollment)
                 {
+                    var key  = GetStringValue(entry, "key");
                     var name = GetStringValue(entry, "name");
-                    var regData = GetStringValue(entry, "data");
-                    _logger.LogDebug($"Processing registry entry: {name} = {regData}");
-                    
-                    switch (name)
+                    var data2 = GetStringValue(entry, "data");
+                    if (!byGuid.ContainsKey(key))
+                        byGuid[key] = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    byGuid[key][name] = data2;
+                }
+
+                // Prefer the enrollment GUID that has a UPN (= the actual user/device MDM enrollment).
+                // Priority: MS DM Server (pure Intune) > other Microsoft providers > any with UPN.
+                // "MS DM Server" is the canonical ProviderID set by Intune during cloud enrollment.
+                Dictionary<string, string>? primaryEnrollment = null;
+                int bestScore = -1;
+                foreach (var guid in byGuid.Values)
+                {
+                    int score = 0;
+                    guid.TryGetValue("ProviderID", out var pid); pid ??= "";
+                    guid.TryGetValue("UPN", out var upn); upn ??= "";
+
+                    if (!string.IsNullOrEmpty(upn)) score += 4;
+                    // "MS DM Server" = the definitive Intune MDM ProviderID
+                    if (pid.Equals("MS DM Server", StringComparison.OrdinalIgnoreCase)) score += 3;
+                    else if (pid.Contains("Microsoft", StringComparison.OrdinalIgnoreCase) ||
+                             pid.Contains("MS DM", StringComparison.OrdinalIgnoreCase)) score += 1;
+                    // Prefer the Intune manage endpoint over co-management/checkin endpoints
+                    if (guid.TryGetValue("AADResourceID", out var aad) && aad.Contains("manage.microsoft.com")) score += 2;
+
+                    if (score > bestScore)
                     {
-                        case "ProviderID":
-                            _logger.LogDebug($"Found ProviderID: {regData}");
-                            if (regData.Contains("Microsoft") || regData.Contains("MS DM"))
-                            {
-                                data.MdmEnrollment.IsEnrolled = true;
-                                data.MdmEnrollment.Provider = NormalizeMdmProvider(regData);
-                                data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
-                                _logger.LogDebug("Set MDM enrollment to true based on Microsoft ProviderID, normalized to: {Provider}", data.MdmEnrollment.Provider);
-                            }
-                            data.TenantDetails.TenantId = regData;
-                            break;
-                        case "UPN":
-                            _logger.LogDebug($"Found UPN: {regData}");
-                            data.MdmEnrollment.UserPrincipalName = regData;
-                            break;
-                        case "EnrollmentState":
-                            _logger.LogDebug($"Found EnrollmentState: {regData}");
-                            // Update device state based on enrollment status
-                            if (int.TryParse(regData, out var enrollmentState) && enrollmentState > 0)
-                            {
-                                data.DeviceState.EnterpriseJoined = true;
-                                data.MdmEnrollment.IsEnrolled = true;
-                                data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
-                                _logger.LogDebug($"Set enrollment to true based on EnrollmentState: {enrollmentState}");
-                            }
-                            break;
-                        case "AADResourceID":
-                            _logger.LogDebug($"Found AADResourceID: {regData}");
-                            data.MdmEnrollment.EnrollmentId = regData;
-                            break;
+                        bestScore = score;
+                        primaryEnrollment = guid;
+                    }
+                }
+
+                if (primaryEnrollment != null)
+                {
+                    if (primaryEnrollment.TryGetValue("ProviderID", out var providerID))
+                    {
+                        _logger.LogDebug("Primary enrollment ProviderID: {ProviderID}", providerID);
+                        if (providerID.Contains("Microsoft", StringComparison.OrdinalIgnoreCase) ||
+                            providerID.Contains("MS DM", StringComparison.OrdinalIgnoreCase))
+                        {
+                            data.MdmEnrollment.IsEnrolled = true;
+                            data.MdmEnrollment.Provider = NormalizeMdmProvider(providerID);
+                        }
+                    }
+                    if (primaryEnrollment.TryGetValue("UPN", out var upn))
+                    {
+                        _logger.LogDebug("Primary enrollment UPN: {UPN}", upn);
+                        data.MdmEnrollment.UserPrincipalName = upn;
+                    }
+                    if (primaryEnrollment.TryGetValue("EnrollmentState", out var stateStr) &&
+                        int.TryParse(stateStr, out var enrollmentState) && enrollmentState > 0)
+                    {
+                        data.DeviceState.EnterpriseJoined = true;
+                        data.MdmEnrollment.IsEnrolled = true;
+                    }
+                    if (primaryEnrollment.TryGetValue("AADResourceID", out var aadResource))
+                    {
+                        data.MdmEnrollment.EnrollmentId = aadResource;
+                    }
+                    if (primaryEnrollment.TryGetValue("EnrollmentType", out var typeStr) &&
+                        int.TryParse(typeStr, out var typeCode))
+                    {
+                        data.MdmEnrollment.EnrollmentMethod = typeCode switch
+                        {
+                            6  => "Auto-Enrolled",     // Entra join automatically triggered MDM
+                            8  => "User-Enrolled",     // User manually enrolled via Settings
+                            11 => "Bulk Enrolled",     // Provisioning package / bulk token
+                            13 => "Co-Managed",        // ConfigMgr + Intune co-management
+                            14 => "Device Enrollment", // AAD device enrollment
+                            26 => "Auto-Enrolled",     // Device management channel (Intune/co-management)
+                            _  => null
+                        };
+                        _logger.LogDebug("Primary EnrollmentType {Code} mapped to: {Method}", typeCode, data.MdmEnrollment.EnrollmentMethod);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("No primary MDM enrollment GUID found; falling back to flat scan");
+                    // Flat fallback — just check enrollment state so IsEnrolled can still be set
+                    foreach (var guid in byGuid.Values)
+                    {
+                        if (guid.TryGetValue("EnrollmentState", out var stateStr) &&
+                            int.TryParse(stateStr, out var s) && s > 0)
+                        {
+                            data.MdmEnrollment.IsEnrolled = true;
+                            data.DeviceState.EnterpriseJoined = true;
+                        }
                     }
                 }
             }
@@ -303,7 +377,6 @@ namespace ReportMate.WindowsClient.Services.Modules
                     data.MdmEnrollment.IsEnrolled = true;
                     data.MdmEnrollment.Provider = "Microsoft Intune";
                     data.MdmEnrollment.ManagementUrl = data.TenantDetails.MdmUrl;
-                    data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
                     
                     _logger.LogInformation("Detected MDM enrollment via certificate analysis");
                     
@@ -336,7 +409,6 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.MdmEnrollment.IsEnrolled = true;
                 data.MdmEnrollment.Provider = "Microsoft Intune";
                 data.MdmEnrollment.ManagementUrl = data.TenantDetails.MdmUrl;
-                data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
                 
                 _logger.LogInformation("Detected MDM enrollment via diagnostic data 'Managed by MDM' indicators");
             }
@@ -502,8 +574,6 @@ $providers | ConvertTo-Json -Compress
                         data.MdmEnrollment.Provider = data.DeviceState.EntraJoined ? "Microsoft Intune" : "Microsoft Intune (Co-managed)";
                     }
                     
-                    data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
-                    
                     // Try to extract UPN
                     var upnMatch = System.Text.RegularExpressions.Regex.Match(result, @"""UPN""\s*:\s*""([^""]+)""");
                     if (upnMatch.Success)
@@ -519,7 +589,6 @@ $providers | ConvertTo-Json -Compress
                     // SCCM-managed device
                     data.MdmEnrollment.IsEnrolled = true;
                     data.MdmEnrollment.Provider = "SCCM/ConfigMgr";
-                    data.MdmEnrollment.EnrollmentType = DetermineEnrollmentType(data.DeviceState);
                     
                     _logger.LogInformation("SCCM enrollment detected via PowerShell");
                 }
@@ -753,7 +822,7 @@ $providers | ConvertTo-Json -Compress
                 if (policyCacheKey != null)
                 {
                     data.AutopilotConfig.Activated = true;
-                    _logger.LogDebug("AutoPilot policy cache found - device was provisioned via AutoPilot");
+                    _logger.LogDebug("AutoPilot policy cache found");
 
                     // Read policy cache values
                     var policyJson = policyCacheKey.GetValue("PolicyJsonCache") as string;
@@ -764,6 +833,30 @@ $providers | ConvertTo-Json -Compress
                             var policyDoc = System.Text.Json.JsonDocument.Parse(policyJson);
                             var root = policyDoc.RootElement;
 
+                            // Registration status from error code
+                            if (root.TryGetProperty("ErrorCode", out var errorCode))
+                            {
+                                var code = errorCode.GetInt32();
+                                if (code == 0)
+                                {
+                                    data.AutopilotConfig.Registered = true;
+                                    data.AutopilotConfig.Status = "Registered";
+                                }
+                                else
+                                {
+                                    data.AutopilotConfig.Registered = false;
+                                    data.AutopilotConfig.Status = "Not Registered";
+                                    if (root.TryGetProperty("ErrorReason", out var reason))
+                                        data.AutopilotConfig.StatusDetail = reason.GetString() ?? string.Empty;
+                                }
+                            }
+                            else
+                            {
+                                // No error code means we assume registered
+                                data.AutopilotConfig.Registered = true;
+                                data.AutopilotConfig.Status = "Registered";
+                            }
+
                             if (root.TryGetProperty("CloudAssignedTenantId", out var tenantId))
                                 data.AutopilotConfig.TenantId = tenantId.GetString() ?? string.Empty;
 
@@ -772,6 +865,46 @@ $providers | ConvertTo-Json -Compress
 
                             if (root.TryGetProperty("CloudAssignedOobeConfig", out _))
                                 data.AutopilotConfig.CloudAssigned = true;
+
+                            // Policy download date
+                            if (root.TryGetProperty("PolicyDownloadDate", out var policyDate))
+                                data.AutopilotConfig.PolicyDate = policyDate.GetString() ?? string.Empty;
+
+                            // Deployment mode: 0=User-Driven, 1=Self-Deploying, 2=Pre-Provisioned
+                            if (root.TryGetProperty("AutopilotMode", out var mode))
+                            {
+                                data.AutopilotConfig.DeploymentMode = mode.GetInt32() switch
+                                {
+                                    0 => "User-Driven",
+                                    1 => "Self-Deploying",
+                                    2 => "Pre-Provisioned",
+                                    _ => $"Mode {mode.GetInt32()}"
+                                };
+                            }
+
+                            // Parse nested CloudAssignedAadServerData for ForcedEnrollment
+                            if (root.TryGetProperty("CloudAssignedAadServerData", out var serverDataStr))
+                            {
+                                var serverJson = serverDataStr.GetString();
+                                if (!string.IsNullOrEmpty(serverJson))
+                                {
+                                    try
+                                    {
+                                        var serverDoc = System.Text.Json.JsonDocument.Parse(serverJson);
+                                        if (serverDoc.RootElement.TryGetProperty("ZeroTouchConfig", out var ztc))
+                                        {
+                                            if (ztc.TryGetProperty("ForcedEnrollment", out var forced))
+                                                data.AutopilotConfig.ForcedEnrollment = forced.GetInt32() != 0;
+
+                                            // Tenant domain from nested source if top-level was empty
+                                            if (string.IsNullOrEmpty(data.AutopilotConfig.TenantDomain) &&
+                                                ztc.TryGetProperty("CloudAssignedTenantDomain", out var innerDomain))
+                                                data.AutopilotConfig.TenantDomain = innerDomain.GetString() ?? string.Empty;
+                                        }
+                                    }
+                                    catch (System.Text.Json.JsonException) { /* nested parse failure is non-critical */ }
+                                }
+                            }
                         }
                         catch (System.Text.Json.JsonException ex)
                         {
@@ -780,51 +913,72 @@ $providers | ConvertTo-Json -Compress
                     }
                 }
 
-                // Also check diagnostics key for profile name
+                // Also check diagnostics key for profile name and additional fields
                 using var diagKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
                     @"SOFTWARE\Microsoft\Provisioning\Diagnostics\Autopilot");
                 if (diagKey != null)
                 {
-                    // If we have diagnostics but no policy cache, still mark as activated
                     if (!data.AutopilotConfig.Activated)
                     {
                         data.AutopilotConfig.Activated = true;
                         _logger.LogDebug("AutoPilot diagnostics found without policy cache");
                     }
 
-                    var profileName = diagKey.GetValue("CloudAssignedAutopilotProfileName") as string;
+                    var profileName = diagKey.GetValue("DeploymentProfileName") as string
+                                   ?? diagKey.GetValue("CloudAssignedAutopilotProfileName") as string;
                     if (!string.IsNullOrEmpty(profileName))
                         data.AutopilotConfig.ProfileName = profileName;
+
+                    var correlationId = diagKey.GetValue("ZtdCorrelationId") as string;
+                    if (!string.IsNullOrEmpty(correlationId))
+                        data.AutopilotConfig.CorrelationId = correlationId;
+
+                    // ForcedEnrollment from diagnostics (fallback if policy cache didn't have it)
+                    if (!data.AutopilotConfig.ForcedEnrollment)
+                    {
+                        var forced = diagKey.GetValue("CloudAssignedForcedEnrollment");
+                        if (forced != null)
+                            data.AutopilotConfig.ForcedEnrollment = Convert.ToInt32(forced) != 0;
+                    }
+
+                    // Tenant domain from diagnostics (fallback)
+                    if (string.IsNullOrEmpty(data.AutopilotConfig.TenantDomain))
+                    {
+                        var domain = diagKey.GetValue("CloudAssignedTenantDomain") as string;
+                        if (!string.IsNullOrEmpty(domain))
+                            data.AutopilotConfig.TenantDomain = domain;
+                    }
+
+                    // Tenant ID from diagnostics (fallback)
+                    if (string.IsNullOrEmpty(data.AutopilotConfig.TenantId))
+                    {
+                        var tid = diagKey.GetValue("CloudAssignedTenantId") as string;
+                        if (!string.IsNullOrEmpty(tid))
+                            data.AutopilotConfig.TenantId = tid;
+                    }
+                }
+
+                // Set status if still unknown (diagnostics-only path)
+                if (data.AutopilotConfig.Activated && string.IsNullOrEmpty(data.AutopilotConfig.Status))
+                {
+                    data.AutopilotConfig.Status = "Unknown";
                 }
 
                 if (!data.AutopilotConfig.Activated)
                 {
                     _logger.LogDebug("No AutoPilot registry keys found - device was not provisioned via AutoPilot");
                 }
+                else
+                {
+                    _logger.LogDebug("AutoPilot status: {Status} (Registered={Registered}, Profile={Profile}, Mode={Mode})",
+                        data.AutopilotConfig.Status, data.AutopilotConfig.Registered,
+                        data.AutopilotConfig.ProfileName, data.AutopilotConfig.DeploymentMode);
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Error reading AutoPilot registry keys");
             }
-        }
-
-        /// <summary>
-        /// Determines enrollment type based on device join state.
-        /// Hybrid Entra Join = both Entra AND Domain joined (must check first!)
-        /// Entra Joined = cloud-only modern management
-        /// Domain Joined = legacy on-prem only
-        /// </summary>
-        private string DetermineEnrollmentType(DeviceState deviceState)
-        {
-            // IMPORTANT: Check Hybrid first - these devices have BOTH EntraJoined AND DomainJoined = true
-            if (deviceState.EntraJoined && deviceState.DomainJoined)
-                return "Hybrid Entra Join";
-            else if (deviceState.EntraJoined)
-                return "Entra Joined";
-            else if (deviceState.DomainJoined)
-                return "Domain Joined";
-            else
-                return "Unmanaged";
         }
 
         public override async Task<bool> ValidateModuleDataAsync(ManagementData data)
@@ -1016,76 +1170,16 @@ $apps -join '|'
             }
         }
 
-        /// <summary>
-        /// Process compliance policies from Intune Management Extension
-        /// </summary>
-        private async Task ProcessCompliancePoliciesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
-        {
-            _logger.LogDebug("Processing compliance policies");
-            
-            try
-            {
-                // Simplified - just get DeviceCompliance policy area settings
-                var script = @"
-$path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\DeviceCompliance'
-if (Test-Path $path) {
-    $props = Get-ItemProperty $path -ErrorAction SilentlyContinue
-    $names = $props.PSObject.Properties | Where-Object { $_.Name -notlike 'PS*' -and $_.Name -notlike '*_*' } | Select-Object -ExpandProperty Name
-    $names -join ','
-} else { '' }
-";
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var result = await ExecuteWithTimeoutAsync(() => _wmiHelperService.ExecutePowerShellCommandAsync(script), cts.Token);
-                
-                if (!string.IsNullOrEmpty(result))
-                {
-                    var policyNames = result.Split(',', StringSplitOptions.RemoveEmptyEntries);
-                    _logger.LogDebug("Found {Count} compliance policy settings", policyNames.Length);
-                    
-                    foreach (var name in policyNames)
-                    {
-                        var trimmedName = name.Trim();
-                        if (!string.IsNullOrEmpty(trimmedName))
-                        {
-                            // Format the name for display (add spaces before capitals)
-                            var formattedName = System.Text.RegularExpressions.Regex.Replace(trimmedName, "([a-z])([A-Z])", "$1 $2");
-                            
-                            data.CompliancePolicies.Add(new ManagementData.CompliancePolicy
-                            {
-                                Name = formattedName,
-                                PolicyId = $"DeviceCompliance_{trimmedName}",
-                                Status = "Applied",
-                                LastEvaluated = DateTime.UtcNow
-                            });
-                        }
-                    }
-                }
-                
-                _logger.LogInformation("Processed {PolicyCount} compliance policies", data.CompliancePolicies.Count);
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogWarning("Compliance policies collection timed out");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to process compliance policies");
-            }
-        }
-
-        /// <summary>
-        /// Execute an async task with a timeout
-        /// </summary>
         private async Task<T?> ExecuteWithTimeoutAsync<T>(Func<Task<T?>> taskFunc, CancellationToken cancellationToken)
         {
             var task = taskFunc();
             var completedTask = await Task.WhenAny(task, Task.Delay(Timeout.Infinite, cancellationToken));
-            
+
             if (completedTask == task)
             {
                 return await task;
             }
-            
+
             throw new OperationCanceledException(cancellationToken);
         }
 
@@ -1094,10 +1188,7 @@ if (Test-Path $path) {
         /// </summary>
         private string FormatPolicyAreaName(string policyArea)
         {
-            // Add spaces before capital letters and handle common abbreviations
             var formatted = System.Text.RegularExpressions.Regex.Replace(policyArea, "([a-z])([A-Z])", "$1 $2");
-            
-            // Handle specific policy area names for better display
             return policyArea switch
             {
                 "WiFi" => "Wi-Fi Configuration",
@@ -1199,9 +1290,9 @@ if (Test-Path $path) {
         {
             return policyArea.ToLower() switch
             {
-                var s when s.Contains("security") || s.Contains("defender") || s.Contains("firewall") || 
+                var s when s.Contains("security") || s.Contains("defender") || s.Contains("firewall") ||
                            s.Contains("bitlocker") || s.Contains("guard") || s.Contains("smartscreen") => "Security",
-                var s when s.Contains("wifi") || s.Contains("vpn") || s.Contains("network") || 
+                var s when s.Contains("wifi") || s.Contains("vpn") || s.Contains("network") ||
                            s.Contains("bluetooth") || s.Contains("cellular") => "Network",
                 var s when s.Contains("app") || s.Contains("browser") || s.Contains("store") => "Application",
                 var s when s.Contains("update") || s.Contains("delivery") => "Updates",
@@ -1210,6 +1301,769 @@ if (Test-Path $path) {
                 var s when s.Contains("user") || s.Contains("authentication") || s.Contains("credential") => "Identity",
                 _ => "Configuration"
             };
+        }
+
+        // =====================================================================
+        // Policy & Configuration Collection (consolidated from profiles module)
+        // =====================================================================
+
+        private void ProcessGroupPolicySettings(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            if (!osqueryResults.TryGetValue("group_policy_registry", out var gpResults)) return;
+
+            foreach (var result in gpResults)
+            {
+                var registryPolicy = new RegistryPolicy
+                {
+                    KeyPath = result.GetValueOrDefault("path", "").ToString() ?? "",
+                    ValueName = result.GetValueOrDefault("name", "").ToString() ?? "",
+                    Value = result.GetValueOrDefault("data", "").ToString() ?? "",
+                    Type = result.GetValueOrDefault("type", "").ToString() ?? "",
+                    Source = "Group Policy",
+                    Category = ExtractPolicyCategory(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                    LastModified = DateTime.UtcNow
+                };
+
+                data.RegistryPolicies.Add(registryPolicy);
+            }
+
+            _logger.LogDebug("Processed {Count} Group Policy registry settings", gpResults.Count);
+        }
+
+        private void ProcessMDMConfigurations(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            var mdmQueries = new[] { "mdm_configuration_policies", "csp_policy_configurations", "intune_policy_manager" };
+
+            foreach (var queryName in mdmQueries)
+            {
+                if (!osqueryResults.TryGetValue(queryName, out var results)) continue;
+
+                foreach (var result in results)
+                {
+                    var mdmConfig = new MDMConfiguration
+                    {
+                        CSPPath = result.GetValueOrDefault("path", "").ToString() ?? "",
+                        CSPName = result.GetValueOrDefault("name", "").ToString() ?? "",
+                        Value = result.GetValueOrDefault("data", "").ToString() ?? "",
+                        DataType = result.GetValueOrDefault("type", "").ToString() ?? "",
+                        ProviderName = ExtractProviderName(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                        LastUpdated = DateTime.UtcNow,
+                        Status = "Applied",
+                        Description = GetCSPDescription(result.GetValueOrDefault("path", "").ToString() ?? "")
+                    };
+
+                    data.MDMConfigurations.Add(mdmConfig);
+                }
+
+                _logger.LogDebug("Processed {Count} MDM configurations from {QueryName}", results.Count, queryName);
+            }
+        }
+
+        private void ProcessIntunePolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            var intuneQueries = new[] { 
+                "intune_enrollment_info", 
+                "intune_management_extensions",
+                "device_configuration_policies",
+                "settings_catalog_policies",
+                "administrative_templates",
+                "intune_defender_policies",
+                "intune_application_policies", 
+                "intune_browser_policies",
+                "intune_privacy_policies",
+                "intune_security_policies",
+                "intune_dataprotection_policies"
+            };
+
+            foreach (var queryName in intuneQueries)
+            {
+                if (!osqueryResults.TryGetValue(queryName, out var results)) continue;
+
+                var policiesById = new Dictionary<string, IntunePolicy>();
+
+                foreach (var result in results)
+                {
+                    var policyId = ExtractPolicyId(result.GetValueOrDefault("path", "").ToString() ?? "");
+                    var settingName = result.GetValueOrDefault("name", "").ToString() ?? "";
+                    var settingValue = result.GetValueOrDefault("data", "").ToString() ?? "";
+                    var settingType = result.GetValueOrDefault("type", "").ToString() ?? "";
+                    var registryPath = result.GetValueOrDefault("path", "").ToString() ?? "";
+
+                    if (!policiesById.TryGetValue(policyId, out var intunePolicy))
+                    {
+                        intunePolicy = new IntunePolicy
+                        {
+                            PolicyId = policyId,
+                            PolicyName = ExtractPolicyNameFromPath(registryPath) ?? policyId,
+                            PolicyType = DetermineIntunePolicyType(queryName, registryPath),
+                            Platform = "Windows",
+                            AssignedDate = DateTime.UtcNow,
+                            LastSync = DateTime.UtcNow,
+                            Status = "Applied",
+                            EnforcementState = "Enforced",
+                            Settings = new List<PolicySetting>(),
+                            Configuration = new Dictionary<string, object>()
+                        };
+                        policiesById[policyId] = intunePolicy;
+                    }
+
+                    if (!IsMetadataProperty(settingName))
+                    {
+                        var policySetting = new PolicySetting
+                        {
+                            Name = settingName,
+                            DisplayName = GetDisplayNameForSetting(settingName),
+                            Value = settingValue,
+                            Type = settingType,
+                            Category = ExtractPolicyCategory(registryPath),
+                            IsEnabled = DetermineIfSettingIsEnabled(settingName, settingValue),
+                            Description = GetSettingDescription(settingName, registryPath),
+                            Attributes = new Dictionary<string, object>
+                            {
+                                ["RegistryPath"] = registryPath,
+                                ["RegistryType"] = settingType
+                            }
+                        };
+
+                        intunePolicy.Settings.Add(policySetting);
+                    }
+
+                    if (!string.IsNullOrEmpty(settingValue))
+                    {
+                        intunePolicy.Configuration[settingName] = settingValue;
+                    }
+                }
+
+                foreach (var policy in policiesById.Values)
+                {
+                    data.IntunePolicies.Add(policy);
+                }
+
+                _logger.LogDebug("Processed {Count} Intune policies from {QueryName} with {SettingsCount} total settings", 
+                    policiesById.Count, queryName, policiesById.Values.Sum(p => p.Settings.Count));
+            }
+        }
+
+        private async Task CollectMDMPoliciesViaPowerShellAsync(ManagementData data)
+        {
+            try
+            {
+                var powerShellScript = @"
+$policies = @()
+$policyAreas = Get-ChildItem -Path 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device' -ErrorAction SilentlyContinue
+
+foreach ($area in $policyAreas) {
+    $areaName = $area.PSChildName
+    try {
+        $properties = Get-ItemProperty -Path ""HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\$areaName"" -ErrorAction SilentlyContinue
+        if ($properties) {
+            $settings = @{}
+            $properties.PSObject.Properties | Where-Object { 
+                $_.Name -notmatch '^PS' -and 
+                $_.Name -ne 'PSPath' -and 
+                $_.Name -ne 'PSParentPath' -and 
+                $_.Name -ne 'PSChildName' -and 
+                $_.Name -ne 'PSDrive' -and 
+                $_.Name -ne 'PSProvider' 
+            } | ForEach-Object {
+                $settings[$_.Name] = $_.Value
+            }
+            if ($settings.Count -gt 0) {
+                $policyObj = [PSCustomObject]@{
+                    PolicyArea = $areaName
+                    Settings = $settings
+                    RegistryPath = $area.Name
+                }
+                $policies += $policyObj
+            }
+        }
+    }
+    catch {
+        Write-Warning ""Failed to process policy area: $areaName - $($_.Exception.Message)""
+    }
+}
+
+$policies | ConvertTo-Json -Depth 3 -Compress
+";
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                var jsonResult = await ExecuteWithTimeoutAsync(() => _wmiHelperService.ExecutePowerShellCommandAsync(powerShellScript), cts.Token);
+                
+                if (!string.IsNullOrEmpty(jsonResult))
+                {
+                    var policyData = System.Text.Json.JsonSerializer.Deserialize(jsonResult, ReportMateJsonContext.Default.PolicyCollectionResultArray);
+                    
+                    if (policyData != null)
+                    {
+                        foreach (var policy in policyData)
+                        {
+                            var intunePolicy = new IntunePolicy
+                            {
+                                PolicyId = Guid.NewGuid().ToString(),
+                                PolicyName = policy.PolicyArea,
+                                PolicyType = DeterminePolicyTypeFromArea(policy.PolicyArea),
+                                Platform = "Windows",
+                                AssignedDate = DateTime.UtcNow,
+                                LastSync = DateTime.UtcNow,
+                                Status = "Applied",
+                                EnforcementState = "Enforced",
+                                Settings = new List<PolicySetting>(),
+                                Configuration = policy.Settings ?? new Dictionary<string, object>()
+                            };
+
+                            if (policy.Settings != null)
+                            {
+                                foreach (var setting in policy.Settings)
+                                {
+                                    if (!IsMetadataProperty(setting.Key))
+                                    {
+                                        var policySetting = new PolicySetting
+                                        {
+                                            Name = setting.Key,
+                                            DisplayName = GetDisplayNameForSetting(setting.Key),
+                                            Value = setting.Value?.ToString() ?? "",
+                                            Type = DetermineValueType(setting.Value),
+                                            Category = policy.PolicyArea,
+                                            IsEnabled = DetermineIfSettingIsEnabled(setting.Key, setting.Value?.ToString() ?? ""),
+                                            Description = GetSettingDescription(setting.Key, policy.RegistryPath ?? ""),
+                                            Attributes = new Dictionary<string, object>
+                                            {
+                                                ["RegistryPath"] = policy.RegistryPath ?? "",
+                                                ["PolicyArea"] = policy.PolicyArea
+                                            }
+                                        };
+
+                                        intunePolicy.Settings.Add(policySetting);
+                                    }
+                                }
+                            }
+
+                            if (intunePolicy.Settings.Count > 0 || intunePolicy.Configuration.Count > 0)
+                            {
+                                data.IntunePolicies.Add(intunePolicy);
+                            }
+                        }
+                    }
+                }
+
+                _logger.LogInformation("Collected {Count} MDM policies via PowerShell", data.IntunePolicies.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("MDM policy collection via PowerShell timed out");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to collect MDM policies via PowerShell");
+            }
+        }
+
+        private void ProcessOMAURISettings(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            if (!osqueryResults.TryGetValue("oma_uri_settings", out var results)) return;
+
+            foreach (var result in results)
+            {
+                var omaUri = new OMAURISetting
+                {
+                    URI = ExtractOMAURI(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                    Value = result.GetValueOrDefault("data", "").ToString() ?? "",
+                    DataType = result.GetValueOrDefault("type", "").ToString() ?? "",
+                    ProfileName = ExtractProfileName(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                    DeployedDate = DateTime.UtcNow,
+                    Status = "Applied",
+                    Description = GetOMAURIDescription(result.GetValueOrDefault("path", "").ToString() ?? "")
+                };
+
+                data.OMAURISettings.Add(omaUri);
+            }
+
+            _logger.LogDebug("Processed {Count} OMA-URI settings", results.Count);
+        }
+
+        private void ProcessSecurityPolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            var securityQueries = new[] { 
+                "windows_defender_policies", 
+                "firewall_policies", 
+                "bitlocker_policies",
+                "credential_guard_policies",
+                "app_locker_policies",
+                "endpoint_protection_policies"
+            };
+
+            foreach (var queryName in securityQueries)
+            {
+                if (!osqueryResults.TryGetValue(queryName, out var results)) continue;
+
+                foreach (var result in results)
+                {
+                    var securityPolicy = new SecurityPolicy
+                    {
+                        PolicyName = result.GetValueOrDefault("name", "").ToString() ?? "",
+                        PolicyArea = ExtractSecurityArea(queryName),
+                        Setting = result.GetValueOrDefault("name", "").ToString() ?? "",
+                        Value = result.GetValueOrDefault("data", "").ToString() ?? "",
+                        Source = DetermineSecuritySource(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                        LastApplied = DateTime.UtcNow,
+                        ComplianceStatus = "Compliant",
+                        Severity = DetermineSecuritySeverity(result.GetValueOrDefault("name", "").ToString() ?? "")
+                    };
+
+                    data.SecurityPolicies.Add(securityPolicy);
+                }
+
+                _logger.LogDebug("Processed {Count} security policies from {QueryName}", results.Count, queryName);
+            }
+
+            // If no traditional security policies found, extract from Intune policies
+            if (data.SecurityPolicies.Count == 0 && data.IntunePolicies.Count > 0)
+            {
+                _logger.LogDebug("No traditional security policies found, extracting from Intune policies");
+                ExtractSecurityPoliciesFromIntunePolicies(data);
+            }
+        }
+
+        private void ExtractSecurityPoliciesFromIntunePolicies(ManagementData data)
+        {
+            var securityPolicyAreas = new[] { "Defender", "Security", "DataProtection", "Browser", "Privacy", "ApplicationManagement" };
+
+            foreach (var intunePolicy in data.IntunePolicies)
+            {
+                if (!securityPolicyAreas.Contains(intunePolicy.PolicyName)) continue;
+
+                foreach (var setting in intunePolicy.Settings)
+                {
+                    if (IsSecuritySetting(setting.Name, intunePolicy.PolicyName))
+                    {
+                        data.SecurityPolicies.Add(new SecurityPolicy
+                        {
+                            PolicyName = setting.DisplayName ?? setting.Name,
+                            PolicyArea = MapIntunePolicyAreaToSecurityArea(intunePolicy.PolicyName),
+                            Setting = setting.Name,
+                            Value = setting.Value,
+                            Source = "Microsoft Intune",
+                            LastApplied = intunePolicy.LastSync ?? DateTime.UtcNow,
+                            ComplianceStatus = DetermineComplianceFromValue(setting.Value, setting.IsEnabled),
+                            Severity = DetermineIntuneSecuritySeverity(setting.Name, intunePolicy.PolicyName)
+                        });
+                    }
+                }
+            }
+
+            _logger.LogDebug("Extracted {Count} security policies from Intune policies", data.SecurityPolicies.Count);
+        }
+
+        private void ProcessCompliancePolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            if (!osqueryResults.TryGetValue("security_compliance_policies", out var results)) return;
+
+            foreach (var result in results)
+            {
+                var compliancePolicy = new CompliancePolicy
+                {
+                    PolicyId = ExtractPolicyId(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                    PolicyName = result.GetValueOrDefault("name", "").ToString() ?? "",
+                    ComplianceType = ExtractComplianceType(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                    RequiredValue = "Enabled",
+                    CurrentValue = result.GetValueOrDefault("data", "").ToString() ?? "",
+                    IsCompliant = !string.IsNullOrEmpty(result.GetValueOrDefault("data", "").ToString()),
+                    LastEvaluated = DateTime.UtcNow,
+                    ErrorMessage = "",
+                    RequiredActions = new List<string>()
+                };
+
+                data.CompliancePolicies.Add(compliancePolicy);
+            }
+
+            _logger.LogDebug("Processed {Count} compliance policies", results.Count);
+        }
+
+        private void ProcessBrowserPolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            var browserQueries = new[] { "edge_browser_policies", "chrome_browser_policies" };
+
+            foreach (var queryName in browserQueries)
+            {
+                if (!osqueryResults.TryGetValue(queryName, out var results)) continue;
+
+                foreach (var result in results)
+                {
+                    var configProfile = new ConfigurationProfile
+                    {
+                        Name = result.GetValueOrDefault("name", "").ToString() ?? "",
+                        Source = queryName.Contains("edge") ? "Microsoft Edge" : "Google Chrome",
+                        Category = "Browser Policy",
+                        InstallDate = DateTime.UtcNow,
+                        Status = "Applied",
+                        Settings = new Dictionary<string, object>
+                        {
+                            ["RegistryPath"] = result.GetValueOrDefault("path", "").ToString() ?? "",
+                            ["Value"] = result.GetValueOrDefault("data", "").ToString() ?? "",
+                            ["Type"] = result.GetValueOrDefault("type", "").ToString() ?? ""
+                        }
+                    };
+
+                    data.ConfigurationProfiles.Add(configProfile);
+                }
+
+                _logger.LogDebug("Processed {Count} browser policies from {QueryName}", results.Count, queryName);
+            }
+        }
+
+        private void ProcessOfficePolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            if (!osqueryResults.TryGetValue("office_policies", out var results)) return;
+
+            foreach (var result in results)
+            {
+                var configProfile = new ConfigurationProfile
+                {
+                    Name = result.GetValueOrDefault("name", "").ToString() ?? "",
+                    Source = "Microsoft Office",
+                    Category = "Office Policy",
+                    InstallDate = DateTime.UtcNow,
+                    Status = "Applied",
+                    Settings = new Dictionary<string, object>
+                    {
+                        ["RegistryPath"] = result.GetValueOrDefault("path", "").ToString() ?? "",
+                        ["Value"] = result.GetValueOrDefault("data", "").ToString() ?? "",
+                        ["Type"] = result.GetValueOrDefault("type", "").ToString() ?? ""
+                    }
+                };
+
+                data.ConfigurationProfiles.Add(configProfile);
+            }
+
+            _logger.LogDebug("Processed {Count} Office policies", results.Count);
+        }
+
+        /// <summary>
+        /// Populate SettingCount on legacy MdmProfile from IntunePolicies data
+        /// </summary>
+        #pragma warning disable CS0618 // Obsolete members used intentionally for migration
+        private void PopulateProfileSettingCounts(ManagementData data)
+        {
+            foreach (var profile in data.Profiles)
+            {
+                var matchingPolicy = data.IntunePolicies.FirstOrDefault(p => 
+                    string.Equals(p.PolicyName, profile.Identifier, StringComparison.OrdinalIgnoreCase));
+                if (matchingPolicy != null)
+                {
+                    profile.SettingCount = matchingPolicy.Settings.Count;
+                }
+            }
+        }
+        #pragma warning restore CS0618
+
+        private void CalculatePolicySummary(ManagementData data)
+        {
+            data.TotalPoliciesApplied = data.RegistryPolicies.Count + 
+                                      data.MDMConfigurations.Count + 
+                                      data.IntunePolicies.Count + 
+                                      data.OMAURISettings.Count + 
+                                      data.SecurityPolicies.Count + 
+                                      data.CompliancePolicies.Count + 
+                                      data.ConfigurationProfiles.Count;
+
+            var sources = new Dictionary<string, int>();
+            
+            foreach (var policy in data.RegistryPolicies)
+                sources[policy.Source] = sources.GetValueOrDefault(policy.Source, 0) + 1;
+
+            foreach (var _ in data.MDMConfigurations)
+                sources["MDM"] = sources.GetValueOrDefault("MDM", 0) + 1;
+
+            foreach (var _ in data.IntunePolicies)
+                sources["Intune"] = sources.GetValueOrDefault("Intune", 0) + 1;
+
+            foreach (var _ in data.OMAURISettings)
+                sources["OMA-URI"] = sources.GetValueOrDefault("OMA-URI", 0) + 1;
+
+            foreach (var security in data.SecurityPolicies)
+                sources[security.Source] = sources.GetValueOrDefault(security.Source, 0) + 1;
+
+            foreach (var _ in data.CompliancePolicies)
+                sources["Compliance"] = sources.GetValueOrDefault("Compliance", 0) + 1;
+
+            foreach (var profile in data.ConfigurationProfiles)
+                sources[profile.Source] = sources.GetValueOrDefault(profile.Source, 0) + 1;
+
+            data.PolicyCountsBySource = sources;
+        }
+
+        // =====================================================================
+        // Policy Helper Methods
+        // =====================================================================
+
+        private string ExtractPolicyCategory(string path)
+        {
+            if (path.Contains("\\Policies\\Microsoft\\Windows Defender\\")) return "Windows Defender";
+            if (path.Contains("\\Policies\\Microsoft\\WindowsFirewall\\")) return "Windows Firewall";
+            if (path.Contains("\\Policies\\Microsoft\\Windows\\WindowsUpdate\\")) return "Windows Update";
+            if (path.Contains("\\Policies\\Microsoft\\FVE\\")) return "BitLocker";
+            if (path.Contains("\\Policies\\Microsoft\\Edge\\")) return "Microsoft Edge";
+            if (path.Contains("\\Policies\\Google\\Chrome\\")) return "Google Chrome";
+            if (path.Contains("\\Policies\\Microsoft\\Office\\")) return "Microsoft Office";
+            if (path.Contains("\\PolicyManager\\")) return "MDM";
+            return "General";
+        }
+
+        private string ExtractProviderName(string path)
+        {
+            if (path.Contains("\\PolicyManager\\")) return "Microsoft Intune";
+            if (path.Contains("\\Enrollments\\")) return "MDM Enrollment";
+            return "Unknown";
+        }
+
+        private string GetCSPDescription(string path)
+        {
+            var pathParts = path.Split('\\');
+            if (pathParts.Length > 3)
+            {
+                var cspName = pathParts[pathParts.Length - 2];
+                return $"Configuration Service Provider: {cspName}";
+            }
+            return "MDM Configuration Setting";
+        }
+
+        private string ExtractPolicyId(string path)
+        {
+            var guid = path.Split('\\').FirstOrDefault(p => Guid.TryParse(p, out _));
+            return guid ?? Guid.NewGuid().ToString();
+        }
+
+        private string DetermineIntunePolicyType(string queryName, string path)
+        {
+            return queryName switch
+            {
+                "device_configuration_policies" => "Device Configuration",
+                "security_compliance_policies" => "Device Compliance",
+                "settings_catalog_policies" => "Settings Catalog",
+                "administrative_templates" => "Administrative Template",
+                "intune_enrollment_info" => "Enrollment Configuration",
+                "intune_management_extensions" => "Management Extension",
+                _ => "Configuration"
+            };
+        }
+
+        private string DeterminePolicyTypeFromArea(string policyArea)
+        {
+            return policyArea switch
+            {
+                "Defender" => "Endpoint Protection",
+                "ApplicationManagement" => "Application Management",
+                "Browser" => "Browser Management",
+                "Privacy" => "Privacy Settings",
+                "Security" => "Security Configuration",
+                "DataProtection" => "Data Protection",
+                "DeviceHealthMonitoring" => "Device Health Monitoring",
+                _ => "Device Configuration"
+            };
+        }
+
+        private string DetermineValueType(object? value)
+        {
+            if (value == null) return "null";
+            return value.GetType().Name switch
+            {
+                "Int32" => "REG_DWORD",
+                "String" => "REG_SZ",
+                "Boolean" => "REG_DWORD",
+                _ => "REG_SZ"
+            };
+        }
+
+        private string ExtractOMAURI(string path)
+        {
+            var pathParts = path.Split('\\');
+            for (int i = 0; i < pathParts.Length - 1; i++)
+            {
+                if (pathParts[i].StartsWith("./"))
+                    return string.Join("/", pathParts.Skip(i));
+            }
+            return path;
+        }
+
+        private string ExtractProfileName(string path)
+        {
+            if (path.Contains("\\PolicyManager\\"))
+            {
+                var parts = path.Split('\\');
+                return parts.Length > 5 ? parts[5] : "Unknown Profile";
+            }
+            return "Custom Profile";
+        }
+
+        private string GetOMAURIDescription(string path)
+        {
+            if (path.Contains("DeviceConfiguration")) return "Device Configuration via OMA-URI";
+            if (path.Contains("DeviceCompliance")) return "Device Compliance via OMA-URI";
+            return "Custom OMA-URI Setting";
+        }
+
+        private string ExtractSecurityArea(string queryName)
+        {
+            return queryName switch
+            {
+                "windows_defender_policies" => "Windows Defender",
+                "firewall_policies" => "Windows Firewall",
+                "bitlocker_policies" => "BitLocker",
+                "credential_guard_policies" => "Credential Guard",
+                "app_locker_policies" => "AppLocker",
+                "endpoint_protection_policies" => "Endpoint Protection",
+                _ => "Security"
+            };
+        }
+
+        private string DetermineSecuritySource(string path)
+        {
+            if (path.Contains("\\Policies\\")) return "Group Policy";
+            if (path.Contains("\\PolicyManager\\")) return "MDM";
+            return "Registry";
+        }
+
+        private string DetermineSecuritySeverity(string settingName)
+        {
+            var lowerName = settingName.ToLower();
+            if (new[] { "disable", "block", "prevent", "restrict", "deny" }.Any(k => lowerName.Contains(k)))
+                return "High";
+            if (new[] { "enable", "allow", "permit", "audit" }.Any(k => lowerName.Contains(k)))
+                return "Low";
+            return "Medium";
+        }
+
+        private string ExtractComplianceType(string path)
+        {
+            if (path.Contains("DeviceCompliance")) return "Device Compliance";
+            if (path.Contains("SecurityBaseline")) return "Security Baseline";
+            return "Compliance Rule";
+        }
+
+        private string? ExtractPolicyNameFromPath(string registryPath)
+        {
+            var pathParts = registryPath.Split('\\');
+            for (int i = 0; i < pathParts.Length; i++)
+            {
+                if (pathParts[i] == "device" && i + 1 < pathParts.Length)
+                    return pathParts[i + 1];
+            }
+            return null;
+        }
+
+        private bool IsMetadataProperty(string propertyName)
+        {
+            var metadataKeywords = new[] { "_ProviderSet", "_WinningProvider", "_LastWrite", "_ADMXInstanceData" };
+            return metadataKeywords.Any(keyword => propertyName.Contains(keyword));
+        }
+
+        private string GetDisplayNameForSetting(string settingName)
+        {
+            return settingName
+                .Replace("_ProviderSet", "")
+                .Replace("_WinningProvider", "")
+                .Replace("AllowArchiveScanning", "Allow Archive Scanning")
+                .Replace("AllowEmailScanning", "Allow Email Scanning")
+                .Replace("AllowRealtimeMonitoring", "Allow Real-time Monitoring")
+                .Replace("EnableNetworkProtection", "Enable Network Protection")
+                .Replace("SubmitSamplesConsent", "Submit Samples Consent")
+                .Replace("AllowCloudProtection", "Allow Cloud Protection")
+                .Replace("AllowBehaviorMonitoring", "Allow Behavior Monitoring")
+                ?? settingName;
+        }
+
+        private bool DetermineIfSettingIsEnabled(string settingName, string settingValue)
+        {
+            if (string.IsNullOrEmpty(settingValue)) return false;
+            return settingValue == "1" || 
+                   settingValue.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                   settingValue.Equals("enabled", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string GetSettingDescription(string settingName, string registryPath)
+        {
+            var descriptions = new Dictionary<string, string>
+            {
+                ["AllowArchiveScanning"] = "Controls whether Windows Defender scans archive files",
+                ["AllowEmailScanning"] = "Controls whether Windows Defender scans email files", 
+                ["AllowRealtimeMonitoring"] = "Controls real-time protection monitoring",
+                ["EnableNetworkProtection"] = "Controls network protection against malicious websites",
+                ["SubmitSamplesConsent"] = "Controls automatic sample submission to Microsoft",
+                ["AllowCloudProtection"] = "Controls cloud-based protection services",
+                ["AllowBehaviorMonitoring"] = "Controls behavioral analysis and monitoring",
+                ["AllowStore"] = "Controls access to Microsoft Store",
+                ["AllowFlash"] = "Controls Flash plugin usage in browsers",
+                ["DisableWidgetsBoard"] = "Controls Windows 11 widgets board"
+            };
+
+            if (descriptions.TryGetValue(settingName, out var description))
+                return description;
+
+            if (registryPath.Contains("\\Defender\\"))
+                return "Windows Defender security setting";
+            if (registryPath.Contains("\\ApplicationManagement\\"))
+                return "Application management policy setting";
+            if (registryPath.Contains("\\Browser\\"))
+                return "Browser security and configuration setting";
+            if (registryPath.Contains("\\Privacy\\"))
+                return "Privacy and data collection setting";
+            if (registryPath.Contains("\\Security\\"))
+                return "System security configuration setting";
+
+            return $"Policy setting: {settingName}";
+        }
+
+        private bool IsSecuritySetting(string settingName, string policyArea)
+        {
+            var securityKeywords = new[] { 
+                "Allow", "Enable", "Disable", "Require", "Protection", "Monitor", "Scan", "Security", 
+                "Behavior", "Cloud", "Realtime", "IOAV", "Submit", "CPU", "Attack", "Flash", 
+                "Location", "Health", "Certificate", "Azure", "Memory", "EDP", "Revoke" 
+            };
+
+            return securityKeywords.Any(keyword => settingName.Contains(keyword, StringComparison.OrdinalIgnoreCase)) ||
+                   policyArea.Equals("Defender", StringComparison.OrdinalIgnoreCase) ||
+                   policyArea.Equals("Security", StringComparison.OrdinalIgnoreCase) ||
+                   policyArea.Equals("DataProtection", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string MapIntunePolicyAreaToSecurityArea(string intunePolicyArea)
+        {
+            return intunePolicyArea switch
+            {
+                "Defender" => "Windows Defender",
+                "Security" => "System Security",
+                "DataProtection" => "Data Protection",
+                "Browser" => "Browser Security",
+                "Privacy" => "Privacy Protection",
+                "ApplicationManagement" => "Application Security",
+                _ => "General Security"
+            };
+        }
+
+        private string DetermineComplianceFromValue(string value, bool isEnabled)
+        {
+            if (string.IsNullOrEmpty(value)) return "Unknown";
+            if (value == "1" || isEnabled) return "Compliant";
+            if (value == "0" || !isEnabled) return "Non-Compliant";
+            return "Compliant";
+        }
+
+        private string DetermineIntuneSecuritySeverity(string settingName, string policyArea)
+        {
+            var highRiskSettings = new[] { 
+                "AllowRealtimeMonitoring", "AllowBehaviorMonitoring", "AllowCloudProtection", 
+                "RequireRetrieveHealthCertificateOnBoot", "AllowDirectMemoryAccess" 
+            };
+            
+            if (highRiskSettings.Any(s => settingName.Contains(s, StringComparison.OrdinalIgnoreCase)))
+                return "High";
+
+            if (policyArea.Equals("Defender", StringComparison.OrdinalIgnoreCase) || 
+                policyArea.Equals("Security", StringComparison.OrdinalIgnoreCase))
+                return "Medium";
+
+            return "Low";
         }
     }
 }

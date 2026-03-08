@@ -300,7 +300,6 @@ public class DataCollectionService : IDataCollectionService
             ["IpAddressV6"] = "",
             ["MacAddress"] = macAddress,
             ["MdmEnrollmentId"] = modularPayload.Management?.MdmEnrollment?.EnrollmentId ?? "",
-            ["MdmEnrollmentType"] = modularPayload.Management?.MdmEnrollment?.EnrollmentType ?? "",
             ["MdmEnrollmentState"] = modularPayload.Management?.MdmEnrollment?.IsEnrolled.ToString() ?? "",
             ["MdmManagementUrl"] = modularPayload.Management?.MdmEnrollment?.ManagementUrl ?? "",
             ["Status"] = "online"

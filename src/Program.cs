@@ -510,7 +510,6 @@ public class Program
         services.AddScoped<NetworkModuleProcessor>();
         services.AddScoped<PeripheralsModuleProcessor>();
         services.AddScoped<PrinterModuleProcessor>();
-        services.AddScoped<ProfilesModuleProcessor>();
         services.AddScoped<SecurityModuleProcessor>();
         services.AddScoped<SystemModuleProcessor>();
 

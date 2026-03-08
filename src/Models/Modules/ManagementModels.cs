@@ -1,30 +1,46 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Models.Modules
 {
     /// <summary>
     /// Management module data - Mobile device management organized like dsregcmd /status
+    /// Now also includes all policy/configuration data (previously in deprecated profiles module)
     /// </summary>
     public class ManagementData : BaseModuleData
     {
+        // --- Device state & enrollment ---
         public DeviceState DeviceState { get; set; } = new();
         public DeviceDetails DeviceDetails { get; set; } = new();
         public TenantDetails TenantDetails { get; set; } = new();
         public UserState UserState { get; set; } = new();
         public DiagnosticData DiagnosticData { get; set; } = new();
         public MdmEnrollmentInfo MdmEnrollment { get; set; } = new MdmEnrollmentInfo();
+
+        [Obsolete("Use IntunePolicies instead. MdmProfile list will be removed in a future version.")]
         public List<MdmProfile> Profiles { get; set; } = new List<MdmProfile>();
-        public List<CompliancePolicy> CompliancePolicies { get; set; } = new List<CompliancePolicy>();
+
         public List<ManagedApp> ManagedApps { get; set; } = new List<ManagedApp>();
         public Dictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
-        public string OwnershipType { get; set; } = string.Empty; // Corporate, Personal, etc.
+        public string OwnershipType { get; set; } = string.Empty;
         public DateTime? LastSync { get; set; }
         public AutopilotConfig AutopilotConfig { get; set; } = new();
 
-        // Temporary compatibility properties to support migration - will be removed
+        // --- Policy & configuration data (merged from deprecated profiles module) ---
+        public List<ConfigurationProfile> ConfigurationProfiles { get; set; } = new();
+        public List<RegistryPolicy> RegistryPolicies { get; set; } = new();
+        public List<IntunePolicy> IntunePolicies { get; set; } = new();
+        public List<MDMConfiguration> MDMConfigurations { get; set; } = new();
+        public List<OMAURISetting> OMAURISettings { get; set; } = new();
+        public List<SecurityPolicy> SecurityPolicies { get; set; } = new();
+        public List<CompliancePolicy> CompliancePolicies { get; set; } = new();
+        public DateTime? LastPolicyUpdate { get; set; }
+        public int TotalPoliciesApplied { get; set; }
+        public Dictionary<string, int> PolicyCountsBySource { get; set; } = new();
+
         public class MdmEnrollmentInfo
         {
             public bool IsEnrolled { get; set; }
@@ -32,10 +48,12 @@ namespace ReportMate.WindowsClient.Models.Modules
             public string? EnrollmentId { get; set; }
             public string? UserPrincipalName { get; set; }
             public string? ManagementUrl { get; set; }
-            public string? EnrollmentType { get; set; }
             public string? ServerUrl { get; set; }
+            /// <summary>How the device was enrolled: Auto-Enrolled, User-Enrolled, Bulk Enrolled, Co-Managed</summary>
+            public string? EnrollmentMethod { get; set; }
         }
 
+        [Obsolete("Use IntunePolicies instead. MdmProfile will be removed in a future version.")]
         public class MdmProfile
         {
             public string? Name { get; set; }
@@ -44,15 +62,6 @@ namespace ReportMate.WindowsClient.Models.Modules
             public string? Status { get; set; }
             public string? Provider { get; set; }
             public int SettingCount { get; set; }
-        }
-
-        public class CompliancePolicy
-        {
-            public string? Name { get; set; }
-            public string? Status { get; set; }
-            public DateTime? LastEvaluated { get; set; }
-            public string? PolicyId { get; set; }
-            public string? ErrorCode { get; set; }
         }
 
         /// <summary>
@@ -66,11 +75,126 @@ namespace ReportMate.WindowsClient.Models.Modules
             public string? InstallState { get; set; }
             public string? ComplianceState { get; set; }
             public string? EnforcementState { get; set; }
-            public string? AppType { get; set; } // Win32, MSI, Store, etc.
+            public string? AppType { get; set; }
             public string? ErrorCode { get; set; }
             public DateTime? LastInstallAttempt { get; set; }
-            public string? TargetType { get; set; } // Required, Available, Uninstall
+            public string? TargetType { get; set; }
         }
+    }
+
+    // --- Policy model classes (consolidated from deprecated profiles module) ---
+
+    public class ConfigurationProfile
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Identifier { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public DateTime? InstallDate { get; set; }
+        public DateTime? LastModified { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public Dictionary<string, object> Settings { get; set; } = new();
+        public List<string> AppliedSettings { get; set; } = new();
+    }
+
+    public class RegistryPolicy
+    {
+        public string KeyPath { get; set; } = string.Empty;
+        public string ValueName { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public DateTime? LastModified { get; set; }
+    }
+
+    public class IntunePolicy
+    {
+        public string PolicyId { get; set; } = string.Empty;
+        public string PolicyName { get; set; } = string.Empty;
+        public string PolicyType { get; set; } = string.Empty;
+        public string Platform { get; set; } = string.Empty;
+        public DateTime? AssignedDate { get; set; }
+        public DateTime? LastSync { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public string EnforcementState { get; set; } = string.Empty;
+        public List<PolicySetting> Settings { get; set; } = new();
+        public Dictionary<string, object> Configuration { get; set; } = new();
+    }
+
+    public class MDMConfiguration
+    {
+        public string CSPPath { get; set; } = string.Empty;
+        public string CSPName { get; set; } = string.Empty;
+        public string ProviderName { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public string DataType { get; set; } = string.Empty;
+        public DateTime? LastUpdated { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public Dictionary<string, object> Metadata { get; set; } = new();
+    }
+
+    public class OMAURISetting
+    {
+        public string URI { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public string DataType { get; set; } = string.Empty;
+        public string ProfileName { get; set; } = string.Empty;
+        public DateTime? DeployedDate { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public Dictionary<string, object> Properties { get; set; } = new();
+    }
+
+    public class SecurityPolicy
+    {
+        public string PolicyName { get; set; } = string.Empty;
+        public string PolicyArea { get; set; } = string.Empty;
+        public string Setting { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty;
+        public DateTime? LastApplied { get; set; }
+        public string ComplianceStatus { get; set; } = string.Empty;
+        public string Severity { get; set; } = string.Empty;
+        public Dictionary<string, object> Details { get; set; } = new();
+    }
+
+    public class CompliancePolicy
+    {
+        public string PolicyId { get; set; } = string.Empty;
+        public string PolicyName { get; set; } = string.Empty;
+        public string ComplianceType { get; set; } = string.Empty;
+        public string RequiredValue { get; set; } = string.Empty;
+        public string CurrentValue { get; set; } = string.Empty;
+        public bool IsCompliant { get; set; }
+        public DateTime? LastEvaluated { get; set; }
+        public string ErrorMessage { get; set; } = string.Empty;
+        public List<string> RequiredActions { get; set; } = new();
+    }
+
+    public class PolicySetting
+    {
+        public string Name { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public bool IsEnabled { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public Dictionary<string, object> Attributes { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Supporting class for PowerShell policy deserialization
+    /// </summary>
+    public class PolicyCollectionResult
+    {
+        public string PolicyArea { get; set; } = string.Empty;
+        public Dictionary<string, object>? Settings { get; set; }
+        public string? RegistryPath { get; set; }
     }
 
     public class DeviceState
@@ -221,9 +345,24 @@ namespace ReportMate.WindowsClient.Models.Modules
     public class AutopilotConfig
     {
         /// <summary>
-        /// Whether AutoPilot policy cache exists (device was provisioned via AutoPilot)
+        /// Whether AutoPilot registry keys are present (client infrastructure exists)
         /// </summary>
         public bool Activated { get; set; }
+
+        /// <summary>
+        /// Whether the device is registered in the Autopilot service (no ZTD error)
+        /// </summary>
+        public bool Registered { get; set; }
+
+        /// <summary>
+        /// Human-readable registration status: "Registered", "Not Registered", "Unknown"
+        /// </summary>
+        public string Status { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Error detail from ZTD check (e.g. "ZtdDeviceIsNotRegistered")
+        /// </summary>
+        public string StatusDetail { get; set; } = string.Empty;
 
         /// <summary>
         /// AutoPilot tenant ID from policy cache
@@ -236,7 +375,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string TenantDomain { get; set; } = string.Empty;
 
         /// <summary>
-        /// AutoPilot profile assigned to the device
+        /// AutoPilot deployment profile assigned to the device
         /// </summary>
         public string ProfileName { get; set; } = string.Empty;
 
@@ -244,5 +383,25 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// Whether the device was cloud-assigned (OOBE provisioned)
         /// </summary>
         public bool CloudAssigned { get; set; }
+
+        /// <summary>
+        /// Deployment mode: "User-Driven", "Self-Deploying", "Pre-Provisioned"
+        /// </summary>
+        public string DeploymentMode { get; set; } = string.Empty;
+
+        /// <summary>
+        /// When the Autopilot policy was last downloaded from the service
+        /// </summary>
+        public string PolicyDate { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Whether MDM enrollment was mandatory during OOBE
+        /// </summary>
+        public bool ForcedEnrollment { get; set; }
+
+        /// <summary>
+        /// Zero-touch deployment correlation ID for troubleshooting
+        /// </summary>
+        public string CorrelationId { get; set; } = string.Empty;
     }
 }
