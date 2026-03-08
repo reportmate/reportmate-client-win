@@ -414,7 +414,7 @@ build/**/bin/
 build/**/*.wixobj
 build/**/*.wixpdb
 .publish/
-dist/
+release/
 installer/
 
 # Package payload (generated during build - legacy paths)

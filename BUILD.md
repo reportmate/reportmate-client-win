@@ -122,7 +122,7 @@ This repository contains a unified PowerShell 7 build script that replicates the
 
 ## Output
 
-The build script creates two package types in `dist/`:
+The build script creates two package types in `release/`:
 
 ### 📦 NUPKG Package (`ReportMate-{version}.nupkg`)  
 
@@ -141,7 +141,7 @@ The build script creates two package types in `dist/`:
 After building, the output structure is:
 
 ```text
-dist/
+release/
 ├── ReportMate-{version}.nupkg   # Chocolatey package
 └── ReportMate-{version}.zip     # ZIP archive
 

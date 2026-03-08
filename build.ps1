@@ -336,9 +336,9 @@ $ProgramFilesPayloadDir = Join-Path $NupkgDir "payload"
 $ProgramDataPayloadDir = Join-Path $NupkgDir "payload\data"
 $CimianPayloadDir = Join-Path $NupkgDir "payload\cimian"
 $PkgPayloadDir = Join-Path $PkgDir "payload"
-$MsiStagingDir = Join-Path $RootDir "dist\msi-staging"
+$MsiStagingDir = Join-Path $RootDir "release\msi-staging"
 $PublishDir = Join-Path $RootDir ".publish"
-$OutputDir = Join-Path $RootDir "dist"
+$OutputDir = Join-Path $RootDir "release"
 
 Write-Info "Root Directory: $RootDir"
 Write-Info "Output Directory: $OutputDir"
@@ -358,7 +358,7 @@ if ($Clean) {
 }
 
 # Clean old binaries from previous builds (always, not just when -Clean is specified)
-Write-Step "Cleaning old binaries from .publish and dist directories..."
+Write-Step "Cleaning old binaries from .publish and release directories..."
 $cleanupPaths = @(
     (Join-Path $PublishDir "*.exe"),
     (Join-Path $PublishDir "*.dll"), 

@@ -26,7 +26,7 @@ cd clients\windows
 .\build.ps1 -Sign
 ```
 
-**Output packages in `dist/`:**
+**Output packages in `release/`:**
 - `ReportMate-{version}.nupkg` - Chocolatey package
 - `ReportMate-{version}.msi` - MSI installer
 - `ReportMate-{version}.zip` - ZIP archive
@@ -52,7 +52,7 @@ Best for environments using Cimian or Chocolatey for package management.
 
 **Local installation:**
 ```powershell
-sudo choco install com.github.reportmate.windows --source=".\dist\" --yes --force
+sudo choco install com.github.reportmate.windows --source=".\release\" --yes --force
 ```
 
 **Network share installation:**
