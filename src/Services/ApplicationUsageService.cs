@@ -1071,6 +1071,47 @@ namespace ReportMate.WindowsClient.Services
         }
 
         /// <summary>
+        /// Build daily per-application usage summaries from matched sessions.
+        /// Groups sessions by (date, app name) and produces cumulative totals.
+        /// The API uses UPSERT semantics so last collection of the day wins.
+        /// </summary>
+        public List<DailyUsageSummary> BuildDailySummaries(List<ApplicationUsageSession> sessions)
+        {
+            if (sessions.Count == 0)
+                return new List<DailyUsageSummary>();
+
+            var summaries = sessions
+                .GroupBy(s => new { Date = s.StartTime.ToString("yyyy-MM-dd"), s.Name })
+                .Where(g => !string.IsNullOrEmpty(g.Key.Name))
+                .Select(g =>
+                {
+                    var users = g
+                        .Select(s => s.User)
+                        .Where(u => !string.IsNullOrEmpty(u) && u != "UNKNOWN")
+                        .Distinct()
+                        .ToList();
+
+                    return new DailyUsageSummary
+                    {
+                        Date = g.Key.Date,
+                        AppName = g.Key.Name,
+                        Publisher = g.First().Publisher,
+                        Launches = g.Count(),
+                        TotalSeconds = g.Sum(s => s.DurationSeconds),
+                        Users = users
+                    };
+                })
+                .OrderBy(s => s.Date)
+                .ThenByDescending(s => s.TotalSeconds)
+                .ToList();
+
+            _logger.LogInformation("Built {Count} daily usage summaries across {Days} day(s)",
+                summaries.Count, summaries.Select(s => s.Date).Distinct().Count());
+
+            return summaries;
+        }
+
+        /// <summary>
         /// Internal class for tracking process events during parsing.
         /// </summary>
         private class ProcessEventRecord
