@@ -540,7 +540,6 @@ $moduleFileMap = @{
     "network"      = @("src/Services/Modules/NetworkModuleProcessor.cs", "src/Models/Modules/NetworkModels.cs", "build/resources/osquery/modules/network.json")
     "peripherals"  = @("src/Services/Modules/PeripheralsModuleProcessor.cs", "src/Models/Modules/PeripheralsModels.cs", "build/resources/osquery/modules/peripherals.json")
     "printers"     = @("src/Services/Modules/PrinterModuleProcessor.cs", "src/Models/Modules/PrinterModels.cs", "build/resources/osquery/modules/printers.json")
-    "profiles"     = @("src/Services/Modules/ProfilesModuleProcessor.cs", "src/Models/Modules/ProfilesModels.cs", "build/resources/osquery/modules/profiles.json")
     "security"     = @("src/Services/Modules/SecurityModuleProcessor.cs", "src/Models/Modules/SecurityModels.cs", "build/resources/osquery/modules/security.json")
     "system"       = @("src/Services/Modules/SystemModuleProcessor.cs", "src/Models/Modules/SystemModels.cs", "build/resources/osquery/modules/system.json")
 }
@@ -961,6 +960,9 @@ if (-not $SkipPKG) {
     
     # Prepare PKG payload
     Write-Verbose "Preparing PKG payload..."
+    
+    # Ensure PKG payload directory exists (cimipkg NUPKG step may have removed it)
+    New-Item -ItemType Directory -Path $PkgPayloadDir -Force | Out-Null
     
     # Copy executable to PKG payload (will be installed to Program Files/ReportMate)
     Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $PkgPayloadDir -Force
