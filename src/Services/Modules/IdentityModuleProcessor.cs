@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -85,9 +86,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var username = GetStringValue(user, "username");
                     if (string.IsNullOrEmpty(username)) continue;
 
-                    // Skip system accounts (UID < 1000 typically, but Windows uses SIDs)
+                    // Skip low-numbered system accounts
                     var uidStr = GetStringValue(user, "uid");
                     if (int.TryParse(uidStr, out var uid) && uid < 500)
+                        continue;
+
+                    // Skip well-known built-in Windows accounts by SID RID (locale-independent)
+                    // RID 500 = Administrator, RID 501 = Guest, RID 503 = DefaultAccount, RID 504 = WDAGUtilityAccount
+                    var userSid = GetStringValue(user, "uuid");
+                    if (Regex.IsMatch(userSid, @"-(500|501|503|504)$"))
                         continue;
 
                     var account = new UserAccount
@@ -95,7 +102,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Username = username,
                         FullName = GetStringValue(user, "description"),
                         Description = GetStringValue(user, "description"),
-                        Sid = GetStringValue(user, "uuid"),
+                        Sid = userSid,
                         HomeDirectory = GetStringValue(user, "directory"),
                         IsLocal = true
                     };
@@ -116,7 +123,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             try
             {
                 var script = @"
-                    $users = Get-LocalUser | ForEach-Object {
+                    # Exclude well-known built-in Windows accounts by RID (locale-independent)
+                    # RID 500 = Administrator, RID 501 = Guest, RID 503 = DefaultAccount, RID 504 = WDAGUtilityAccount
+                    $users = Get-LocalUser | Where-Object { $_.SID -ne $null -and $_.SID.Value -notmatch '-(500|501|503|504)$' } | ForEach-Object {
                         $username = $_.Name
                         $isAdmin = $false
                         
@@ -185,6 +194,12 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                         foreach (var userElement in elements)
                         {
+                            // Defense-in-depth: skip built-in accounts by SID RID (locale-independent)
+                            // 500=Administrator, 501=Guest, 503=DefaultAccount, 504=WDAGUtilityAccount
+                            var elementSid = GetJsonStringValue(userElement, "Sid");
+                            if (Regex.IsMatch(elementSid, @"-(500|501|503|504)$"))
+                                continue;
+
                             var account = new UserAccount
                             {
                                 Username = GetJsonStringValue(userElement, "Username"),

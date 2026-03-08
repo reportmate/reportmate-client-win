@@ -63,7 +63,6 @@ namespace ReportMate.WindowsClient.Services
                 ["network"] = typeof(NetworkModuleProcessor),
                 ["peripherals"] = typeof(PeripheralsModuleProcessor),
                 ["printer"] = typeof(PrinterModuleProcessor),
-                ["profiles"] = typeof(ProfilesModuleProcessor),
                 ["security"] = typeof(SecurityModuleProcessor),
                 ["system"] = typeof(SystemModuleProcessor)
             };
@@ -81,7 +80,6 @@ namespace ReportMate.WindowsClient.Services
                 [typeof(NetworkData)] = typeof(NetworkModuleProcessor),
                 [typeof(PeripheralsModuleData)] = typeof(PeripheralsModuleProcessor),
                 [typeof(PrinterData)] = typeof(PrinterModuleProcessor),
-                [typeof(ProfilesData)] = typeof(ProfilesModuleProcessor),
                 [typeof(SecurityData)] = typeof(SecurityModuleProcessor),
                 [typeof(SystemData)] = typeof(SystemModuleProcessor)
             };
@@ -155,7 +153,6 @@ namespace ReportMate.WindowsClient.Services
                 "management",
                 "network",
                 "peripherals",
-                "profiles",
                 "security",
                 "system"
             };
