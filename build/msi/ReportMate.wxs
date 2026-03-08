@@ -116,9 +116,6 @@
       <Component Id="OSQueryPrintersModule" Guid="*">
         <File Id="PrintersJson" Source="$(var.ResourceDir)\osquery\modules\printers.json" />
       </Component>
-      <Component Id="OSQueryProfilesModule" Guid="*">
-        <File Id="ProfilesJson" Source="$(var.ResourceDir)\osquery\modules\profiles.json" />
-      </Component>
       <Component Id="OSQuerySecurityModule" Guid="*">
         <File Id="SecurityJson" Source="$(var.ResourceDir)\osquery\modules\security.json" />
       </Component>
