@@ -20,7 +20,7 @@ cd clients\windows
 .\build.ps1 -Sign
 ```
 
-This produces packages in the `dist/` directory:
+This produces packages in the `release/` directory:
 - `ReportMate-{version}.nupkg` - Chocolatey package (recommended)
 - `ReportMate-{version}.msi` - MSI installer
 - `ReportMate-{version}.zip` - Manual installation archive
@@ -31,14 +31,14 @@ This produces packages in the `dist/` directory:
 
 ```powershell
 # Install from local package
-sudo choco install com.github.reportmate.windows --source=".\clients\windows\dist\" --yes --force
+sudo choco install com.github.reportmate.windows --source=".\clients\windows\release\" --yes --force
 ```
 
 **Option B: MSI Installer**
 
 ```powershell
 # Run the MSI installer
-msiexec /i "dist\ReportMate-{version}.msi" /qn
+msiexec /i "release\ReportMate-{version}.msi" /qn
 ```
 
 **Option C: Build and Install in One Step**

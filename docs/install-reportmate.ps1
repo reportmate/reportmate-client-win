@@ -8,7 +8,7 @@
 
 param(
     [string]$ApiUrl = "https://reportmate.example.edu",
-    [string]$SourcePath = ".\dist",
+    [string]$SourcePath = ".\release",
     [switch]$SkipOsquery
 )
 
