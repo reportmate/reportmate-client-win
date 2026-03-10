@@ -25,7 +25,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             _logger = logger;
         }
 
-        public override Task<SystemData> ProcessModuleAsync(
+        public override async Task<SystemData> ProcessModuleAsync(
             Dictionary<string, List<Dictionary<string, object>>> osqueryResults, 
             string deviceId)
         {
@@ -488,12 +488,23 @@ namespace ReportMate.WindowsClient.Services.Modules
                 };
             }
 
-            _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}, Activation: {Activation}, Services: {ServiceCount}, ScheduledTasks: {TaskCount}", 
+            // Collect pending Windows Updates via Windows Update Agent API
+            try
+            {
+                await CollectPendingWindowsUpdatesAsync(data);
+                _logger.LogDebug("Pending Windows Updates: {Count}", data.PendingWindowsUpdatesCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect pending Windows Updates");
+            }
+
+            _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}, Activation: {Activation}, Services: {ServiceCount}, ScheduledTasks: {TaskCount}, PendingUpdates: {PendingCount}", 
                 data.OperatingSystem.Name, data.OperatingSystem.Version, data.OperatingSystem.Edition, 
                 data.OperatingSystem.DisplayVersion, data.OperatingSystem.Locale, data.OperatingSystem.TimeZone, 
-                data.UptimeString, data.OperatingSystem.Activation?.Status ?? "Unknown", data.Services.Count, data.ScheduledTasks.Count);
+                data.UptimeString, data.OperatingSystem.Activation?.Status ?? "Unknown", data.Services.Count, data.ScheduledTasks.Count, data.PendingWindowsUpdatesCount);
 
-            return Task.FromResult(data);
+            return data;
         }
 
         private string FormatUptime(TimeSpan uptime)
@@ -544,6 +555,94 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
             
             return string.Join(", ", parts);
+        }
+
+        /// <summary>
+        /// Collects pending (not yet installed) Windows Updates using the Windows Update Agent COM API.
+        /// This queries ALL pending updates, not just security updates.
+        /// </summary>
+        private async Task CollectPendingWindowsUpdatesAsync(SystemData data)
+        {
+            var script = @"
+                try {
+                    $UpdateSession = New-Object -ComObject Microsoft.Update.Session
+                    $UpdateSearcher = $UpdateSession.CreateUpdateSearcher()
+                    $SearchResult = $UpdateSearcher.Search('IsInstalled=0')
+
+                    $updates = @()
+                    foreach ($Update in $SearchResult.Updates) {
+                        $category = ''
+                        if ($Update.Categories.Count -gt 0) {
+                            $category = $Update.Categories.Item(0).Name
+                        }
+                        $releaseDate = $null
+                        if ($Update.LastDeploymentChangeTime) {
+                            $releaseDate = $Update.LastDeploymentChangeTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+                        }
+                        $updates += @{
+                            Title = $Update.Title
+                            Category = $category
+                            IsMandatory = [bool]$Update.IsMandatory
+                            IsDownloaded = [bool]$Update.IsDownloaded
+                            RebootRequired = [bool]$Update.RebootRequired
+                            ReleaseDate = $releaseDate
+                        }
+                    }
+
+                    @{
+                        PendingCount = $SearchResult.Updates.Count
+                        Updates = @($updates)
+                    } | ConvertTo-Json -Depth 4
+                } catch {
+                    @{ PendingCount = 0; Updates = @(); Error = $_.Exception.Message } | ConvertTo-Json
+                }
+            ";
+
+            var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+            if (string.IsNullOrEmpty(result))
+                return;
+
+            var trimmed = result.Trim();
+            var jsonStart = trimmed.IndexOf('{');
+            if (jsonStart < 0)
+                return;
+
+            var jsonContent = trimmed.Substring(jsonStart);
+            using var doc = JsonDocument.Parse(jsonContent);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("PendingCount", out var countProp))
+            {
+                data.PendingWindowsUpdatesCount = countProp.GetInt32();
+            }
+
+            if (root.TryGetProperty("Updates", out var updatesProp) && updatesProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in updatesProp.EnumerateArray())
+                {
+                    var update = new PendingWindowsUpdate
+                    {
+                        Title = item.TryGetProperty("Title", out var t) ? t.GetString() ?? "" : "",
+                        Category = item.TryGetProperty("Category", out var c) ? c.GetString() ?? "" : "",
+                        IsMandatory = item.TryGetProperty("IsMandatory", out var m) && m.GetBoolean(),
+                        IsDownloaded = item.TryGetProperty("IsDownloaded", out var d) && d.GetBoolean(),
+                        RebootRequired = item.TryGetProperty("RebootRequired", out var r) && r.GetBoolean(),
+                    };
+
+                    if (item.TryGetProperty("ReleaseDate", out var rd) && rd.ValueKind == JsonValueKind.String)
+                    {
+                        if (DateTime.TryParse(rd.GetString(), out var releaseDate))
+                            update.ReleaseDate = releaseDate;
+                    }
+
+                    data.PendingWindowsUpdates.Add(update);
+                }
+            }
+
+            if (root.TryGetProperty("Error", out var errProp) && errProp.ValueKind == JsonValueKind.String)
+            {
+                _logger.LogWarning("Windows Update search returned error: {Error}", errProp.GetString());
+            }
         }
 
         /// <summary>
