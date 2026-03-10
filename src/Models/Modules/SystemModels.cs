@@ -13,6 +13,8 @@ namespace ReportMate.WindowsClient.Models.Modules
     {
         public OperatingSystemInfo OperatingSystem { get; set; } = new();
         public List<SystemUpdate> Updates { get; set; } = new();
+        public List<PendingWindowsUpdate> PendingWindowsUpdates { get; set; } = new();
+        public int PendingWindowsUpdatesCount { get; set; }
         public List<SystemService> Services { get; set; } = new();
         public List<EnvironmentVariable> Environment { get; set; } = new();
         public List<ScheduledTask> ScheduledTasks { get; set; } = new();
@@ -120,6 +122,16 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// MAK (Multiple Activation Key), Retail, Volume, or Unknown
         /// </summary>
         public string? LicenseSource { get; set; }
+    }
+
+    public class PendingWindowsUpdate
+    {
+        public string Title { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public bool IsMandatory { get; set; }
+        public bool IsDownloaded { get; set; }
+        public bool RebootRequired { get; set; }
+        public DateTime? ReleaseDate { get; set; }
     }
 
     public class SystemUpdate
