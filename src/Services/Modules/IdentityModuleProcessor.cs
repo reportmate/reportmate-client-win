@@ -56,6 +56,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process login history from security events
             await ProcessLoginHistory(data);
 
+            // Process RDP/Terminal Services session history
+            await ProcessSessionHistory(data);
+
             // Process directory services, SSO state, and device identity from dsregcmd
             await ProcessDirectoryServices(data);
 
@@ -569,7 +572,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     $events = Get-WinEvent -FilterHashtable @{
                         LogName = 'Security'
                         Id = 4624, 4625, 4634, 4647
-                    } -MaxEvents 300 -ErrorAction SilentlyContinue | Sort-Object TimeCreated
+                    } -MaxEvents 1000 -ErrorAction SilentlyContinue | Sort-Object TimeCreated
                     
                     foreach ($evt in $events) {
                         $xml = [xml]$evt.ToXml()
@@ -661,8 +664,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         }
                     }
                     
-                    # Sort by login time descending and take newest 50
-                    $results | Sort-Object { [datetime]::Parse($_.LoginTime) } -Descending | Select-Object -First 50 | ConvertTo-Json -Depth 2 -Compress
+                    # Sort by login time descending and take newest 200
+                    $results | Sort-Object { [datetime]::Parse($_.LoginTime) } -Descending | Select-Object -First 200 | ConvertTo-Json -Depth 2 -Compress
                 ";
 
                 var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
@@ -756,6 +759,198 @@ namespace ReportMate.WindowsClient.Services.Modules
                 "11" => "CachedInteractive",
                 _ => logonType
             };
+        }
+
+        /// <summary>
+        /// Collect RDP session history from TerminalServices-LocalSessionManager event log.
+        /// Event 21 = Session logon, Event 23 = Session logoff,
+        /// Event 24 = Session disconnected, Event 25 = Session reconnected.
+        /// This log is more reliable for RDP sessions and retains data longer than the Security log.
+        /// </summary>
+        private async Task ProcessSessionHistory(IdentityData data)
+        {
+            try
+            {
+                var script = @"
+                    $logons = @{}
+                    $results = @()
+
+                    $events = Get-WinEvent -FilterHashtable @{
+                        LogName = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'
+                        Id = 21, 23, 24, 25
+                    } -ErrorAction SilentlyContinue | Sort-Object TimeCreated
+
+                    foreach ($evt in $events) {
+                        $xml = [xml]$evt.ToXml()
+                        $ns = New-Object Xml.XmlNamespaceManager($xml.NameTable)
+                        $ns.AddNamespace('e', 'http://schemas.microsoft.com/win/2004/08/events/event')
+                        $user = $xml.SelectSingleNode('//e:UserData//e:User', $ns)
+                        $addr = $xml.SelectSingleNode('//e:UserData//e:Address', $ns)
+                        $sess = $xml.SelectSingleNode('//e:UserData//e:SessionID', $ns)
+
+                        $username = if ($user) { $user.InnerText } else { '' }
+                        $source = if ($addr) { $addr.InnerText } else { '' }
+                        $sessionId = if ($sess) { $sess.InnerText } else { '0' }
+
+                        if (-not $username -or $username -eq 'SYSTEM') { continue }
+
+                        $key = ""$username|$sessionId""
+
+                        if ($evt.Id -eq 21) {
+                            $logons[$key] = @{
+                                Username = $username
+                                SessionId = $sessionId
+                                LoginTime = $evt.TimeCreated.ToString('o')
+                                Source = $source
+                            }
+                        }
+                        elseif ($evt.Id -in @(23, 24)) {
+                            $endType = if ($evt.Id -eq 23) { 'Logoff' } else { 'Disconnect' }
+                            if ($logons.ContainsKey($key)) {
+                                $logon = $logons[$key]
+                                $start = [datetime]::Parse($logon.LoginTime)
+                                $end = $evt.TimeCreated
+                                $dur = $end - $start
+                                $durStr = ''
+                                if ($dur.TotalDays -ge 1) { $durStr = '{0}d {1}h {2}m' -f [int]$dur.TotalDays, $dur.Hours, $dur.Minutes }
+                                elseif ($dur.TotalHours -ge 1) { $durStr = '{0}h {1}m' -f [int]$dur.TotalHours, $dur.Minutes }
+                                else { $durStr = '{0}m' -f [math]::Max(1, [int]$dur.TotalMinutes) }
+                                $results += @{
+                                    Username = $logon.Username
+                                    LoginTime = $logon.LoginTime
+                                    EndTime = $end.ToString('o')
+                                    Duration = $durStr
+                                    DurationMinutes = [math]::Round($dur.TotalMinutes, 1)
+                                    EventId = 21
+                                    EventType = $endType
+                                    SessionId = [int]$logon.SessionId
+                                    Source = $logon.Source
+                                }
+                                $logons.Remove($key)
+                            }
+                        }
+                    }
+
+                    # Add unmatched logons (still active)
+                    foreach ($logon in $logons.Values) {
+                        $results += @{
+                            Username = $logon.Username
+                            LoginTime = $logon.LoginTime
+                            EndTime = $null
+                            Duration = ''
+                            DurationMinutes = 0
+                            EventId = 21
+                            EventType = 'Active'
+                            SessionId = [int]$logon.SessionId
+                            Source = $logon.Source
+                        }
+                    }
+
+                    $results | Sort-Object { [datetime]::Parse($_.LoginTime) } -Descending | ConvertTo-Json -Depth 2 -Compress
+                ";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+
+                if (!string.IsNullOrEmpty(result))
+                {
+                    var trimmedResult = result.Trim();
+                    var jsonStart = trimmedResult.IndexOf('[');
+                    if (jsonStart < 0)
+                        jsonStart = trimmedResult.IndexOf('{');
+
+                    if (jsonStart >= 0)
+                    {
+                        var jsonContent = trimmedResult.Substring(jsonStart);
+                        using var document = JsonDocument.Parse(jsonContent);
+                        var root = document.RootElement;
+
+                        var elements = root.ValueKind == JsonValueKind.Array
+                            ? root.EnumerateArray().ToList()
+                            : new List<JsonElement> { root };
+
+                        foreach (var el in elements)
+                        {
+                            var username = GetJsonStringValue(el, "Username");
+                            if (string.IsNullOrEmpty(username)) continue;
+
+                            var entry = new SessionHistoryEntry
+                            {
+                                Username = username,
+                                EventId = GetJsonIntValue(el, "EventId"),
+                                EventType = GetJsonStringValue(el, "EventType"),
+                                Duration = GetJsonStringValue(el, "Duration"),
+                                DurationMinutes = GetJsonDoubleValue(el, "DurationMinutes"),
+                                SessionId = GetJsonIntValue(el, "SessionId"),
+                                SourceAddress = GetJsonStringValue(el, "Source")
+                            };
+
+                            var loginTimeStr = GetJsonStringValue(el, "LoginTime");
+                            if (!string.IsNullOrEmpty(loginTimeStr) && DateTime.TryParse(loginTimeStr, out var loginTime))
+                                entry.Timestamp = loginTime;
+
+                            var endTimeStr = GetJsonStringValue(el, "EndTime");
+                            if (!string.IsNullOrEmpty(endTimeStr) && DateTime.TryParse(endTimeStr, out var endTime))
+                                entry.EndTime = endTime;
+
+                            data.SessionHistory.Add(entry);
+                        }
+
+                        _logger.LogDebug("Collected {Count} TerminalServices session history entries", data.SessionHistory.Count);
+                    }
+                }
+
+                // Build session summary
+                BuildSessionSummary(data);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect TerminalServices session history");
+            }
+        }
+
+        private void BuildSessionSummary(IdentityData data)
+        {
+            var completed = data.SessionHistory
+                .Where(s => s.DurationMinutes > 0)
+                .ToList();
+
+            data.SessionSummary.TotalSessions = data.SessionHistory.Count;
+            data.SessionSummary.UniqueUsers = data.SessionHistory
+                .Select(s => s.Username)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+
+            if (completed.Count > 0)
+            {
+                data.SessionSummary.AvgSessionMinutes = Math.Round(completed.Average(s => s.DurationMinutes), 1);
+
+                var sorted = completed.OrderBy(s => s.DurationMinutes).ToList();
+                data.SessionSummary.MedianSessionMinutes = Math.Round(sorted[sorted.Count / 2].DurationMinutes, 1);
+            }
+
+            if (data.SessionHistory.Count > 0)
+            {
+                data.SessionSummary.OldestSession = data.SessionHistory.Min(s => s.Timestamp);
+                data.SessionSummary.NewestSession = data.SessionHistory.Max(s => s.Timestamp);
+            }
+
+            // Sessions by hour of day
+            foreach (var group in data.SessionHistory.GroupBy(s => s.Timestamp.Hour))
+            {
+                data.SessionSummary.SessionsByHour[group.Key.ToString("D2")] = group.Count();
+            }
+
+            // Sessions by day of week
+            foreach (var group in data.SessionHistory.GroupBy(s => s.Timestamp.DayOfWeek))
+            {
+                data.SessionSummary.SessionsByDayOfWeek[group.Key.ToString()] = group.Count();
+            }
+
+            _logger.LogInformation("Session summary: {Total} sessions, {Users} unique users, avg {Avg}m, median {Median}m",
+                data.SessionSummary.TotalSessions,
+                data.SessionSummary.UniqueUsers,
+                data.SessionSummary.AvgSessionMinutes,
+                data.SessionSummary.MedianSessionMinutes);
         }
 
         private async Task ProcessDirectoryServices(IdentityData data)
@@ -1592,6 +1787,16 @@ try {
                     return value;
             }
             return 0;
+        }
+
+        private double GetJsonDoubleValue(JsonElement element, string propertyName)
+        {
+            if (element.TryGetProperty(propertyName, out var prop))
+            {
+                if (prop.ValueKind == JsonValueKind.Number && prop.TryGetDouble(out var value))
+                    return value;
+            }
+            return 0.0;
         }
 
         #endregion
