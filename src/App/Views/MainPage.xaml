@@ -1,0 +1,290 @@
+<Page
+    x:Class="ReportMate.App.Views.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:ReportMate.App.ViewModels"
+    NavigationCacheMode="Required">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Padding="28,24,28,24">
+            <StackPanel Spacing="20" MaxWidth="960" HorizontalAlignment="Center">
+
+            <!-- ═══ App Info Header ═══ -->
+            <StackPanel HorizontalAlignment="Center" Spacing="8" Margin="0,8,0,4">
+                <Image x:Name="AppIcon" Width="64" Height="64" HorizontalAlignment="Center" />
+
+                <TextBlock Text="ReportMate"
+                           Style="{StaticResource TitleTextBlockStyle}"
+                           HorizontalAlignment="Center" />
+
+                <TextBlock Text="Device telemetry collection and reporting for endpoint monitoring."
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextAlignment="Center" MaxWidth="500"
+                           TextWrapping="WrapWholeWords" />
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="16">
+                    <HyperlinkButton Content="Documentation"
+                                     NavigateUri="https://github.com/reportmate/reportmate-client-win/wiki" />
+                    <HyperlinkButton Content="Report Issue"
+                                     NavigateUri="https://github.com/reportmate/reportmate-client-win/issues" />
+                </StackPanel>
+
+                <TextBlock Text="{x:Bind ViewModel.VersionDisplay, Mode=OneWay}"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           HorizontalAlignment="Center" />
+
+                <!-- Save Status -->
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center"
+                            Visibility="{x:Bind ViewModel.IsSaveStatusVisible, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                    <FontIcon Glyph="{x:Bind ViewModel.SaveStatusGlyph, Mode=OneWay}" FontSize="14"
+                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Text="{x:Bind ViewModel.SaveStatusMessage, Mode=OneWay}"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+            </StackPanel>
+
+            <!-- ═══ Settings Grid: 2×2 card layout ═══ -->
+            <Grid ColumnSpacing="16" RowSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="1.2*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- ── Connection Card ── -->
+                <Border Grid.Row="0" Grid.Column="0"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,4">
+                        <FontIcon Glyph="&#xE943;" FontSize="20"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="Connection" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <!-- API URL -->
+                    <TextBlock Text="API URL" Style="{StaticResource CaptionTextBlockStyle}" />
+                    <TextBox Text="{x:Bind ViewModel.ApiUrl, Mode=TwoWay}"
+                             PlaceholderText="https://api.reportmate.example.com"
+                             IsEnabled="{x:Bind ViewModel.IsApiUrlLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsApiUrlLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- API Key -->
+                    <TextBlock Text="API Key" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <PasswordBox Password="{x:Bind ViewModel.ApiKey, Mode=TwoWay}"
+                                 PlaceholderText="{x:Bind ViewModel.ApiKeyPlaceholderText, Mode=OneWay}"
+                                 IsEnabled="{x:Bind ViewModel.IsApiKeyLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsApiKeyLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- Passphrase -->
+                    <TextBlock Text="Passphrase" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <PasswordBox Password="{x:Bind ViewModel.Passphrase, Mode=TwoWay}"
+                                 PlaceholderText="{x:Bind ViewModel.PassphrasePlaceholderText, Mode=OneWay}"
+                                 IsEnabled="{x:Bind ViewModel.IsPassphraseLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsPassphraseLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+                </Border>
+
+                <!-- ── Collection Card ── -->
+                <Border Grid.Row="0" Grid.Column="1"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,4">
+                        <FontIcon Glyph="&#xE916;" FontSize="20"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="Collection" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <!-- Collection Interval -->
+                    <TextBlock Text="Collection Interval (seconds)" Style="{StaticResource CaptionTextBlockStyle}" />
+                    <NumberBox Value="{x:Bind ViewModel.CollectionIntervalValue, Mode=TwoWay}"
+                               Minimum="60" Maximum="86400" SpinButtonPlacementMode="Compact"
+                               IsEnabled="{x:Bind ViewModel.IsCollectionIntervalLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsCollectionIntervalLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- Max Data Age -->
+                    <TextBlock Text="Max Data Age (minutes)" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <NumberBox Value="{x:Bind ViewModel.MaxDataAgeValue, Mode=TwoWay}"
+                               Minimum="1" Maximum="1440" SpinButtonPlacementMode="Compact"
+                               IsEnabled="{x:Bind ViewModel.IsMaxDataAgeLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+
+                    <!-- API Timeout -->
+                    <TextBlock Text="API Timeout (seconds)" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <NumberBox Value="{x:Bind ViewModel.ApiTimeoutValue, Mode=TwoWay}"
+                               Minimum="10" Maximum="3600" SpinButtonPlacementMode="Compact"
+                               IsEnabled="{x:Bind ViewModel.IsApiTimeoutLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+
+                    <!-- osquery Path -->
+                    <TextBlock Text="osquery Path" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <TextBox Text="{x:Bind ViewModel.OsQueryPath, Mode=TwoWay}"
+                             PlaceholderText="C:\Program Files\osquery\osqueryi.exe"
+                             IsEnabled="{x:Bind ViewModel.IsOsQueryPathLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsOsQueryPathLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- Storage Mode -->
+                    <TextBlock Text="Storage Analysis Mode" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <ComboBox x:Name="StorageModeCombo"
+                              SelectedItem="{x:Bind ViewModel.StorageMode, Mode=TwoWay}"
+                              IsEnabled="{x:Bind ViewModel.IsStorageModeLocked, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                        <x:String>auto</x:String>
+                        <x:String>quick</x:String>
+                        <x:String>deep</x:String>
+                    </ComboBox>
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsStorageModeLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+                </Border>
+
+                <!-- ── Behavior Card ── -->
+                <Border Grid.Row="1" Grid.Column="0"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,4">
+                        <FontIcon Glyph="&#xE713;" FontSize="20"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="Behavior" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <ToggleSwitch OnContent="Enable debug logging" OffContent="Enable debug logging"
+                                  IsOn="{x:Bind ViewModel.DebugLogging, Mode=TwoWay}"
+                                  IsEnabled="{x:Bind ViewModel.IsDebugLoggingLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsDebugLoggingLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <ToggleSwitch OnContent="Cimian integration" OffContent="Cimian integration"
+                                  IsOn="{x:Bind ViewModel.CimianIntegrationEnabled, Mode=TwoWay}"
+                                  IsEnabled="{x:Bind ViewModel.IsCimianIntegrationLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsCimianIntegrationLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <ToggleSwitch OnContent="Skip certificate validation" OffContent="Skip certificate validation"
+                                  IsOn="{x:Bind ViewModel.SkipCertificateValidation, Mode=TwoWay}"
+                                  IsEnabled="{x:Bind ViewModel.IsSkipCertValidationLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsSkipCertValidationLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- Max Retry Attempts -->
+                    <TextBlock Text="Max Retry Attempts" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <NumberBox Value="{x:Bind ViewModel.MaxRetryValue, Mode=TwoWay}"
+                               Minimum="0" Maximum="10" SpinButtonPlacementMode="Compact"
+                               IsEnabled="{x:Bind ViewModel.IsMaxRetryLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsMaxRetryLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+                </Border>
+
+                <!-- ── Advanced Card ── -->
+                <Border Grid.Row="1" Grid.Column="1"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="8" Padding="20">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,4">
+                        <FontIcon Glyph="&#xE90F;" FontSize="20"
+                                  Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="Advanced" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <!-- Device ID -->
+                    <TextBlock Text="Device ID" Style="{StaticResource CaptionTextBlockStyle}" />
+                    <TextBox Text="{x:Bind ViewModel.DeviceId, Mode=TwoWay}"
+                             PlaceholderText="Auto-generated if empty"
+                             IsEnabled="{x:Bind ViewModel.IsDeviceIdLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsDeviceIdLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- User Agent -->
+                    <TextBlock Text="User Agent" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <TextBox Text="{x:Bind ViewModel.UserAgent, Mode=TwoWay}"
+                             PlaceholderText="ReportMate/1.0"
+                             IsEnabled="{x:Bind ViewModel.IsUserAgentLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsUserAgentLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+
+                    <!-- Proxy URL -->
+                    <TextBlock Text="Proxy URL" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
+                    <TextBox Text="{x:Bind ViewModel.ProxyUrl, Mode=TwoWay}"
+                             PlaceholderText="http://proxy.example.com:8080"
+                             IsEnabled="{x:Bind ViewModel.IsProxyUrlLocked, Mode=OneWay, Converter={StaticResource InvertBool}}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsProxyUrlLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+                </Border>
+            </Grid>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>
