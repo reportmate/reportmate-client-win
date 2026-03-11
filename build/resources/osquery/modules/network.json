@@ -34,14 +34,14 @@
       "description": "Active VPN services - comprehensive coverage"
     },
     "vpn_interfaces": {
-      "query": "SELECT interface, enabled FROM interface_details WHERE interface LIKE '%VPN%' OR interface LIKE '%L2TP%' OR interface LIKE '%PPTP%' OR interface LIKE '%WAN%' OR interface LIKE '%TAP%' OR interface LIKE '%TUN%' OR interface LIKE '%Cisco%' OR interface LIKE '%OpenVPN%' OR interface LIKE '%WireGuard%' OR type IN ('53', '131');",
+      "query": "SELECT interface, type, enabled, mtu FROM interface_details WHERE type IN ('23', '131');",
       "interval": 600,
-      "description": "VPN network interfaces - comprehensive coverage"
+      "description": "VPN-capable adapters by interface type: 23=PPP (PPTP/L2TP tunnels), 131=Tunnel. Only present when a tunnel is active."
     },
     "vpn_connections": {
-      "query": "SELECT interface, address FROM interface_addresses WHERE interface LIKE '%VPN%' OR interface LIKE '%L2TP%' OR interface LIKE '%PPTP%' OR interface LIKE '%WAN%' OR interface LIKE '%TAP%' OR interface LIKE '%TUN%';",
-      "interval": 600,
-      "description": "Active VPN connection IP addresses"
+      "query": "SELECT id.interface, id.type, ia.address FROM interface_details id JOIN interface_addresses ia ON id.interface = ia.interface WHERE id.type IN ('23', '131') AND ia.address NOT LIKE '127.%' AND ia.address NOT LIKE '169.254.%';",
+      "interval": 300,
+      "description": "Active PPP/tunnel adapters with assigned IPs - reliable indicator of connected Windows VPN tunnels"
     },
     "system_info": {
       "query": "SELECT hostname, uuid FROM system_info;",
