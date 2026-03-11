@@ -1424,7 +1424,7 @@ try {
                                 // (handles third-party VPN clients not in vpn_services)
                                 matchingVpn = new VpnConnection
                                 {
-                                    Name = description,
+                                    Name = CleanVpnName(description),
                                     Type = DetermineVpnTypeFromService(description)
                                 };
                                 data.VpnConnections.Add(matchingVpn);
@@ -1512,70 +1512,99 @@ try {
         }
 
         /// <summary>
-        /// Determine VPN type from service name - comprehensive VPN detection
+        /// Strip noisy driver/version suffixes from VPN adapter display names.
+        /// Examples: "Fortinet Virtual Ethernet Adapter (NDIS 6.30)" -> "Fortinet Virtual Ethernet Adapter"
+        ///           "WAN Miniport (PPTP) #2" -> "WAN Miniport (PPTP)"
+        /// </summary>
+        private static string CleanVpnName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+
+            // Remove NDIS version suffixes: (NDIS 6.30), (NDIS 6.x), etc.
+            var cleaned = System.Text.RegularExpressions.Regex.Replace(
+                name, @"\s*\(NDIS\s+[\d.]+\)", string.Empty, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            // Remove trailing instance counters: " #2", " #3"
+            cleaned = System.Text.RegularExpressions.Regex.Replace(
+                cleaned, @"\s+#\d+$", string.Empty);
+
+            return cleaned.Trim();
+        }
+
+        /// <summary>
+        /// Determine VPN type (vendor/protocol label) from a service or adapter display name.
         /// </summary>
         private string DetermineVpnTypeFromService(string serviceName)
         {
             if (string.IsNullOrEmpty(serviceName)) return "Unknown";
 
-            var service = serviceName.ToLowerInvariant();
+            var s = serviceName.ToLowerInvariant();
 
-            // Protocol-based VPNs
-            if (service.Contains("l2tp")) return "L2TP";
-            if (service.Contains("pptp")) return "PPTP";
-            if (service.Contains("sstp")) return "SSTP";
-            if (service.Contains("ike")) return "IKEv2";
-            if (service.Contains("openvpn")) return "OpenVPN";
-            if (service.Contains("wireguard")) return "WireGuard";
+            // Vendor-specific adapters and services
+            if (s.Contains("fortinet") || s.Contains("forticlient") || s.Contains("fortigate")) return "FortiClient";
+            if (s.Contains("cisco") || s.Contains("anyconnect")) return "Cisco AnyConnect";
+            if (s.Contains("globalprotect") || s.Contains("palo alto")) return "GlobalProtect";
+            if (s.Contains("pulse") || s.Contains("ivanti")) return "Pulse Secure";
+            if (s.Contains("zscaler")) return "Zscaler";
+            if (s.Contains("openvpn")) return "OpenVPN";
+            if (s.Contains("wireguard")) return "WireGuard";
+            if (s.Contains("nordvpn") || s.Contains("nordlynx")) return "NordVPN";
+            if (s.Contains("expressvpn")) return "ExpressVPN";
+            if (s.Contains("surfshark")) return "Surfshark";
+            if (s.Contains("tunnelbear")) return "TunnelBear";
+            if (s.Contains("pia") || s.Contains("private internet access")) return "Private Internet Access";
+            if (s.Contains("hotspot shield")) return "Hotspot Shield";
+            if (s.Contains("sonicwall")) return "SonicWall";
+            if (s.Contains("barracuda")) return "Barracuda";
+            if (s.Contains("checkpoint") || s.Contains("check point")) return "Check Point";
 
-            // Commercial VPN services
-            if (service.Contains("cisco") || service.Contains("anyconnect")) return "Cisco AnyConnect";
-            if (service.Contains("pulse")) return "Pulse Secure";
-            if (service.Contains("nordvpn")) return "NordVPN";
-            if (service.Contains("expressvpn")) return "ExpressVPN";
-            if (service.Contains("surfshark")) return "Surfshark";
-            if (service.Contains("privatevpn")) return "PrivateVPN";
-            if (service.Contains("nordlynx")) return "NordLynx";
-            if (service.Contains("hotspot shield")) return "Hotspot Shield";
-            if (service.Contains("tunnelbear")) return "TunnelBear";
-            if (service.Contains("pia") || service.Contains("private internet access")) return "Private Internet Access";
+            // Protocol-based
+            if (s.Contains("l2tp")) return "L2TP";
+            if (s.Contains("pptp")) return "PPTP";
+            if (s.Contains("sstp")) return "SSTP";
+            if (s.Contains("ikev2") || s.Contains("ike")) return "IKEv2";
 
-            // Generic detection
-            if (service.Contains("vpn")) return "VPN Service";
-            if (service.Contains("tunnel")) return "Tunnel Service";
+            // Generic
+            if (s.Contains("vpn")) return "VPN";
+            if (s.Contains("tunnel")) return "Tunnel";
 
-            return "Windows Built-in";
+            return "VPN Adapter";
         }
 
         /// <summary>
-        /// Determine VPN type from interface name - comprehensive detection
+        /// Determine VPN type (vendor/protocol label) from a network interface description.
         /// </summary>
         private string DetermineVpnTypeFromInterface(string interfaceName)
         {
             if (string.IsNullOrEmpty(interfaceName)) return "Unknown";
 
-            var iface = interfaceName.ToLowerInvariant();
+            var s = interfaceName.ToLowerInvariant();
 
-            // Protocol-based detection
-            if (iface.Contains("l2tp")) return "L2TP";
-            if (iface.Contains("pptp")) return "PPTP";
-            if (iface.Contains("sstp")) return "SSTP";
-            if (iface.Contains("ike")) return "IKEv2";
-            if (iface.Contains("tap")) return "OpenVPN/TAP";
-            if (iface.Contains("tun")) return "OpenVPN/TUN";
-            if (iface.Contains("wireguard")) return "WireGuard";
+            // Vendor-specific
+            if (s.Contains("fortinet") || s.Contains("forticlient") || s.Contains("fortigate")) return "FortiClient";
+            if (s.Contains("cisco") || s.Contains("anyconnect")) return "Cisco AnyConnect";
+            if (s.Contains("globalprotect") || s.Contains("palo alto")) return "GlobalProtect";
+            if (s.Contains("pulse") || s.Contains("ivanti")) return "Pulse Secure";
+            if (s.Contains("zscaler")) return "Zscaler";
+            if (s.Contains("nordvpn") || s.Contains("nordlynx")) return "NordVPN";
+            if (s.Contains("expressvpn")) return "ExpressVPN";
+            if (s.Contains("sonicwall")) return "SonicWall";
+            if (s.Contains("barracuda")) return "Barracuda";
+            if (s.Contains("checkpoint") || s.Contains("check point")) return "Check Point";
 
-            // Interface type detection
-            if (iface.Contains("wan") && iface.Contains("miniport")) return "WAN Miniport";
-            if (iface.Contains("tunnel")) return "Tunnel Interface";
-            if (iface.Contains("vpn")) return "VPN Interface";
+            // Protocol-based
+            if (s.Contains("l2tp")) return "L2TP";
+            if (s.Contains("pptp")) return "PPTP";
+            if (s.Contains("sstp")) return "SSTP";
+            if (s.Contains("wireguard")) return "WireGuard";
+            if (s.Contains("openvpn") || s.Contains("tap")) return "OpenVPN";
 
-            // Commercial VPN services
-            if (iface.Contains("cisco")) return "Cisco AnyConnect";
-            if (iface.Contains("nord")) return "NordVPN";
-            if (iface.Contains("express")) return "ExpressVPN";
+            // Windows built-in miniport adapters
+            if (s.Contains("wan miniport")) return "WAN Miniport";
 
-            return "Unknown";
+            if (s.Contains("vpn")) return "VPN";
+
+            return "VPN Adapter";
         }
 
         /// <summary>
