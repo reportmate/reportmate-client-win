@@ -63,6 +63,15 @@
     </None>
   </ItemGroup>
 
+  <!-- Exclude the WinUI 3 GUI app subdirectory — it has its own project -->
+  <ItemGroup>
+    <Compile Remove="App\**\*.cs" />
+    <Page Remove="App\**\*.xaml" />
+    <None Remove="App\**" />
+    <Content Remove="App\**" />
+    <EmbeddedResource Remove="App\**" />
+  </ItemGroup>
+
   <!-- Preserve these assemblies from trimming to avoid warnings -->
   <ItemGroup>
     <TrimmerRootAssembly Include="Serilog" />

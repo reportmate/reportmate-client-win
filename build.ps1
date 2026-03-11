@@ -30,6 +30,9 @@
 
 .PARAMETER SkipPKG
     Skip PKG creation
+
+.PARAMETER SkipApp
+    Skip building the ReportMate.App WinUI 3 GUI application
     
 .PARAMETER Clean
     Clean all build artifacts first
@@ -108,6 +111,7 @@ param(
     [switch]$SkipZIP = $false,
     [switch]$SkipMSI = $false,
     [switch]$SkipPKG = $false,
+    [switch]$SkipApp = $false,
     [switch]$Clean = $false,
     [string]$ApiUrl = "",
     [switch]$CreateTag = $false,
@@ -338,6 +342,8 @@ $CimianPayloadDir = Join-Path $NupkgDir "payload\cimian"
 $PkgPayloadDir = Join-Path $PkgDir "payload"
 $MsiStagingDir = Join-Path $RootDir "release\msi-staging"
 $PublishDir = Join-Path $RootDir ".publish"
+$AppSrcDir = Join-Path $SrcDir "App"
+$AppPublishDir = Join-Path $RootDir ".publish\app"
 $OutputDir = Join-Path $RootDir "release"
 
 Write-Info "Root Directory: $RootDir"
@@ -347,7 +353,7 @@ Write-Output ""
 # Clean previous builds if requested
 if ($Clean) {
     Write-Step "Cleaning previous builds..."
-    @($PublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir) | ForEach-Object {
+    @($PublishDir, $AppPublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir) | ForEach-Object {
         if (Test-Path $_) {
             Remove-Item $_ -Recurse -Force -ErrorAction SilentlyContinue
             Write-Verbose "Cleaned: $_"
@@ -358,32 +364,46 @@ if ($Clean) {
 }
 
 # Clean old binaries from previous builds (always, not just when -Clean is specified)
-Write-Step "Cleaning old binaries from .publish and release directories..."
-$cleanupPaths = @(
+Write-Step "Cleaning old build artifacts..."
+$totalFreedBytes = 0
+$removedArtifacts = @()
+
+$artifactPatterns = @(
     (Join-Path $PublishDir "*.exe"),
-    (Join-Path $PublishDir "*.dll"), 
+    (Join-Path $PublishDir "*.dll"),
     (Join-Path $PublishDir "*.pdb"),
     (Join-Path $OutputDir "*.nupkg"),
-    (Join-Path $OutputDir "*.zip"), 
+    (Join-Path $OutputDir "*.zip"),
     (Join-Path $OutputDir "*.msi"),
     (Join-Path $OutputDir "*.exe"),
     (Join-Path $OutputDir "*.wixpdb"),
     (Join-Path $OutputDir "*.pkg")
 )
 
-foreach ($pattern in $cleanupPaths) {
+foreach ($pattern in $artifactPatterns) {
     $oldFiles = Get-ChildItem $pattern -ErrorAction SilentlyContinue
-    if ($oldFiles) {
-        $oldFiles | Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Verbose "Removed old files: $($oldFiles.Name -join ', ')"
+    foreach ($file in $oldFiles) {
+        $sizeMB = [math]::Round($file.Length / 1MB, 2)
+        $totalFreedBytes += $file.Length
+        $removedArtifacts += "$($file.Name) ($sizeMB MB)"
+        Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
     }
 }
-Write-Success "Old binaries and artifacts cleaned"
+
+if ($removedArtifacts.Count -gt 0) {
+    foreach ($artifact in $removedArtifacts) {
+        Write-Info "  Removed old artifact: $artifact"
+    }
+    $freedGB = [math]::Round($totalFreedBytes / 1GB, 2)
+    Write-Success "Freed $freedGB GB by removing $($removedArtifacts.Count) old artifact(s)"
+} else {
+    Write-Success "No old artifacts to clean"
+}
 Write-Output ""
 
 # Create directories
 Write-Step "Creating directories..."
-@($PublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir, $PkgPayloadDir, $MsiStagingDir) | ForEach-Object {
+@($PublishDir, $AppPublishDir, $OutputDir, $ProgramFilesPayloadDir, $ProgramDataPayloadDir, $CimianPayloadDir, $PkgPayloadDir, $MsiStagingDir) | ForEach-Object {
     New-Item -ItemType Directory -Path $_ -Force | Out-Null
     Write-Verbose "Created: $_"
 }
@@ -652,12 +672,92 @@ if (-not $SkipBuild) {
 
 Write-Output ""
 
+# Build WinUI 3 GUI app
+if (-not $SkipBuild -and -not $SkipApp) {
+    Write-Step "Building ReportMate.App (WinUI 3 GUI)..."
+
+    $appCsprojPath = Join-Path $AppSrcDir "ReportMate.App.csproj"
+
+    if (-not (Test-Path $appCsprojPath)) {
+        Write-Warning "ReportMate.App.csproj not found at: $appCsprojPath — skipping app build"
+    } else {
+        New-Item -ItemType Directory -Path $AppPublishDir -Force | Out-Null
+
+        dotnet publish $appCsprojPath `
+            --configuration $Configuration `
+            --runtime win-x64 `
+            --self-contained true `
+            --output $AppPublishDir `
+            -p:VersionPrefix=$Version `
+            --verbosity quiet
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "ReportMate.App build failed (exit $LASTEXITCODE) — continuing without GUI app"
+        } else {
+            # WinUI 3 unpackaged: dotnet publish misses .pri and .xbf XAML resource files.
+            # They are emitted to bin/<config>/<tfm>/<rid>/ but not copied to --output.
+            $tfmDirs = Get-ChildItem (Join-Path $AppSrcDir "bin\$Configuration") -Directory -ErrorAction SilentlyContinue
+            $appBinDir = if ($tfmDirs) { Join-Path ($tfmDirs | Select-Object -First 1).FullName "win-x64" } else { $null }
+
+            if ($appBinDir -and (Test-Path $appBinDir)) {
+                # App .pri (not Microsoft.* — those are already in publish output)
+                Get-ChildItem $appBinDir -Filter "*.pri" |
+                    Where-Object { $_.Name -notlike 'Microsoft.*' } |
+                    ForEach-Object { Copy-Item $_.FullName $AppPublishDir -Force; Write-Verbose "Copied PRI: $($_.Name)" }
+
+                # .xbf files (compiled XAML), preserving relative subdirectory structure
+                Get-ChildItem $appBinDir -Filter "*.xbf" -Recurse | ForEach-Object {
+                    $relPath = $_.FullName.Substring($appBinDir.Length).TrimStart('\', '/')
+                    $destPath = Join-Path $AppPublishDir $relPath
+                    New-Item -ItemType Directory -Path (Split-Path $destPath) -Force | Out-Null
+                    Copy-Item $_.FullName $destPath -Force
+                    Write-Verbose "Copied XBF: $relPath"
+                }
+            } else {
+                Write-Verbose "App bin dir not found for PRI/XBF post-copy: $appBinDir"
+            }
+
+            if ($Sign) {
+                $appExePath = Join-Path $AppPublishDir "ReportMate.exe"
+                if (Test-Path $appExePath) {
+                    Write-Step "Signing ReportMate.exe (GUI app)..."
+                    try {
+                        signPackage -FilePath $appExePath
+                        Write-Success "Signed ReportMate.exe"
+                    } catch {
+                        Write-Warning "Failed to sign ReportMate.exe: $_"
+                    }
+                }
+            }
+
+            $appExe = Get-Item (Join-Path $AppPublishDir "ReportMate.exe") -ErrorAction SilentlyContinue
+            if ($appExe) {
+                Write-Success "ReportMate.App built (ReportMate.exe: $([math]::Round($appExe.Length / 1MB, 2)) MB)"
+            } else {
+                Write-Success "ReportMate.App built successfully"
+            }
+        }
+    }
+} elseif ($SkipApp) {
+    Write-Info "Skipping app build step"
+}
+
+Write-Output ""
+
 # Prepare package payload
 Write-Step "Preparing package payload..."
 
 # Copy executable to payload root (will be installed to Program Files/ReportMate)
 Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $ProgramFilesPayloadDir -Force
 Write-Verbose "Copied managedreportsrunner.exe to payload root"
+
+# Copy GUI app to payload (installed to Program Files/ReportMate/App)
+if (-not $SkipApp -and (Test-Path $AppPublishDir) -and (Get-ChildItem $AppPublishDir -ErrorAction SilentlyContinue)) {
+    $appPayloadDir = Join-Path $ProgramFilesPayloadDir "App"
+    New-Item -ItemType Directory -Path $appPayloadDir -Force | Out-Null
+    Copy-Item (Join-Path $AppPublishDir "*") $appPayloadDir -Recurse -Force
+    Write-Verbose "Copied ReportMate.App to NUPKG payload App\ subdirectory"
+}
 
 # Create version file in payload root
 $versionContent = @"
@@ -967,6 +1067,14 @@ if (-not $SkipPKG) {
     # Copy executable to PKG payload (will be installed to Program Files/ReportMate)
     Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $PkgPayloadDir -Force
     Write-Verbose "Copied managedreportsrunner.exe to PKG payload"
+
+    # Copy GUI app to PKG payload
+    if (-not $SkipApp -and (Test-Path $AppPublishDir) -and (Get-ChildItem $AppPublishDir -ErrorAction SilentlyContinue)) {
+        $pkgAppDir = Join-Path $PkgPayloadDir "App"
+        New-Item -ItemType Directory -Path $pkgAppDir -Force | Out-Null
+        Copy-Item (Join-Path $AppPublishDir "*") $pkgAppDir -Recurse -Force
+        Write-Verbose "Copied ReportMate.App to PKG payload App\ subdirectory"
+    }
     
     # Copy configuration files to PKG payload
     Copy-Item (Join-Path $SrcDir "appsettings.yaml") $PkgPayloadDir -Force
@@ -1441,30 +1549,29 @@ Configure via Registry (CSP/OMA-URI):
 
 Write-Output ""
 # Build summary
-Write-Header "Build Summary"
-Write-Info "Version: $Version"
-Write-Info "Configuration: $Configuration"
-Write-Info "Output Directory: $OutputDir"
+$border = "═" * 63
+Write-Output ""
+Write-Output $border
+Write-Output "                      BUILD SUMMARY"
+Write-Output $border
+Write-Output ""
+Write-Output "  Version:       $Version"
+Write-Output "  Configuration: $Configuration"
+Write-Output "  Output:        $OutputDir"
 Write-Output ""
 
 $outputFiles = Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue
 if ($outputFiles) {
-    Write-Success "Generated packages:"
     foreach ($file in $outputFiles) {
-        $sizeKB = [math]::Round($file.Length / 1KB, 1)
-        $icon = switch ($file.Extension) {
-            ".nupkg" { "📦" }
-            ".pkg" { "📦" }
-            ".zip" { "🗜️ " }
-            ".msi" { "🔧" }
-            ".exe" { "⚡" }
-            default { "📄" }
-        }
-        Write-Info "  $icon $($file.Name) ($sizeKB KB)"
+        $sizeMB = [math]::Round($file.Length / 1MB, 1)
+        $relPath = ".\release\$($file.Name)"
+        Write-Output "  $relPath ($sizeMB MB)"
     }
 } else {
-    Write-Warning "No packages were generated"
+    Write-Warning "  No packages were generated"
 }
+Write-Output ""
+Write-Output $border
 
 Write-Output ""
 Write-Header "Next Steps"
