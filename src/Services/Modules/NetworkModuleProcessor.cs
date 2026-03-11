@@ -1170,6 +1170,19 @@ try {
                 // Get basic VPN connection info using PowerShell
                 await GetBasicVpnInfoAsync(data);
 
+                // Propagate active VPN tunnel to the active connection info.
+                // Only treat as active when the VPN profile explicitly shows "Connected",
+                // not merely because a VPN service process is running.
+                var activeVpn = data.VpnConnections.FirstOrDefault(v =>
+                    v.IsActive &&
+                    v.Status?.Equals("Connected", StringComparison.OrdinalIgnoreCase) == true);
+                if (activeVpn != null)
+                {
+                    data.ActiveConnection.IsVpnActive = true;
+                    data.ActiveConnection.VpnName = activeVpn.Name;
+                    _logger.LogInformation("Active VPN tunnel detected: {VpnName} ({VpnType})", activeVpn.Name, activeVpn.Type);
+                }
+
                 _logger.LogDebug("Collected {VpnCount} VPN connections", data.VpnConnections.Count);
             }
             catch (Exception ex)
