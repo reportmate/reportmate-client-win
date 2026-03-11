@@ -1343,7 +1343,8 @@ try {
         }
 
         /// <summary>
-        /// Get network statistics for VPN interfaces
+        /// Get network statistics and active tunnel status for VPN interfaces.
+        /// A tunnel is considered Connected only when the adapter is Up AND has a valid assigned IP.
         /// </summary>
         private async Task GetVpnNetworkStatisticsAsync(NetworkData data)
         {
@@ -1351,28 +1352,40 @@ try {
             {
                 var statisticsCommand = @"
 try {
-    $vpnAdapters = Get-NetAdapter | Where-Object { 
-        $_.InterfaceDescription -like '*VPN*' -or 
-        $_.InterfaceDescription -like '*WAN Miniport*' -or 
-        $_.Name -like '*VPN*' -or
+    $vpnAdapters = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { 
+        $_.InterfaceDescription -like '*VPN*' -or
+        $_.InterfaceDescription -like '*Fortinet*' -or
+        $_.InterfaceDescription -like '*FortiClient*' -or
+        $_.InterfaceDescription -like '*Cisco*' -or
+        $_.InterfaceDescription -like '*AnyConnect*' -or
+        $_.InterfaceDescription -like '*GlobalProtect*' -or
+        $_.InterfaceDescription -like '*Pulse*' -or
+        $_.InterfaceDescription -like '*Zscaler*' -or
+        $_.InterfaceDescription -like '*OpenVPN*' -or
+        $_.InterfaceDescription -like '*WireGuard*' -or
+        $_.InterfaceDescription -like '*WAN Miniport*' -or
+        $_.InterfaceDescription -like '*SonicWall*' -or
         $_.Name -like '*TAP*' -or
         $_.Name -like '*TUN*'
-    } -ErrorAction SilentlyContinue
+    }
     
     if ($vpnAdapters) {
         $vpnAdapters | ForEach-Object {
             $adapter = $_
             $stats = Get-NetAdapterStatistics -Name $adapter.Name -ErrorAction SilentlyContinue
-            if ($stats) {
-                [PSCustomObject]@{
-                    Name = $adapter.Name
-                    InterfaceDescription = $adapter.InterfaceDescription
-                    BytesSent = $stats.BytesSent
-                    BytesReceived = $stats.BytesReceived
-                    Status = $adapter.Status
-                    LinkSpeed = $adapter.LinkSpeed
-                    MTU = $adapter.MtuSize
-                }
+            # Only flag as connected when the adapter is Up AND has a valid non-APIPA IPv4 address
+            $ip = (Get-NetIPAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -notlike '127.*' -and $_.PrefixOrigin -ne 'WellKnown' } |
+                Select-Object -First 1).IPAddress
+            [PSCustomObject]@{
+                Name = $adapter.Name
+                InterfaceDescription = $adapter.InterfaceDescription
+                BytesSent = if ($stats) { $stats.BytesSent } else { 0 }
+                BytesReceived = if ($stats) { $stats.BytesReceived } else { 0 }
+                AdapterStatus = $adapter.Status
+                LinkSpeed = $adapter.LinkSpeed
+                MTU = $adapter.MtuSize
+                IpAddress = if ($ip) { $ip } else { '' }
             }
         } | ConvertTo-Json -Depth 1
     } else {
@@ -1395,24 +1408,49 @@ try {
                         {
                             var adapterName = GetStringValue(stat, "Name");
                             var description = GetStringValue(stat, "InterfaceDescription");
-                            
-                            // Find matching VPN connection
-                            var matchingVpn = data.VpnConnections.FirstOrDefault(v => 
+                            var adapterStatus = GetStringValue(stat, "AdapterStatus");
+                            var ipAddress = GetStringValue(stat, "IpAddress");
+
+                            // Find matching VPN connection by adapter name or description
+                            var matchingVpn = data.VpnConnections.FirstOrDefault(v =>
                                 v.Name.Contains(adapterName, StringComparison.OrdinalIgnoreCase) ||
                                 adapterName.Contains(v.Name, StringComparison.OrdinalIgnoreCase) ||
-                                description.Contains(v.Name, StringComparison.OrdinalIgnoreCase));
-                                
+                                description.Contains(v.Name, StringComparison.OrdinalIgnoreCase) ||
+                                v.Name.Contains(description, StringComparison.OrdinalIgnoreCase));
+
+                            if (matchingVpn == null && !string.IsNullOrEmpty(description))
+                            {
+                                // Adapter found but no matching VPN entry — add a new one
+                                // (handles third-party VPN clients not in vpn_services)
+                                matchingVpn = new VpnConnection
+                                {
+                                    Name = description,
+                                    Type = DetermineVpnTypeFromService(description)
+                                };
+                                data.VpnConnections.Add(matchingVpn);
+                            }
+
                             if (matchingVpn != null)
                             {
                                 matchingVpn.BytesSent = GetLongValue(stat, "BytesSent");
                                 matchingVpn.BytesReceived = GetLongValue(stat, "BytesReceived");
-                                
-                                // Update status based on adapter status
-                                var adapterStatus = GetStringValue(stat, "Status");
-                                if (!string.IsNullOrEmpty(adapterStatus))
+
+                                // An adapter is "Connected" only when it is Up AND has an assigned IP.
+                                // "Up" alone means the adapter exists; the IP confirms an active tunnel.
+                                var isUp = adapterStatus?.Equals("Up", StringComparison.OrdinalIgnoreCase) == true;
+                                var hasActiveIp = !string.IsNullOrEmpty(ipAddress);
+                                var isConnected = isUp && hasActiveIp;
+
+                                matchingVpn.IsActive = isConnected;
+                                matchingVpn.Status = isConnected ? "Connected" : "Disconnected";
+                                if (hasActiveIp)
                                 {
-                                    matchingVpn.Status = adapterStatus;
-                                    matchingVpn.IsActive = adapterStatus.Equals("Up", StringComparison.OrdinalIgnoreCase);
+                                    matchingVpn.LocalAddress = ipAddress;
+                                }
+
+                                if (isConnected)
+                                {
+                                    _logger.LogInformation("VPN adapter connected: {Name}, IP: {IP}", description, ipAddress);
                                 }
                             }
                         }
