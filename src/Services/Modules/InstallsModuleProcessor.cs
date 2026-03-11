@@ -2663,8 +2663,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (itemsWithErrors.Any())
                     {
                         var message = itemsWithErrors.Count == 1
-                            ? $"{itemsWithErrors[0]} has an error"
-                            : $"{string.Join(", ", itemsWithErrors)} have errors";
+                            ? "Installs module reported an error"
+                            : $"Installs module reported {itemsWithErrors.Count} errors";
                         events.Add(CreateEvent("error", message, new Dictionary<string, object>
                         {
                             ["failed_items"] = itemsWithErrors.Take(10).ToList(),
