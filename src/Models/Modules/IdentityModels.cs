@@ -14,11 +14,13 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<GroupInfo> Groups { get; set; } = new();
         public List<LoggedInUser> LoggedInUsers { get; set; } = new();
         public List<LoginHistoryEntry> LoginHistory { get; set; } = new();
+        public List<SessionHistoryEntry> SessionHistory { get; set; } = new();
         public DirectoryServicesInfo DirectoryServices { get; set; } = new();
         public SsoState SsoState { get; set; } = new();
         public DomainTrust DomainTrust { get; set; } = new();
         public WindowsHelloInfo WindowsHello { get; set; } = new();
         public IdentitySummary Summary { get; set; } = new();
+        public SessionSummary SessionSummary { get; set; } = new();
     }
 
     /// <summary>
@@ -358,5 +360,36 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Name { get; set; } = string.Empty;
         public string Value { get; set; } = string.Empty;
         public string Scope { get; set; } = string.Empty; // LocalMachine, CurrentUser
+    }
+
+    /// <summary>
+    /// RDP/Terminal Services session history entry from TerminalServices-LocalSessionManager event log
+    /// </summary>
+    public class SessionHistoryEntry
+    {
+        public string Username { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
+        public DateTime? EndTime { get; set; }
+        public string Duration { get; set; } = string.Empty;
+        public double DurationMinutes { get; set; }
+        public int EventId { get; set; }
+        public string EventType { get; set; } = string.Empty; // Logon, Logoff, Disconnect, Reconnect
+        public int SessionId { get; set; }
+        public string SourceAddress { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Aggregated session statistics for dashboard display
+    /// </summary>
+    public class SessionSummary
+    {
+        public int TotalSessions { get; set; }
+        public int UniqueUsers { get; set; }
+        public double AvgSessionMinutes { get; set; }
+        public double MedianSessionMinutes { get; set; }
+        public DateTime? OldestSession { get; set; }
+        public DateTime? NewestSession { get; set; }
+        public Dictionary<string, int> SessionsByHour { get; set; } = new();
+        public Dictionary<string, int> SessionsByDayOfWeek { get; set; } = new();
     }
 }
