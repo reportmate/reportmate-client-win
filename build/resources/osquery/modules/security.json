@@ -4,7 +4,7 @@
   "description": "Security features and protection status",
   "queries": {
     "certificates": {
-      "query": "SELECT common_name, subject, issuer, serial, store, store_location, not_valid_before, not_valid_after, key_algorithm, signing_algorithm, self_signed, sha1 FROM certificates WHERE store_location != '' LIMIT 500;",
+      "query": "SELECT common_name, subject, issuer, serial, store, store_location, not_valid_before, not_valid_after, key_algorithm, signing_algorithm, key_strength, self_signed, sha1 FROM certificates WHERE store_location != '';",
       "interval": 3600,
       "description": "System certificates from certificate stores"
     },
