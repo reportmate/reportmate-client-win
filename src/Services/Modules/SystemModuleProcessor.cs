@@ -579,9 +579,41 @@ namespace ReportMate.WindowsClient.Services.Modules
                         if ($Update.LastDeploymentChangeTime) {
                             $releaseDate = $Update.LastDeploymentChangeTime.ToString('yyyy-MM-ddTHH:mm:ss.fffK')
                         }
+
+                        # Extract KB article IDs
+                        $kbs = @()
+                        try {
+                            for ($ki = 0; $ki -lt $Update.KBArticleIDs.Count; $ki++) {
+                                $kbs += 'KB' + $Update.KBArticleIDs.Item($ki)
+                            }
+                        } catch {}
+
+                        # Extract CVE IDs
+                        $cves = @()
+                        try {
+                            for ($ci = 0; $ci -lt $Update.CveIDs.Count; $ci++) {
+                                $cves += $Update.CveIDs.Item($ci)
+                            }
+                        } catch {}
+
+                        # Description (truncated to 300 chars)
+                        $desc = ''
+                        try {
+                            if ($Update.Description) {
+                                $desc = if ($Update.Description.Length -gt 300) { $Update.Description.Substring(0, 300) } else { $Update.Description }
+                            }
+                        } catch {}
+
+                        $severity = ''
+                        try { $severity = $Update.MsrcSeverity } catch {}
+
                         $updates += @{
                             Title = $Update.Title
+                            KBArticles = ($kbs -join ',')
                             Category = $category
+                            Severity = $severity
+                            Description = $desc
+                            CVEs = @($cves)
                             IsMandatory = [bool]$Update.IsMandatory
                             IsDownloaded = [bool]$Update.IsDownloaded
                             RebootRequired = [bool]$Update.RebootRequired
@@ -623,11 +655,25 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var update = new PendingWindowsUpdate
                     {
                         Title = item.TryGetProperty("Title", out var t) ? t.GetString() ?? "" : "",
+                        KbNumber = item.TryGetProperty("KBArticles", out var kb) ? kb.GetString() ?? "" : "",
                         Category = item.TryGetProperty("Category", out var c) ? c.GetString() ?? "" : "",
+                        Severity = item.TryGetProperty("Severity", out var sev) ? sev.GetString() ?? "" : "",
+                        Description = item.TryGetProperty("Description", out var desc) ? desc.GetString() ?? "" : "",
                         IsMandatory = item.TryGetProperty("IsMandatory", out var m) && m.GetBoolean(),
                         IsDownloaded = item.TryGetProperty("IsDownloaded", out var d) && d.GetBoolean(),
                         RebootRequired = item.TryGetProperty("RebootRequired", out var r) && r.GetBoolean(),
                     };
+
+                    // Parse CVEs array
+                    if (item.TryGetProperty("CVEs", out var cvesProp) && cvesProp.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var cve in cvesProp.EnumerateArray())
+                        {
+                            var cveId = cve.GetString();
+                            if (!string.IsNullOrEmpty(cveId))
+                                update.Cves.Add(cveId);
+                        }
+                    }
 
                     if (item.TryGetProperty("ReleaseDate", out var rd) && rd.ValueKind == JsonValueKind.String)
                     {
