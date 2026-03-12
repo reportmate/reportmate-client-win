@@ -127,7 +127,11 @@ namespace ReportMate.WindowsClient.Models.Modules
     public class PendingWindowsUpdate
     {
         public string Title { get; set; } = string.Empty;
+        public string KbNumber { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
+        public string Severity { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public List<string> Cves { get; set; } = new();
         public bool IsMandatory { get; set; }
         public bool IsDownloaded { get; set; }
         public bool RebootRequired { get; set; }
