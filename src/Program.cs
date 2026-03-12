@@ -491,6 +491,10 @@ public class Program
         services.AddScoped<IConfigurationService, ConfigurationService>();
         services.AddScoped<IWmiHelperService, WmiHelperService>(); // Used by Hardware, Display, Peripherals, Printer, Management, Network, Identity
         
+        // Register diagnostic services
+        services.AddScoped<MdmDiagnosticsService>();
+        services.AddScoped<IntuneLogsService>();
+
         // Register modular services
         services.AddScoped<ModularOsQueryService>();
         services.AddScoped<IModularDataCollectionService, ModularDataCollectionService>();
