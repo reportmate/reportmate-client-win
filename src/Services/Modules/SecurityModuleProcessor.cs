@@ -53,6 +53,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process BitLocker/encryption information
             ProcessEncryptionInfo(osqueryResults, data);
 
+            // Process BitLocker recovery key escrow status
+            await ProcessBitLockerRecoveryKeyEscrowAsync(data);
+
             // Process TPM information
             ProcessTpmInfo(osqueryResults, data);
 
@@ -2591,6 +2594,152 @@ try {
                 data.CertificateSummary.UserExpiredCount,
                 data.CertificateSummary.ExpiringSoonCount,
                 data.CertificateSummary.ValidCount);
+        }
+
+        private async Task ProcessBitLockerRecoveryKeyEscrowAsync(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Checking BitLocker recovery key escrow status");
+
+                var script = @"
+try {
+    $volumes = Get-BitLockerVolume -ErrorAction Stop
+    $results = @()
+    
+    foreach ($vol in $volumes) {
+        if ($vol.VolumeStatus -ne 'FullyDecrypted') {
+            $recoveryKeys = @()
+            $keyProtectors = @()
+            $isEscrowed = $false
+            $escrowLocation = 'Not Backed Up'
+            $escrowDate = $null
+            
+            foreach ($kp in $vol.KeyProtector) {
+                $keyProtectors += $kp.KeyProtectorType.ToString()
+                
+                if ($kp.KeyProtectorType -eq 'RecoveryPassword') {
+                    $recoveryKeys += $kp.KeyProtectorId
+                    
+                    try {
+                        $regPath = ""HKLM:\SOFTWARE\Policies\Microsoft\FVE""
+                        $useAD = (Get-ItemProperty $regPath -Name 'ActiveDirectoryBackup' -ErrorAction SilentlyContinue).ActiveDirectoryBackup
+                        
+                        $events = Get-WinEvent -LogName 'Microsoft-Windows-BitLocker/BitLocker Management' -MaxEvents 100 -ErrorAction SilentlyContinue | 
+                            Where-Object { $_.Id -eq 845 -and $_.Message -like '*' + $kp.KeyProtectorId + '*' }
+                        
+                        if ($events) {
+                            $isEscrowed = $true
+                            $escrowLocation = 'Entra ID'
+                            $escrowDate = $events[0].TimeCreated.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        } elseif ($useAD -eq 1) {
+                            $isEscrowed = $true
+                            $escrowLocation = 'Active Directory'
+                        }
+                    } catch { }
+                }
+            }
+            
+            $results += [PSCustomObject]@{
+                DriveLetter = $vol.MountPoint
+                RecoveryKeyId = if ($recoveryKeys.Count -gt 0) { $recoveryKeys[0] } else { '' }
+                IsEscrowed = $isEscrowed
+                EscrowDate = $escrowDate
+                EscrowLocation = $escrowLocation
+                KeyProtectors = ($keyProtectors -join ',')
+            }
+        }
+    }
+    
+    if ($results.Count -gt 0) {
+        $results | ConvertTo-Json -Compress
+    } else {
+        Write-Output 'NO_ENCRYPTED_VOLUMES'
+    }
+} catch {
+    Write-Output ""ERROR:$($_.Exception.Message)""
+}
+";
+
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+
+                if (!string.IsNullOrEmpty(result) && result != "NO_ENCRYPTED_VOLUMES" && !result.Contains("ERROR:"))
+                {
+                    using var document = System.Text.Json.JsonDocument.Parse(result);
+                    var root = document.RootElement;
+
+                    bool anyEscrowed = false;
+                    DateTime? latestEscrow = null;
+
+                    var volumes = root.ValueKind == System.Text.Json.JsonValueKind.Array ? root : 
+                        System.Text.Json.JsonDocument.Parse($"[{result}]").RootElement;
+
+                    foreach (var vol in volumes.EnumerateArray())
+                    {
+                        var volumeKey = new VolumeRecoveryKey
+                        {
+                            DriveLetter = vol.TryGetProperty("DriveLetter", out var dl) ? dl.GetString() ?? "" : "",
+                            RecoveryKeyId = vol.TryGetProperty("RecoveryKeyId", out var rkid) ? rkid.GetString() ?? "" : "",
+                            IsEscrowed = vol.TryGetProperty("IsEscrowed", out var esc) && esc.GetBoolean(),
+                            EscrowLocation = vol.TryGetProperty("EscrowLocation", out var loc) ? loc.GetString() ?? "" : ""
+                        };
+
+                        if (vol.TryGetProperty("EscrowDate", out var escDate) && escDate.ValueKind == System.Text.Json.JsonValueKind.String)
+                        {
+                            if (DateTime.TryParse(escDate.GetString(), out var dt))
+                            {
+                                volumeKey.EscrowDate = dt;
+                                if (!latestEscrow.HasValue || dt > latestEscrow.Value)
+                                {
+                                    latestEscrow = dt;
+                                }
+                            }
+                        }
+
+                        if (vol.TryGetProperty("KeyProtectors", out var kps) && kps.ValueKind == System.Text.Json.JsonValueKind.String)
+                        {
+                            volumeKey.KeyProtectors = kps.GetString()?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList() ?? new List<string>();
+                        }
+
+                        data.Encryption.BitLocker.RecoveryKeys.Add(volumeKey);
+
+                        if (volumeKey.IsEscrowed)
+                        {
+                            anyEscrowed = true;
+                        }
+                    }
+
+                    data.Encryption.BitLocker.RecoveryKeysEscrowed = anyEscrowed;
+                    data.Encryption.BitLocker.LastEscrowDate = latestEscrow;
+                    
+                    if (anyEscrowed)
+                    {
+                        var locations = data.Encryption.BitLocker.RecoveryKeys
+                            .Where(k => k.IsEscrowed)
+                            .Select(k => k.EscrowLocation)
+                            .GroupBy(l => l)
+                            .OrderByDescending(g => g.Count())
+                            .FirstOrDefault();
+                        
+                        data.Encryption.BitLocker.EscrowLocation = locations?.Key ?? "Unknown";
+                    }
+                    else
+                    {
+                        data.Encryption.BitLocker.EscrowLocation = "Not Backed Up";
+                    }
+
+                    _logger.LogInformation("BitLocker recovery key escrow status - Escrowed: {Escrowed}, Location: {Location}, Volumes: {Count}",
+                        anyEscrowed, data.Encryption.BitLocker.EscrowLocation, data.Encryption.BitLocker.RecoveryKeys.Count);
+                }
+                else if (!string.IsNullOrEmpty(result) && result.Contains("ERROR:"))
+                {
+                    _logger.LogWarning("Error checking BitLocker recovery key escrow: {Error}", result);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to process BitLocker recovery key escrow status");
+            }
         }
     }
 }
