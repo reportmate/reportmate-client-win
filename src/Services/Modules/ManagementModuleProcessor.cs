@@ -19,15 +19,21 @@ namespace ReportMate.WindowsClient.Services.Modules
     {
         private readonly ILogger<ManagementModuleProcessor> _logger;
         private readonly IWmiHelperService _wmiHelperService;
+        private readonly MdmDiagnosticsService _mdmDiagnosticsService;
+        private readonly IntuneLogsService _intuneLogsService;
 
         public override string ModuleId => "management";
 
         public ManagementModuleProcessor(
             ILogger<ManagementModuleProcessor> logger,
-            IWmiHelperService wmiHelperService)
+            IWmiHelperService wmiHelperService,
+            MdmDiagnosticsService mdmDiagnosticsService,
+            IntuneLogsService intuneLogsService)
         {
             _logger = logger;
             _wmiHelperService = wmiHelperService;
+            _mdmDiagnosticsService = mdmDiagnosticsService;
+            _intuneLogsService = intuneLogsService;
         }
 
         public override async Task<ManagementData> ProcessModuleAsync(
@@ -50,6 +56,9 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Secondary data sources: osquery and WMI fallbacks
             await ProcessLegacyMdmDataAsync(osqueryResults, data);
+
+            // Collect Primary User and Management Name from MDM enrollment registry
+            await CollectPrimaryUserAndManagementNameAsync(data);
 
             // Process MDM configuration profiles (policy areas applied to device)
             await ProcessMdmConfigurationProfilesAsync(osqueryResults, data);
@@ -77,6 +86,26 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Calculate policy summary
             CalculatePolicySummary(data);
             data.LastPolicyUpdate = DateTime.UtcNow;
+
+            // Collect advanced MDM diagnostics (health attestation, co-management, compliance details)
+            try
+            {
+                data.MdmDiagnostics = await _mdmDiagnosticsService.GetMdmDiagnosticsAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MDM diagnostics collection failed");
+            }
+
+            // Collect recent Intune Management Extension logs
+            try
+            {
+                data.RecentIntuneLogs = await _intuneLogsService.GetRecentLogsAsync(maxLines: 50);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Intune logs collection failed");
+            }
 
             // Set last sync time
             if (data.DeviceState.EntraJoined || data.DeviceState.EnterpriseJoined || data.DeviceState.DomainJoined)
@@ -2063,6 +2092,89 @@ $policies | ConvertTo-Json -Depth 3 -Compress
                 return "Medium";
 
             return "Low";
+        }
+
+        private async Task CollectPrimaryUserAndManagementNameAsync(ManagementData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Primary User and Management Name from MDM enrollment");
+
+                var script = @"
+$result = @{
+    PrimaryUser = $null
+    ManagementName = $null
+}
+
+# Search all enrollment GUIDs for Primary User and Management Name
+Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Enrollments\*' -ErrorAction SilentlyContinue | ForEach-Object {
+    $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+    
+    # Primary User (UPN who enrolled the device or was assigned as primary)
+    if ($props.UPN -and !$result.PrimaryUser) {
+        $result.PrimaryUser = $props.UPN
+    }
+    
+    # Management Name from enrollment
+    if ($props.DeviceName -and !$result.ManagementName) {
+        $result.ManagementName = $props.DeviceName
+    }
+}
+
+# Also check DMClient registry for Management Name
+$dmClient = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Provisioning\OMADM\Accounts\*' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*MS DM Server*' }
+if ($dmClient -and !$result.ManagementName) {
+    $result.ManagementName = $dmClient.DeviceName
+}
+
+# Fallback: Check Intune management extension for primary user context
+$imeUser = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\IntuneManagementExtension\*' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($imeUser -and !$result.PrimaryUser) {
+    $result.PrimaryUser = $imeUser.PSChildName
+}
+
+$result | ConvertTo-Json -Compress
+";
+
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+
+                if (!string.IsNullOrEmpty(result) && result != "null")
+                {
+                    _logger.LogDebug("Primary User/Management Name result: {Result}", result);
+
+                    try
+                    {
+                        var json = System.Text.Json.JsonDocument.Parse(result);
+                        var root = json.RootElement;
+
+                        if (root.TryGetProperty("PrimaryUser", out var primaryUserElement) && 
+                            primaryUserElement.ValueKind != System.Text.Json.JsonValueKind.Null)
+                        {
+                            data.DeviceDetails.PrimaryUser = primaryUserElement.GetString() ?? string.Empty;
+                            _logger.LogInformation("Found Primary User: {PrimaryUser}", data.DeviceDetails.PrimaryUser);
+                        }
+
+                        if (root.TryGetProperty("ManagementName", out var managementNameElement) && 
+                            managementNameElement.ValueKind != System.Text.Json.JsonValueKind.Null)
+                        {
+                            data.DeviceDetails.ManagementName = managementNameElement.GetString() ?? string.Empty;
+                            _logger.LogInformation("Found Management Name: {ManagementName}", data.DeviceDetails.ManagementName);
+                        }
+                    }
+                    catch (System.Text.Json.JsonException ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to parse Primary User/Management Name JSON: {Result}", result);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("No Primary User or Management Name found in registry");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to collect Primary User and Management Name");
+            }
         }
     }
 }

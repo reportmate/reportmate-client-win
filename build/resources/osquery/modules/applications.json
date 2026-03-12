@@ -1,7 +1,7 @@
 {
   "module": "applications",
-  "version": "1.0.0", 
-  "description": "Software inventory and running processes",
+  "version": "1.1.0", 
+  "description": "Software inventory and running processes with enhanced version detection",
   "queries": {
     "programs": {
       "query": "SELECT name, version, install_location, install_date, install_source, language, publisher, uninstall_string, identifying_number FROM programs WHERE name != '';",

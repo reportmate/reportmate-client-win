@@ -147,9 +147,25 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Status { get; set; } = string.Empty;
         public string RecoveryKeyId { get; set; } = string.Empty;
         public List<string> EncryptedDrives { get; set; } = new();
+        public List<VolumeRecoveryKey> RecoveryKeys { get; set; } = new();
+        
+        // Recovery key escrow status
+        public bool RecoveryKeysEscrowed { get; set; }
+        public DateTime? LastEscrowDate { get; set; }
+        public string EscrowLocation { get; set; } = string.Empty; // "Entra ID", "Active Directory", "Not Backed Up"
         
         // Computed status fields for UI display
         public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled"
+    }
+
+    public class VolumeRecoveryKey
+    {
+        public string DriveLetter { get; set; } = string.Empty;
+        public string RecoveryKeyId { get; set; } = string.Empty;
+        public bool IsEscrowed { get; set; }
+        public DateTime? EscrowDate { get; set; }
+        public string EscrowLocation { get; set; } = string.Empty;
+        public List<string> KeyProtectors { get; set; } = new();
     }
 
     public class EncryptedVolume
@@ -333,5 +349,19 @@ namespace ReportMate.WindowsClient.Models.Modules
         public int TotalAllowed30d { get; set; }
         public DateTime? LastThreatDetectedAt { get; set; }
         public bool HasActiveThreats { get; set; }
+    }
+
+    /// <summary>
+    /// Health Attestation information from MDM (Device Health Attestation)
+    /// </summary>
+    public class HealthAttestationInfo
+    {
+        public bool SecureBootEnabled { get; set; }
+        public string BitLockerStatus { get; set; } = "Unknown";
+        public bool CodeIntegrityEnabled { get; set; }
+        public bool BootDebuggingEnabled { get; set; }
+        public DateTime? LastUpdateTime { get; set; }
+        public string? ErrorMessage { get; set; }
+        public string StatusDisplay { get; set; } = string.Empty;
     }
 }

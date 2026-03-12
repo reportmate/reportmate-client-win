@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ReportMate.WindowsClient.Models.Modules;
+using ReportMate.WindowsClient.Services;
 
 namespace ReportMate.WindowsClient.Models.Modules
 {
@@ -28,6 +29,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string OwnershipType { get; set; } = string.Empty;
         public DateTime? LastSync { get; set; }
         public AutopilotConfig AutopilotConfig { get; set; } = new();
+
+        // MDM diagnostics (health attestation, co-management, policy details)
+        public MdmDiagnosticsData? MdmDiagnostics { get; set; }
+
+        // Recent Intune Management Extension logs
+        public IntuneLogsResponse? RecentIntuneLogs { get; set; }
 
         // --- Policy & configuration data (merged from deprecated profiles module) ---
         public List<ConfigurationProfile> ConfigurationProfiles { get; set; } = new();
@@ -224,6 +231,10 @@ namespace ReportMate.WindowsClient.Models.Modules
         // Enhanced device identification
         public string IntuneDeviceId { get; set; } = string.Empty; // Microsoft Intune Device ID
         public string EntraObjectId { get; set; } = string.Empty; // Microsoft Entra Device Object ID (confirmed)
+        
+        // Primary user and management name from MDM enrollment
+        public string PrimaryUser { get; set; } = string.Empty;
+        public string ManagementName { get; set; } = string.Empty;
     }
 
     public class TenantDetails
