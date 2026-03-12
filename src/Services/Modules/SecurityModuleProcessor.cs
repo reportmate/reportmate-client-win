@@ -390,6 +390,157 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogWarning(ex, "Failed to collect Secure Boot status");
                 data.SecureBoot.StatusDisplay = "Unknown";
             }
+
+            // Collect UEFI Secure Boot certificates from firmware (DB and KEK stores)
+            await CollectUefiCertificates(data, "db");
+            await CollectUefiCertificates(data, "KEK");
+        }
+
+        private async Task CollectUefiCertificates(SecurityData data, string storeName)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting UEFI {Store} certificates from firmware", storeName);
+
+                // Get raw EFI_SIGNATURE_LIST bytes as base64 via a simple one-liner
+                var result = await PowerShellRunner.ExecuteAsync(
+                    $"try {{ [Convert]::ToBase64String((Get-SecureBootUEFI -Name {storeName} -ErrorAction Stop).Bytes) }} catch {{ '' }}", _logger);
+
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    _logger.LogDebug("No UEFI {Store} data returned", storeName);
+                    return;
+                }
+
+                byte[] raw;
+                try
+                {
+                    raw = Convert.FromBase64String(result.Trim());
+                }
+                catch
+                {
+                    _logger.LogWarning("Failed to decode UEFI {Store} base64 data", storeName);
+                    return;
+                }
+
+                if (raw.Length < 28)
+                {
+                    _logger.LogDebug("UEFI {Store} data too small ({Length} bytes)", storeName, raw.Length);
+                    return;
+                }
+
+                // Parse EFI_SIGNATURE_LIST structures
+                // GUID for X.509 certificate type: a5c059a1-94e4-4aa7-87b5-ab155c2bf072
+                var x509TypeGuid = new Guid("a5c059a1-94e4-4aa7-87b5-ab155c2bf072");
+                var storeLabel = storeName.ToLowerInvariant();
+                int offset = 0;
+                int certCount = 0;
+
+                while (offset + 28 <= raw.Length)
+                {
+                    var listGuid = new Guid(new ReadOnlySpan<byte>(raw, offset, 16));
+                    uint listSize = BitConverter.ToUInt32(raw, offset + 16);
+                    uint headerSize = BitConverter.ToUInt32(raw, offset + 20);
+                    uint sigSize = BitConverter.ToUInt32(raw, offset + 24);
+
+                    if (listSize == 0 || offset + (int)listSize > raw.Length)
+                        break;
+
+                    if (listGuid == x509TypeGuid && sigSize > 16)
+                    {
+                        int dataStart = offset + 28 + (int)headerSize;
+                        while (dataStart + (int)sigSize <= offset + (int)listSize)
+                        {
+                            try
+                            {
+                                // Each signature entry: 16-byte SignatureOwner GUID + DER cert bytes
+                                int certStart = dataStart + 16;
+                                int certLen = (int)sigSize - 16;
+                                var certBytes = new byte[certLen];
+                                Array.Copy(raw, certStart, certBytes, 0, certLen);
+
+                                using var x509 = System.Security.Cryptography.X509Certificates.X509CertificateLoader.LoadCertificate(certBytes);
+
+                                string cn = "";
+                                var match = System.Text.RegularExpressions.Regex.Match(x509.Subject, @"CN=([^,]+)");
+                                if (match.Success) cn = match.Groups[1].Value.Trim();
+
+                                var uefiCert = new UefiCertificateInfo
+                                {
+                                    CommonName = cn,
+                                    Subject = x509.Subject,
+                                    Issuer = x509.Issuer,
+                                    Thumbprint = x509.Thumbprint,
+                                    SerialNumber = x509.SerialNumber,
+                                    Store = storeLabel,
+                                    SigningAlgorithm = x509.SignatureAlgorithm.FriendlyName ?? "",
+                                    KeyAlgorithm = x509.PublicKey.Oid.FriendlyName ?? "",
+                                    NotBefore = x509.NotBefore.ToUniversalTime(),
+                                    NotAfter = x509.NotAfter.ToUniversalTime(),
+                                };
+
+                                try { uefiCert.KeyLength = x509.PublicKey.GetRSAPublicKey()?.KeySize; }
+                                catch { /* not RSA */ }
+
+                                // Add to typed UEFI cert lists
+                                if (storeLabel == "db")
+                                    data.SecureBoot.DbCertificates.Add(uefiCert);
+                                else
+                                    data.SecureBoot.KekCertificates.Add(uefiCert);
+
+                                // Also add to the main Certificates list for fleet-wide search
+                                var certInfo = new CertificateInfo
+                                {
+                                    CommonName = cn,
+                                    Subject = x509.Subject,
+                                    Issuer = x509.Issuer,
+                                    SerialNumber = x509.SerialNumber,
+                                    Thumbprint = x509.Thumbprint,
+                                    StoreLocation = "UEFI",
+                                    StoreName = storeLabel,
+                                    NotBefore = uefiCert.NotBefore,
+                                    NotAfter = uefiCert.NotAfter,
+                                    KeyAlgorithm = uefiCert.KeyAlgorithm,
+                                    SigningAlgorithm = uefiCert.SigningAlgorithm,
+                                    KeyLength = uefiCert.KeyLength,
+                                    IsSelfSigned = x509.Subject == x509.Issuer
+                                };
+
+                                // Calculate expiry status
+                                if (certInfo.NotAfter.HasValue)
+                                {
+                                    var now = DateTime.UtcNow;
+                                    var daysUntilExpiry = (certInfo.NotAfter.Value - now).Days;
+                                    certInfo.DaysUntilExpiry = daysUntilExpiry;
+                                    certInfo.IsExpired = daysUntilExpiry < 0;
+                                    certInfo.IsExpiringSoon = daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
+                                    certInfo.Status = certInfo.IsExpired ? "Expired" : certInfo.IsExpiringSoon ? "ExpiringSoon" : "Valid";
+                                }
+                                else
+                                {
+                                    certInfo.Status = "Unknown";
+                                }
+
+                                data.Certificates.Add(certInfo);
+                                certCount++;
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogDebug(ex, "Skipping non-X.509 entry in UEFI {Store} at offset {Offset}", storeName, dataStart);
+                            }
+                            dataStart += (int)sigSize;
+                        }
+                    }
+
+                    offset += (int)listSize;
+                }
+
+                _logger.LogInformation("Collected {Count} UEFI {Store} certificates from firmware", certCount, storeName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect UEFI {Store} certificates", storeName);
+            }
         }
 
         private void ProcessSecurityUpdates(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
@@ -2338,7 +2489,7 @@ try {
                         Subject = GetStringValue(cert, "subject"),
                         Issuer = GetStringValue(cert, "issuer"),
                         SerialNumber = GetStringValue(cert, "serial"),
-                        Thumbprint = GetStringValue(cert, "thumbprint"),
+                        Thumbprint = GetStringValue(cert, "sha1"),
                         StoreLocation = GetStringValue(cert, "store_location"),
                         StoreName = GetStringValue(cert, "store"),
                         KeyAlgorithm = GetStringValue(cert, "key_algorithm"),

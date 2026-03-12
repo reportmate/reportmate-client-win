@@ -45,9 +45,17 @@ namespace ReportMate.WindowsClient.Models.Modules
     /// </summary>
     public class UefiCertificateInfo
     {
-        public string Thumbprint { get; set; } = string.Empty;
+        public string CommonName { get; set; } = string.Empty;
         public string Subject { get; set; } = string.Empty;
+        public string Issuer { get; set; } = string.Empty;
+        public string Thumbprint { get; set; } = string.Empty;
+        public string SerialNumber { get; set; } = string.Empty;
         public string Store { get; set; } = string.Empty; // "db" or "kek"
+        public DateTime? NotBefore { get; set; }
+        public DateTime? NotAfter { get; set; }
+        public string SigningAlgorithm { get; set; } = string.Empty;
+        public string KeyAlgorithm { get; set; } = string.Empty;
+        public int? KeyLength { get; set; }
     }
 
     /// <summary>
