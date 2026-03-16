@@ -245,7 +245,12 @@ namespace ReportMate.WindowsClient.Services
         {
             try
             {
-                var baseUrl = _configuration.GetValue<string>("ReportMate:ApiBaseUrl") ?? "https://reportmate-api.azurewebsites.net";
+                var baseUrl = _configuration.GetValue<string>("ReportMate:ApiBaseUrl");
+                if (string.IsNullOrEmpty(baseUrl))
+                {
+                    _logger.LogError("ReportMate:ApiBaseUrl is not configured");
+                    return false;
+                }
                 
                 using var httpClient = new HttpClient();
                 var uploader = new DatabaseUploader(httpClient, _logger, baseUrl);
