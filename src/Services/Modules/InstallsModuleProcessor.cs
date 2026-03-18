@@ -151,10 +151,6 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process run log
             ProcessRunLog(data);
 
-            // Enrich Cimian items with category/developer from catalog YAML files.
-            // Also populates Cimian.Catalogs from the catalogs directory (mirrors Mac client approach).
-            EnrichItemsWithCatalogData(data);
-
             data.LastCheckIn = DateTime.UtcNow;
 
             _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Items: {ItemCount}", 
@@ -681,11 +677,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                 
                 if (Directory.Exists(CIMIAN_LOGS_PATH) && data.Cimian != null)
                 {
-                    // Logs are structured as logs/{date}/{time}/events.jsonl
-                    // Enumerate session directories within each date directory
                     var sessionDirs = Directory.GetDirectories(CIMIAN_LOGS_PATH)
-                        .SelectMany(dateDir => Directory.GetDirectories(dateDir))
-                        .OrderByDescending(d => d)
+                        .OrderByDescending(d => Path.GetFileName(d))
                         .ToList();
                     
                     _logger.LogDebug("Found {SessionCount} session directories in logs", sessionDirs.Count);
@@ -693,9 +686,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (sessionDirs.Any())
                     {
                         var latestSessionDir = sessionDirs.First();
-                        var dateFolder = Path.GetFileName(Path.GetDirectoryName(latestSessionDir) ?? "");
-                        var timeFolder = Path.GetFileName(latestSessionDir);
-                        var latestSessionId = $"{dateFolder}-{timeFolder}";
+                        var latestSessionId = Path.GetFileName(latestSessionDir);
                         _logger.LogDebug("Reading events from latest session: {SessionId} ({SessionDir})", latestSessionId, latestSessionDir);
                         
                         // Read events from the latest session's events.jsonl
@@ -726,13 +717,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         var events = ReadCimianEventsReport(eventsPath);
                         if (data.Cimian != null && events.Any())
                         {
-                            // Keep all non-DEBUG events plus the most recent DEBUG events for context
-                            var actionEvents = events.Where(e => !string.Equals(e.Level, "DEBUG", StringComparison.OrdinalIgnoreCase)).ToList();
-                            var debugEvents = events.Where(e => string.Equals(e.Level, "DEBUG", StringComparison.OrdinalIgnoreCase)).Take(200).ToList();
-                            data.Cimian.Events.AddRange(actionEvents);
-                            data.Cimian.Events.AddRange(debugEvents);
-                            _logger.LogInformation("Loaded {Total} events from reports/events.json (fallback): {ActionCount} action + {DebugCount} debug", 
-                                actionEvents.Count + debugEvents.Count, actionEvents.Count, debugEvents.Count);
+                            data.Cimian.Events.AddRange(events.Take(100));
+                            _logger.LogDebug("Loaded {Count} events from reports/events.json (fallback)", events.Count);
                         }
                     }
                 }
@@ -1095,32 +1081,19 @@ namespace ReportMate.WindowsClient.Services.Modules
                     
                     foreach (var package in packages ?? new())
                     {
-                        var originalStatus = package.GetValueOrDefault("status", "Unknown").ToString() ?? "Unknown";
-                        var latestVersion = package.GetValueOrDefault("latestVersion", "Unknown").ToString() ?? "Unknown";
-                        var installedVersion = package.GetValueOrDefault("version", "Unknown").ToString() ?? "Unknown";
-                        
                         var item = new CimianItem
                         {
                             ItemName = package.GetValueOrDefault("name", "Unknown").ToString() ?? "Unknown",
-                            InstalledVersion = installedVersion, 
-                            LatestVersion = latestVersion,
-                            CurrentStatus = originalStatus,
+                            InstalledVersion = package.GetValueOrDefault("version", "Unknown").ToString() ?? "Unknown", 
+                            LatestVersion = package.GetValueOrDefault("latestVersion", "Unknown").ToString() ?? "Unknown",
+                            CurrentStatus = package.GetValueOrDefault("status", "Unknown").ToString() ?? "Unknown",
                             LastUpdate = package.ContainsKey("lastUpdate") && DateTime.TryParse(package["lastUpdate"].ToString(), out var lastUpdate) ? lastUpdate : DateTime.UtcNow,
                             InstallCount = 0,
                             UpdateCount = 0,
                             FailureCount = 0,
                             LastSeenInSession = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffK"),
-                            Type = "cimian",
-                            PendingReason = package.GetValueOrDefault("pendingReason", "").ToString() ?? ""
+                            Type = "cimian"
                         };
-                        
-                        // Derive PendingReason if status is Pending and reason not provided
-                        if ((originalStatus.Equals("Pending", StringComparison.OrdinalIgnoreCase) || 
-                             (latestVersion != installedVersion && installedVersion != "Unknown")) && 
-                            string.IsNullOrEmpty(item.PendingReason))
-                        {
-                            item.PendingReason = DerivePendingReason(item, originalStatus);
-                        }
                         
                         data.Cimian.Items.Add(item);
                     }
@@ -1248,10 +1221,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                         CurrentStatus = originalStatus,  // Preserve original Cimian status
                         LatestVersion = GetDictValue(itemDict, "latest_version"),
                         InstalledVersion = GetDictValue(itemDict, "installed_version"),
-                        LastSeenInSession = ConvertCimianTimestampToUtc(GetDictValue(itemDict, "last_seen_in_session")),
+                        LastSeenInSession = GetDictValue(itemDict, "last_seen_in_session"),
                         LastError = GetDictValue(itemDict, "last_error") ?? string.Empty, // Error messages
-                        LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty, // Warning messages
-                        PendingReason = GetDictValue(itemDict, "pending_reason") ?? string.Empty // Pending reason from Cimian
+                        LastWarning = GetDictValue(itemDict, "last_warning") ?? string.Empty // Warning messages
                     };
 
                     // Clean status mapping for Cimian - PRIORITIZE FAILURE STATES
@@ -1310,13 +1282,6 @@ namespace ReportMate.WindowsClient.Services.Modules
                     // CRITICAL FIX: Store mapped status separately, preserve original CurrentStatus
                     item.MappedStatus = mappedStatus;  // Simplified for filtering: Failed/Pending/Warning/Installed/Unknown
                     // item.CurrentStatus already contains original: Error/Install Loop/Not Available/Warning/Pending/Installed
-                    
-                    // Derive PendingReason if not provided by Cimian and status is Pending
-                    if (mappedStatus == "Pending" && string.IsNullOrEmpty(item.PendingReason))
-                    {
-                        item.PendingReason = DerivePendingReason(item, originalStatus);
-                    }
-                    
                     data.Cimian.Items.Add(item);
                 }
 
@@ -1365,60 +1330,6 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Status should be: Installed (versions match), Pending (update available), or Error (current failures)
             // Historical warnings should not change a correctly "Installed" package to "Warning"
             return false;
-        }
-
-
-        /// <summary>
-        /// Derives a human-readable pending reason based on the item's status and version information.
-        /// This provides context for why a package is pending installation/update.
-        /// </summary>
-        private string DerivePendingReason(CimianItem item, string? originalStatus)
-        {
-            // Check if there's a version mismatch indicating an update
-            if (!string.IsNullOrEmpty(item.InstalledVersion) && !string.IsNullOrEmpty(item.LatestVersion))
-            {
-                if (item.InstalledVersion != item.LatestVersion)
-                {
-                    return $"Update available: {item.InstalledVersion} → {item.LatestVersion}";
-                }
-            }
-            
-            // Check original Cimian status for context
-            if (!string.IsNullOrEmpty(originalStatus))
-            {
-                switch (originalStatus.ToLowerInvariant())
-                {
-                    case "not available":
-                    case "not_available":
-                    case "notavailable":
-                        return "Package metadata not available on server";
-                    case "skipped":
-                        return "Installation was skipped";
-                    case "pending":
-                        if (string.IsNullOrEmpty(item.InstalledVersion))
-                            return "Not yet installed";
-                        return "Pending next run";
-                    case "downloading":
-                        return "Download in progress";
-                    case "queued":
-                        return "Queued for installation";
-                    case "scheduled":
-                        return "Scheduled for maintenance window";
-                    case "user deferred":
-                    case "userdeferred":
-                    case "user_deferred":
-                        return "User deferred installation";
-                }
-            }
-            
-            // If no installed version, it's a new install
-            if (string.IsNullOrEmpty(item.InstalledVersion))
-            {
-                return "Not yet installed";
-            }
-            
-            // Default reason
-            return "Awaiting next scheduled run";
         }
 
         private void ProcessCacheStatus(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, InstallsData data)
@@ -1635,21 +1546,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                             }
                         }
 
-                        // Cimian writes package_name/package_version; fall back to package/version for compat
-                        if (root.TryGetProperty("package_name", out var packageNameProp) && packageNameProp.ValueKind != JsonValueKind.Null)
-                        {
-                            cimianEvent.Package = packageNameProp.GetString() ?? "";
-                        }
-                        else if (root.TryGetProperty("package", out var packageProp) && packageProp.ValueKind != JsonValueKind.Null)
+                        if (root.TryGetProperty("package", out var packageProp) && packageProp.ValueKind != JsonValueKind.Null)
                         {
                             cimianEvent.Package = packageProp.GetString() ?? "";
                         }
 
-                        if (root.TryGetProperty("package_version", out var packageVersionProp) && packageVersionProp.ValueKind != JsonValueKind.Null)
-                        {
-                            cimianEvent.Version = packageVersionProp.GetString() ?? "";
-                        }
-                        else if (root.TryGetProperty("version", out var versionProp) && versionProp.ValueKind != JsonValueKind.Null)
+                        if (root.TryGetProperty("version", out var versionProp) && versionProp.ValueKind != JsonValueKind.Null)
                         {
                             cimianEvent.Version = versionProp.GetString() ?? "";
                         }
@@ -1772,28 +1674,17 @@ namespace ReportMate.WindowsClient.Services.Modules
                 
                 foreach (var sessionElement in document.RootElement.EnumerateArray())
                 {
-                    var session = new CimianSession();
-
-                    if (sessionElement.TryGetProperty("session_id", out var sidProp)) session.SessionId = sidProp.GetString() ?? "";
-                    if (sessionElement.TryGetProperty("run_type", out var rtProp)) session.RunType = rtProp.GetString() ?? "";
-                    if (sessionElement.TryGetProperty("status", out var stProp)) session.Status = stProp.GetString() ?? "";
-                    if (sessionElement.TryGetProperty("duration_seconds", out var dsProp) && dsProp.TryGetInt32(out var ds)) session.DurationSeconds = ds;
-
-                    // hostname/user/process_id are inside the environment object in current Cimian format
-                    if (sessionElement.TryGetProperty("environment", out var envObjProp))
+                    var session = new CimianSession
                     {
-                        if (envObjProp.TryGetProperty("hostname", out var hnProp)) session.Hostname = hnProp.GetString() ?? "";
-                        if (envObjProp.TryGetProperty("user", out var uProp)) session.User = uProp.GetString() ?? "";
-                        if (envObjProp.TryGetProperty("process_id", out var pidProp) && pidProp.TryGetInt32(out var pid)) session.ProcessId = pid;
-                    }
-                    // Fallback: try top-level for older Cimian format
-                    else
-                    {
-                        if (sessionElement.TryGetProperty("hostname", out var hnProp)) session.Hostname = hnProp.GetString() ?? "";
-                        if (sessionElement.TryGetProperty("user", out var uProp)) session.User = uProp.GetString() ?? "";
-                        if (sessionElement.TryGetProperty("process_id", out var pidProp) && pidProp.TryGetInt32(out var pid)) session.ProcessId = pid;
-                    }
-                    if (sessionElement.TryGetProperty("log_version", out var lvProp)) session.LogVersion = lvProp.GetString() ?? "";
+                        SessionId = sessionElement.GetProperty("session_id").GetString() ?? "",
+                        RunType = sessionElement.GetProperty("run_type").GetString() ?? "",
+                        Status = sessionElement.GetProperty("status").GetString() ?? "",
+                        DurationSeconds = sessionElement.GetProperty("duration_seconds").GetInt32(),
+                        Hostname = sessionElement.GetProperty("hostname").GetString() ?? "",
+                        User = sessionElement.GetProperty("user").GetString() ?? "",
+                        ProcessId = sessionElement.GetProperty("process_id").GetInt32(),
+                        LogVersion = sessionElement.GetProperty("log_version").GetString() ?? ""
+                    };
 
                     // Parse config section with enhanced Cimian configuration data
                     if (sessionElement.TryGetProperty("config", out var configProp))
@@ -1995,32 +1886,30 @@ namespace ReportMate.WindowsClient.Services.Modules
                 
                 foreach (var eventElement in document.RootElement.EnumerateArray())
                 {
-                    var cimianEvent = new CimianEvent();
+                    var cimianEvent = new CimianEvent
+                    {
+                        EventId = eventElement.GetProperty("event_id").GetString() ?? "",
+                        SessionId = eventElement.GetProperty("session_id").GetString() ?? "",
+                        Level = eventElement.GetProperty("level").GetString() ?? "",
+                        EventType = eventElement.GetProperty("event_type").GetString() ?? "",
+                        Action = eventElement.GetProperty("action").GetString() ?? "",
+                        Status = MapCimianEventStatusToReportMate(eventElement.GetProperty("status").GetString() ?? ""), // Apply event status mapping
+                        Message = eventElement.GetProperty("message").GetString() ?? "",
+                        SourceFile = eventElement.GetProperty("source_file").GetString() ?? "",
+                        SourceFunction = eventElement.GetProperty("source_function").GetString() ?? "",
+                        SourceLine = eventElement.GetProperty("source_line").GetInt32()
+                    };
 
-                    if (eventElement.TryGetProperty("event_id", out var eidProp)) cimianEvent.EventId = eidProp.GetString() ?? "";
-                    if (eventElement.TryGetProperty("session_id", out var esidProp)) cimianEvent.SessionId = esidProp.GetString() ?? "";
-                    if (eventElement.TryGetProperty("level", out var elvProp)) cimianEvent.Level = elvProp.GetString() ?? "";
-                    if (eventElement.TryGetProperty("event_type", out var etProp)) cimianEvent.EventType = etProp.GetString() ?? "";
-                    if (eventElement.TryGetProperty("action", out var eaProp)) cimianEvent.Action = eaProp.GetString() ?? "";
-                    if (eventElement.TryGetProperty("status", out var esProp)) cimianEvent.Status = MapCimianEventStatusToReportMate(esProp.GetString() ?? "");
-                    if (eventElement.TryGetProperty("message", out var emProp)) cimianEvent.Message = emProp.GetString() ?? "";
-
-                    // Optional source location fields (not always present in Cimian events)
-                    if (eventElement.TryGetProperty("source_file", out var sfProp)) cimianEvent.SourceFile = sfProp.GetString() ?? "";
-                    if (eventElement.TryGetProperty("source_function", out var sfnProp)) cimianEvent.SourceFunction = sfnProp.GetString() ?? "";
-                    if (eventElement.TryGetProperty("source_line", out var slProp) && slProp.TryGetInt32(out var sl)) cimianEvent.SourceLine = sl;
-
-                    // Package name: try package_name first (current Cimian), fall back to package (legacy)
-                    if (eventElement.TryGetProperty("package_name", out var pnProp) && pnProp.ValueKind != JsonValueKind.Null)
-                        cimianEvent.Package = pnProp.GetString() ?? "";
-                    else if (eventElement.TryGetProperty("package", out var packageProp) && packageProp.ValueKind != JsonValueKind.Null)
+                    // Enhanced fields from new Cimian structure
+                    if (eventElement.TryGetProperty("package", out var packageProp) && packageProp.ValueKind != JsonValueKind.Null)
+                    {
                         cimianEvent.Package = packageProp.GetString() ?? "";
+                    }
 
-                    // Version: try package_version first (current Cimian), fall back to version (legacy)
-                    if (eventElement.TryGetProperty("package_version", out var pvProp) && pvProp.ValueKind != JsonValueKind.Null)
-                        cimianEvent.Version = pvProp.GetString() ?? "";
-                    else if (eventElement.TryGetProperty("version", out var versionProp) && versionProp.ValueKind != JsonValueKind.Null)
+                    if (eventElement.TryGetProperty("version", out var versionProp) && versionProp.ValueKind != JsonValueKind.Null)
+                    {
                         cimianEvent.Version = versionProp.GetString() ?? "";
+                    }
 
                     if (eventElement.TryGetProperty("log_file", out var logFileProp) && logFileProp.ValueKind != JsonValueKind.Null)
                     {
@@ -2226,7 +2115,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         Status = reportMateStatus, // Enhanced: Use mapped ReportMate status
                         Version = extractedVersion, // Enhanced: Use version from recent_attempts
                         InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
-                        LastSeenInSession = ConvertCimianTimestampToUtc(GetDictValue(item, "last_seen_in_session")),
+                        LastSeenInSession = GetDictValue(item, "last_seen_in_session"),
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
                         Type = GetDictValue(item, "type"),
@@ -2244,54 +2133,35 @@ namespace ReportMate.WindowsClient.Services.Modules
                         MappedStatus = mappedStatus, // Store simplified status (Failed, Pending, Installed, etc.)
                         LatestVersion = extractedVersion, // Enhanced: Use version from recent_attempts
                         InstalledVersion = GetDictValue(item, "installed_version"), // FIXED: Use correct Cimian field name
-                        LastSeenInSession = ConvertCimianTimestampToUtc(GetDictValue(item, "last_seen_in_session")),
+                        LastSeenInSession = GetDictValue(item, "last_seen_in_session"),
                         LastAttemptStatus = GetDictValue(item, "last_attempt_status"),
                         InstallMethod = GetDictValue(item, "install_method"),
                         Type = GetDictValue(item, "type"),
                         LastError = GetDictValue(item, "last_error") ?? string.Empty, // Error messages for failed installs
-                        LastWarning = GetDictValue(item, "last_warning") ?? string.Empty, // Warning messages for install loops
-                        PendingReason = GetDictValue(item, "pending_reason") ?? string.Empty, // Pending reason from Cimian
-                        Category = GetDictValue(item, "category") ?? string.Empty, // Category from pkgsinfo
-                        Developer = GetDictValue(item, "developer") ?? string.Empty // Developer from pkgsinfo
+                        LastWarning = GetDictValue(item, "last_warning") ?? string.Empty // Warning messages for install loops
                     };
-                    
-                    // Derive PendingReason if not provided by Cimian and status is Pending
-                    if (mappedStatus == "Pending" && string.IsNullOrEmpty(cimianItem.PendingReason))
+
+                    // Parse timestamps
+                    if (item.TryGetValue("last_successful_time", out var lastSuccessObj) && 
+                        DateTime.TryParse(lastSuccessObj.ToString(), out var lastSuccess))
                     {
-                        cimianItem.PendingReason = DerivePendingReason(cimianItem, originalCimianStatus);
+                        managedInstall.LastSuccessfulTime = lastSuccess;
+                        managedInstall.InstallDate = lastSuccess; // Keep compatibility
+                        cimianItem.LastSuccessfulTime = lastSuccess;
                     }
 
-                    // Parse timestamps - Use helper to fix Cimian's timezone bug
-                    // Cimian writes local time with "Z" suffix, so we need to interpret correctly
-                    if (item.TryGetValue("last_successful_time", out var lastSuccessObj))
+                    if (item.TryGetValue("last_attempt_time", out var lastAttemptObj) && 
+                        DateTime.TryParse(lastAttemptObj.ToString(), out var lastAttempt))
                     {
-                        var correctedTimeStr = ConvertCimianTimestampToUtc(lastSuccessObj.ToString());
-                        if (DateTime.TryParse(correctedTimeStr, out var lastSuccess))
-                        {
-                            managedInstall.LastSuccessfulTime = lastSuccess;
-                            managedInstall.InstallDate = lastSuccess; // Keep compatibility
-                            cimianItem.LastSuccessfulTime = lastSuccess;
-                        }
+                        managedInstall.LastAttemptTime = lastAttempt;
+                        cimianItem.LastAttemptTime = lastAttempt;
                     }
 
-                    if (item.TryGetValue("last_attempt_time", out var lastAttemptObj))
+                    if (item.TryGetValue("last_update", out var lastUpdateObj) && 
+                        DateTime.TryParse(lastUpdateObj.ToString(), out var lastUpdate))
                     {
-                        var correctedTimeStr = ConvertCimianTimestampToUtc(lastAttemptObj.ToString());
-                        if (DateTime.TryParse(correctedTimeStr, out var lastAttempt))
-                        {
-                            managedInstall.LastAttemptTime = lastAttempt;
-                            cimianItem.LastAttemptTime = lastAttempt;
-                        }
-                    }
-
-                    if (item.TryGetValue("last_update", out var lastUpdateObj))
-                    {
-                        var correctedTimeStr = ConvertCimianTimestampToUtc(lastUpdateObj.ToString());
-                        if (DateTime.TryParse(correctedTimeStr, out var lastUpdate))
-                        {
-                            managedInstall.LastUpdate = lastUpdate;
-                            cimianItem.LastUpdate = lastUpdate;
-                        }
+                        managedInstall.LastUpdate = lastUpdate;
+                        cimianItem.LastUpdate = lastUpdate;
                     }
 
                     // Parse boolean values
@@ -2402,52 +2272,6 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
-        /// Convert Cimian timestamps to proper UTC. Cimian has a bug where it writes local time
-        /// with a "Z" suffix (claiming UTC) when it's actually local time. This method detects
-        /// and corrects those timestamps.
-        /// </summary>
-        private string ConvertCimianTimestampToUtc(string? timestamp)
-        {
-            if (string.IsNullOrEmpty(timestamp))
-                return "";
-            
-            try
-            {
-                // If the timestamp ends with "Z" but has no timezone offset, Cimian likely wrote local time
-                // incorrectly claiming it's UTC. Parse it as local time and convert to proper UTC.
-                if (timestamp.EndsWith("Z") && !timestamp.Contains("+") && !timestamp.Contains("-08:") && !timestamp.Contains("-07:"))
-                {
-                    // Remove the "Z" and parse as local time
-                    var localTimeStr = timestamp.TrimEnd('Z');
-                    if (DateTime.TryParse(localTimeStr, out var localTime))
-                    {
-                        // Treat as local time (where the Windows machine is), convert to UTC
-                        var utcTime = localTime.ToUniversalTime();
-                        return utcTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                    }
-                }
-                
-                // If it has a proper timezone offset like "-08:00", parse and convert to UTC
-                if (DateTimeOffset.TryParse(timestamp, out var dto))
-                {
-                    return dto.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-                }
-                
-                // Fallback: try parsing as DateTime and assume UTC
-                if (DateTime.TryParse(timestamp, out var dt))
-                {
-                    return dt.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to convert Cimian timestamp: {Timestamp}", timestamp);
-            }
-            
-            return timestamp; // Return original if conversion fails
-        }
-
-        /// <summary>
         /// Extract package name from Cimian error/warning messages
         /// </summary>
         private string? ExtractPackageNameFromMessage(string? message)
@@ -2495,10 +2319,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             return null;
         }
 
-        /// Generates events from Cimian session data, matching the Mac client's Munki event quality.
-        /// Uses actual install/removal/warning results from events.jsonl as source of truth.
-        /// Generates: success (installs/updates/removals), error (failures), warning (Cimian warnings),
-        /// and persistent error events from items.json regardless of session activity.
+        /// Priority: Error > Warning > Success (only generate one event per device)
+        /// FIXED: Now counts from items.json current_status to match what Items table displays
+        /// This ensures event message counts match the items table filter counts
         /// </summary>
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(InstallsData data)
         {
@@ -2506,261 +2329,258 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             try
             {
-                _logger.LogInformation("Starting event generation for device {DeviceId}", data.DeviceId);
+                _logger.LogInformation("Starting consolidated event generation for device {DeviceId}", data.DeviceId);
                 
+                // Get session events for operational warnings (non-item-specific warnings)
                 var sessionEvents = data.Cimian?.Events ?? new List<CimianEvent>();
+                
+                // Get all items from items.json - this is the SOURCE OF TRUTH for counts
+                // The Items table displays items based on their current_status from items.json
+                // Event message counts MUST match what the Items table shows
                 var allItems = data.Cimian?.Items ?? new List<CimianItem>();
                 
-                _logger.LogInformation("Session events: {Count}, Managed items: {ItemCount}", 
-                    sessionEvents.Count, allItems.Count);
-                
-                // Filter to action events only (not status_check) for install/update/remove categorization
-                var actionEvents = sessionEvents
-                    .Where(e => e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase))
+                // Count FAILED items from items.json current_status
+                // These are the items that will show as "Error" in the Items table
+                var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
+                var failedItems = allItems
+                    .Where(i => failedItemStatuses.Any(s => 
+                        i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
+                        (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)))
+                    .Select(i => i.ItemName)
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .Distinct()
                     .ToList();
                 
-                // Successful installs (action=install, status=completed/Success)
-                var installedEvents = actionEvents
-                    .Where(e => e.Action.Equals("install", StringComparison.OrdinalIgnoreCase) &&
-                                (e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
-                                 e.Status.Equals("Success", StringComparison.OrdinalIgnoreCase)))
-                    .Where(e => !string.IsNullOrEmpty(e.Package))
-                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
+                // Count WARNING items from items.json current_status
+                // These are the items that will show as "Warning" in the Items table
+                var warningItemStatuses = new[] { "Warning", "Not Available" };
+                var warningItems = allItems
+                    .Where(i => warningItemStatuses.Any(s => 
+                        i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
+                        (i.MappedStatus?.Equals("Warning", StringComparison.OrdinalIgnoreCase) == true)))
+                    .Where(i => !failedItems.Contains(i.ItemName, StringComparer.OrdinalIgnoreCase)) // Don't double-count
+                    .Select(i => i.ItemName)
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .Distinct()
                     .ToList();
                 
-                // Successful updates (action=update, status=completed/Success)
-                var updatedEvents = actionEvents
-                    .Where(e => e.Action.Equals("update", StringComparison.OrdinalIgnoreCase) &&
-                                (e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
-                                 e.Status.Equals("Success", StringComparison.OrdinalIgnoreCase)))
-                    .Where(e => !string.IsNullOrEmpty(e.Package))
-                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
-                    .ToList();
+                // Build set of known item names (for distinguishing operational warnings)
+                var knownItemNames = allItems
+                    .Select(i => i.ItemName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 
-                // Successful removals (action=uninstall/remove, status=completed/Success)
-                var removedEvents = actionEvents
-                    .Where(e => (e.Action.Equals("uninstall", StringComparison.OrdinalIgnoreCase) ||
-                                 e.Action.Equals("remove", StringComparison.OrdinalIgnoreCase)) &&
-                                (e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
-                                 e.Status.Equals("Success", StringComparison.OrdinalIgnoreCase)))
-                    .Where(e => !string.IsNullOrEmpty(e.Package))
-                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
-                    .ToList();
+                // === CATEGORIZE OPERATIONAL WARNINGS (session-level, not item-specific) ===
+                // These are warnings about Cimian's run itself (preflight, manifest processing, etc.)
+                // They don't map to specific items in the Items table
                 
-                // Failed events (status=failed or level=ERROR with a package)
-                var failedEvents = sessionEvents
-                    .Where(e => e.Status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
-                                e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase))
-                    .Where(e => !string.IsNullOrEmpty(e.Package))
-                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.OrderByDescending(e => e.Timestamp).First())
-                    .ToList();
+                var allWarningEvents = sessionEvents.Where(e =>
+                    e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase)
+                ).ToList();
                 
-                // Warning events (level=WARN, excluding expected/benign warnings)
-                var warningEvents = sessionEvents
-                    .Where(e => e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase) ||
-                                e.Level.Equals("WARNING", StringComparison.OrdinalIgnoreCase))
-                    .Where(e => !IsExpectedWarning(e.Message))
-                    .ToList();
+                // Operational warnings: events without a package, or package not in managed list
+                var operationalWarningEvents = allWarningEvents.Where(e =>
+                    string.IsNullOrEmpty(e.Package) || 
+                    !knownItemNames.Contains(e.Package)
+                ).ToList();
                 
-                _logger.LogInformation("Session activity - Installs: {Installs}, Updates: {Updates}, Removals: {Removals}, Failures: {Failures}, Warnings: {Warnings}",
-                    installedEvents.Count, updatedEvents.Count, removedEvents.Count, failedEvents.Count, warningEvents.Count);
+                // Get installed item names for context
+                var installedItemNames = allItems
+                    .Where(i => i.CurrentStatus.Equals("Installed", StringComparison.OrdinalIgnoreCase) ||
+                               i.MappedStatus?.Equals("Installed", StringComparison.OrdinalIgnoreCase) == true)
+                    .Select(i => i.ItemName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
                 
-                // Resolve the latest event timestamp from this session for event dating
-                var latestSessionTimestamp = sessionEvents
-                    .Where(e => e.Timestamp != default)
-                    .OrderByDescending(e => e.Timestamp)
-                    .Select(e => (DateTime?)e.Timestamp)
-                    .FirstOrDefault();
-                var eventTimestamp = latestSessionTimestamp ?? DateTime.UtcNow;
+                // Get ACTUAL session activity counts from the latest session
+                // This is what happened in THIS run, not total items managed
+                var latestSessionForCounts = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
+                var sessionInstalls = latestSessionForCounts?.Installs ?? 0;
+                var sessionUpdates = latestSessionForCounts?.Updates ?? 0;
+                var sessionSuccesses = latestSessionForCounts?.Successes ?? 0;
+                var sessionActivityCount = sessionInstalls + sessionUpdates;
                 
-                // Helper to get version string for a package
-                string GetVersion(CimianEvent evt)
+                // Also track total managed items for context (but not for messaging)
+                var totalManagedItems = allItems.Count;
+                var totalInstalledItems = installedItemNames.Count;
+                
+                _logger.LogInformation("Event count analysis from items.json - Failed Items: {ErrorCount} ({FailedItems}), Warning Items: {WarningCount} ({WarnItems}), Installed: {InstalledCount}, Operational Warnings: {OpWarnCount}, Session Activity: {SessionActivity} (installs: {Installs}, updates: {Updates})", 
+                    failedItems.Count, string.Join(", ", failedItems.Take(5)),
+                    warningItems.Count, string.Join(", ", warningItems.Take(5)),
+                    totalInstalledItems,
+                    operationalWarningEvents.Count,
+                    sessionActivityCount, sessionInstalls, sessionUpdates);
+                
+                // Build consolidated message and determine event type
+                string eventType;
+                string message;
+                var details = new Dictionary<string, object>();
+                
+                // Add session info to details if available
+                var latestSession = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
+                if (latestSession != null)
                 {
-                    if (!string.IsNullOrEmpty(evt.Version)) return evt.Version;
-                    var item = allItems.FirstOrDefault(i => i.ItemName.Equals(evt.Package, StringComparison.OrdinalIgnoreCase));
-                    return item?.LatestVersion ?? item?.InstalledVersion ?? "";
+                    details["session_id"] = latestSession.SessionId ?? "unknown";
+                    details["run_type"] = latestSession.RunType ?? "unknown";
+                    details["duration_seconds"] = latestSession.DurationSeconds;
                 }
                 
-                // Helper to format package event message (Mac pattern: <=2 items named, >2 uses count)
-                string FormatActionMessage(List<CimianEvent> evts, string verb)
+                // include operational warnings in details - these are session-level issues
+                // (preflight errors, manifest processing, fact key issues, etc.)
+                if (operationalWarningEvents.Any())
                 {
-                    if (evts.Count == 1)
-                    {
-                        var ver = GetVersion(evts[0]);
-                        return string.IsNullOrEmpty(ver)
-                            ? $"{evts[0].Package} {verb}"
-                            : $"{evts[0].Package} {ver} {verb}";
-                    }
-                    if (evts.Count == 2)
-                    {
-                        var names = evts.Select(e => {
-                            var ver = GetVersion(e);
-                            return string.IsNullOrEmpty(ver) ? e.Package : $"{e.Package} {ver}";
-                        });
-                        return $"{string.Join(", ", names)} {verb}";
-                    }
-                    return $"{evts.Count} packages {verb}";
-                }
-                
-                // Generate install event
-                if (installedEvents.Any())
-                {
-                    var message = FormatActionMessage(installedEvents, "installed");
-                    var details = new Dictionary<string, object>
-                    {
-                        ["action"] = "install",
-                        ["count"] = installedEvents.Count,
-                        ["packages"] = installedEvents.Select(e => e.Package).ToList()
-                    };
-                    events.Add(CreateEvent("success", message, details, eventTimestamp));
-                    _logger.LogInformation("Generated install event: {Message}", message);
-                }
-                
-                // Generate update event
-                if (updatedEvents.Any())
-                {
-                    var message = FormatActionMessage(updatedEvents, "updated");
-                    var details = new Dictionary<string, object>
-                    {
-                        ["action"] = "update",
-                        ["count"] = updatedEvents.Count,
-                        ["packages"] = updatedEvents.Select(e => e.Package).ToList()
-                    };
-                    events.Add(CreateEvent("success", message, details, eventTimestamp));
-                    _logger.LogInformation("Generated update event: {Message}", message);
-                }
-                
-                // Generate removal event
-                if (removedEvents.Any())
-                {
-                    var message = FormatActionMessage(removedEvents, "removed");
-                    var details = new Dictionary<string, object>
-                    {
-                        ["action"] = "remove",
-                        ["count"] = removedEvents.Count,
-                        ["packages"] = removedEvents.Select(e => e.Package).ToList()
-                    };
-                    events.Add(CreateEvent("success", message, details, eventTimestamp));
-                    _logger.LogInformation("Generated removal event: {Message}", message);
-                }
-                
-                // Generate error event for session failures (mirrors Mac: "N Munki error(s)" pattern)
-                if (failedEvents.Any())
-                {
-                    var message = $"{failedEvents.Count} Cimian error{(failedEvents.Count == 1 ? "" : "s")}";
-                    
-                    var errorDetails = failedEvents.Select(e => 
-                        !string.IsNullOrEmpty(e.Error) ? $"{e.Package}: {e.Error}" : e.Package).ToList();
-                    var details = new Dictionary<string, object>
-                    {
-                        ["action"] = "error",
-                        ["count"] = failedEvents.Count,
-                        ["errors"] = string.Join("; ", errorDetails),
-                        ["failed_items"] = failedEvents.Select(e => e.Package).ToList()
-                    };
-                    events.Add(CreateEvent("error", message, details, eventTimestamp));
-                    _logger.LogInformation("Generated error event: {Message}", message);
-                }
-                
-                // Generate warning event (mirrors Mac: "N Munki warnings" / "N Cimian warnings")
-                if (warningEvents.Any())
-                {
-                    var count = warningEvents.Count;
-                    var message = $"{count} Cimian warning{(count == 1 ? "" : "s")}";
-                    var warningMessages = warningEvents
-                        .Select(e => e.Message)
-                        .Where(m => !string.IsNullOrEmpty(m))
+                    details["operational_warning_count"] = operationalWarningEvents.Count;
+                    details["operational_warnings"] = operationalWarningEvents
+                        .Take(10)
+                        .Select(e => new Dictionary<string, object>
+                        {
+                            ["message"] = e.Message,
+                            ["action"] = e.Action,
+                            ["event_type"] = e.EventType,
+                            ["timestamp"] = e.Timestamp.ToString("O")
+                        })
                         .ToList();
-                    var details = new Dictionary<string, object>
-                    {
-                        ["count"] = count,
-                        ["warnings"] = string.Join("; ", warningMessages)
-                    };
-                    events.Add(CreateEvent("warning", message, details, eventTimestamp));
-                    _logger.LogInformation("Generated warning event: {Message}", message);
                 }
                 
-                // Always check items.json for persistent errors (not just when zero session events)
-                // A device can have successful installs this run AND persistent errors from prior runs
-                if (allItems.Any())
+                // PRIORITY 1: ERROR - If there are any failed items in this session
+                if (failedItems.Any())
                 {
-                    var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
-                    // Exclude packages already reported as session failures above
-                    var sessionFailedPackages = failedEvents.Select(e => e.Package).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    var itemsWithPersistentErrors = allItems
-                        .Where(i => failedItemStatuses.Any(s =>
-                            i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase)) ||
-                            !string.IsNullOrEmpty(i.LastError))
-                        .Where(i => !string.IsNullOrEmpty(i.ItemName))
-                        .Where(i => !sessionFailedPackages.Contains(i.ItemName))
-                        .Select(i => i.ItemName)
-                        .Distinct()
-                        .ToList();
+                    eventType = "error";
+                    var messageParts = new List<string>();
                     
-                    if (itemsWithPersistentErrors.Any())
+                    // Always mention failed installs first
+                    messageParts.Add($"{failedItems.Count} failed install{(failedItems.Count == 1 ? "" : "s")}");
+                    
+                    // Add item warnings if any
+                    if (warningItems.Any())
+                        messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
+                    
+                    // Add operational warnings if any
+                    if (operationalWarningEvents.Any())
+                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    
+                    // Add session activity count if any actual installs/updates occurred
+                    if (sessionActivityCount > 0)
+                        messageParts.Add($"{sessionActivityCount} successful{(sessionActivityCount == 1 ? "" : "s")}");
+                    
+                    message = string.Join(", ", messageParts);
+                    
+                    details["error_count"] = failedItems.Count;
+                    details["warning_count"] = warningItems.Count;
+                    details["session_installs"] = sessionInstalls;
+                    details["session_updates"] = sessionUpdates;
+                    details["session_successes"] = sessionSuccesses;
+                    details["total_managed_items"] = totalManagedItems;
+                    details["module_status"] = "error";
+                    details["failed_items"] = failedItems.Take(10).ToList();
+                    
+                    _logger.LogInformation("Generated single ERROR event: {Message}", message);
+                }
+                // PRIORITY 2: WARNING - If there are item warnings but no errors
+                else if (warningItems.Any())
+                {
+                    eventType = "warning";
+                    var messageParts = new List<string>();
+                    
+                    // Always mention item warnings first
+                    messageParts.Add($"{warningItems.Count} item warning{(warningItems.Count == 1 ? "" : "s")}");
+                    
+                    // Add operational warnings if any
+                    if (operationalWarningEvents.Any())
+                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    
+                    // Add session activity count if any actual installs/updates occurred
+                    if (sessionActivityCount > 0)
+                        messageParts.Add($"{sessionActivityCount} successful{(sessionActivityCount == 1 ? "" : "s")}");
+                    
+                    message = string.Join(", ", messageParts);
+                    
+                    details["warning_count"] = warningItems.Count;
+                    details["session_installs"] = sessionInstalls;
+                    details["session_updates"] = sessionUpdates;
+                    details["session_successes"] = sessionSuccesses;
+                    details["total_managed_items"] = totalManagedItems;
+                    details["module_status"] = "warning";
+                    details["warning_items"] = warningItems.Take(10).ToList();
+                    
+                    _logger.LogInformation("Generated single WARNING event: {Message}", message);
+                }
+                // PRIORITY 3: SUCCESS - if there was actual session activity (installs/updates)
+                else if (sessionActivityCount > 0)
+                {
+                    // If there are operational warnings, still report success but include them
+                    eventType = "success";
+                    var messageParts = new List<string>();
+                    
+                    // Report actual session activity
+                    if (sessionInstalls > 0 && sessionUpdates > 0)
+                        messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}, {sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
+                    else if (sessionInstalls > 0)
+                        messageParts.Add($"{sessionInstalls} install{(sessionInstalls == 1 ? "" : "s")}");
+                    else if (sessionUpdates > 0)
+                        messageParts.Add($"{sessionUpdates} update{(sessionUpdates == 1 ? "" : "s")}");
+                    
+                    if (operationalWarningEvents.Any())
+                        messageParts.Add($"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}");
+                    
+                    message = string.Join(", ", messageParts);
+                    
+                    details["session_installs"] = sessionInstalls;
+                    details["session_updates"] = sessionUpdates;
+                    details["session_successes"] = sessionSuccesses;
+                    details["total_managed_items"] = totalManagedItems;
+                    details["module_status"] = "success";
+                    
+                    _logger.LogInformation("Generated single SUCCESS event: {Message}", message);
+                }
+                // NO SESSION ACTIVITY but operational warnings exist
+                else if (operationalWarningEvents.Any())
+                {
+                    eventType = "warning";
+                    message = $"{operationalWarningEvents.Count} warning{(operationalWarningEvents.Count == 1 ? "" : "s")}";
+                    details["total_managed_items"] = totalManagedItems;
+                    details["module_status"] = "warning";
+                    
+                    _logger.LogInformation("Generated single WARNING event (operational only): {Message}", message);
+                }
+                // NO SESSION ACTIVITY AND NO WARNINGS: All items are managed, nothing to do
+                else if (totalManagedItems > 0)
+                {
+                    // Don't generate events for "all managed" state - it's normal operation
+                    // The items are all accounted for in the items.json, no action needed
+                    _logger.LogInformation("All {TotalItems} managed items accounted for, no session activity - no event generated", totalManagedItems);
+                    return Task.FromResult(events); // Return empty list
+                }
+                // NO ITEMS AND NO ACTIVITY
+                else
+                {
+                    // Only generate an event if Cimian is not installed (warning case)
+                    if (data.Cimian?.IsInstalled != true)
                     {
-                        var message = $"managed installs has an error!";
-                        if (itemsWithPersistentErrors.Count > 1)
-                            message = $"managed installs has {itemsWithPersistentErrors.Count} errors";
+                        eventType = "warning";
+                        message = "Installs system not available";
+                        details["recommendation"] = "Install Cimian for managed software deployment";
+                        details["module_status"] = "warning";
                         
-                        events.Add(CreateEvent("error", message, new Dictionary<string, object>
-                        {
-                            ["failed_items"] = itemsWithPersistentErrors.Take(10).ToList(),
-                            ["persistent"] = true
-                        }, eventTimestamp));
-                        _logger.LogInformation("Generated persistent error event for {Count} item(s)", itemsWithPersistentErrors.Count);
+                        _logger.LogInformation("Generated single WARNING event - Cimian not detected");
                     }
-                    
-                    // Also check for persistent warnings from items.json
-                    var itemsWithWarnings = allItems
-                        .Where(i => !string.IsNullOrEmpty(i.LastWarning) || i.WarningCount > 0)
-                        .Where(i => !string.IsNullOrEmpty(i.ItemName))
-                        .Select(i => new { i.ItemName, i.LastWarning })
-                        .ToList();
-                    
-                    // Only report persistent item warnings if no session warnings were already generated
-                    if (itemsWithWarnings.Any() && !warningEvents.Any())
+                    else
                     {
-                        var count = itemsWithWarnings.Count;
-                        var message = $"{count} Cimian warning{(count == 1 ? "" : "s")}";
-                        var warningTexts = itemsWithWarnings
-                            .Where(w => !string.IsNullOrEmpty(w.LastWarning))
-                            .Select(w => $"{w.ItemName}: {w.LastWarning}")
-                            .ToList();
-                        events.Add(CreateEvent("warning", message, new Dictionary<string, object>
-                        {
-                            ["count"] = count,
-                            ["warnings"] = string.Join("; ", warningTexts),
-                            ["persistent"] = true
-                        }, eventTimestamp));
-                        _logger.LogInformation("Generated persistent warning event for {Count} item(s)", count);
+                        // Cimian is installed but no items configured - could be initial setup
+                        _logger.LogInformation("No managed items configured - no event generated");
+                        return Task.FromResult(events); // Return empty list
                     }
                 }
                 
-                // If Cimian is not installed at all, warn
-                if (!events.Any() && data.Cimian?.IsInstalled != true && !allItems.Any())
-                {
-                    events.Add(CreateEvent("warning", "Installs system not available", new Dictionary<string, object>
-                    {
-                        ["recommendation"] = "Install Cimian for managed software deployment",
-                        ["module_status"] = "warning"
-                    }, DateTime.UtcNow));
-                    _logger.LogInformation("Generated warning event - Cimian not detected");
-                }
+                // Create the single consolidated event
+                events.Add(CreateEvent(eventType, message, details, DateTime.UtcNow));
                 
-                // Enrich items with per-item errors/warnings from session events
-                AttachSessionMessagesToItems(sessionEvents, allItems);
-                
-                _logger.LogInformation("Generated {Count} event(s) for device {DeviceId}", 
-                    events.Count, data.DeviceId);
+                _logger.LogInformation("Generated 1 consolidated event of type '{EventType}' for device {DeviceId}", 
+                    eventType, data.DeviceId);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error generating events from Cimian data");
+                _logger.LogError(ex, "Error generating consolidated event from Cimian data");
+                
+                // Add error event for the generation failure itself
                 events.Add(CreateEvent("error", "Installs monitoring error", 
                     new Dictionary<string, object> { 
                         ["error"] = ex.Message,
@@ -2771,107 +2591,11 @@ namespace ReportMate.WindowsClient.Services.Modules
             return Task.FromResult(events);
         }
 
-        /// <summary>
-        /// Enriches CimianItem objects with per-item error/warning messages from session events.
-        /// Mirrors the Mac client's attachMessagesToItems() — matches session ERROR/WARN events
-        /// to items by package name, populating LastError/LastWarning fields and escalating status
-        /// for error-matched items not already in a terminal state.
-        /// </summary>
-        private void AttachSessionMessagesToItems(List<CimianEvent> sessionEvents, List<CimianItem> items)
-        {
-            if (!sessionEvents.Any() || !items.Any())
-                return;
-
-            // Build case-insensitive name → index lookup (by ItemName and DisplayName)
-            var nameToIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < items.Count; i++)
-            {
-                var itemName = items[i].ItemName;
-                var displayName = items[i].DisplayName;
-
-                if (!string.IsNullOrEmpty(itemName) && !nameToIndex.ContainsKey(itemName))
-                    nameToIndex[itemName] = i;
-
-                if (!string.IsNullOrEmpty(displayName) && !nameToIndex.ContainsKey(displayName))
-                    nameToIndex[displayName] = i;
-            }
-
-            int? FindItemIndex(CimianEvent evt)
-            {
-                // First try the Package field directly (most reliable — Cimian sets package_name)
-                if (!string.IsNullOrEmpty(evt.Package) && nameToIndex.TryGetValue(evt.Package, out var idx))
-                    return idx;
-
-                // Fall back to regex extraction from the message text
-                var extracted = ExtractPackageNameFromMessage(evt.Message);
-                if (!string.IsNullOrEmpty(extracted) && nameToIndex.TryGetValue(extracted, out var idx2))
-                    return idx2;
-
-                // Also try the Error field
-                extracted = ExtractPackageNameFromMessage(evt.Error);
-                if (!string.IsNullOrEmpty(extracted) && nameToIndex.TryGetValue(extracted, out var idx3))
-                    return idx3;
-
-                return null;
-            }
-
-            var terminalStatuses = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "install_failed", "removed", "uninstalled" };
-
-            // Process ERROR events — populate LastError, escalate status
-            foreach (var evt in sessionEvents.Where(e =>
-                e.Level.Equals("ERROR", StringComparison.OrdinalIgnoreCase) ||
-                e.Status.Equals("failed", StringComparison.OrdinalIgnoreCase)))
-            {
-                var idx = FindItemIndex(evt);
-                if (idx == null) continue;
-
-                var item = items[idx.Value];
-                var errorMsg = !string.IsNullOrEmpty(evt.Error) ? evt.Error
-                             : !string.IsNullOrEmpty(evt.Message) ? evt.Message
-                             : "Install failed";
-
-                if (string.IsNullOrEmpty(item.LastError))
-                    item.LastError = errorMsg;
-
-                if (!terminalStatuses.Contains(item.CurrentStatus))
-                {
-                    item.CurrentStatus = "install_failed";
-                    item.MappedStatus = "Failed";
-                    if (string.IsNullOrEmpty(item.PendingReason))
-                        item.PendingReason = errorMsg;
-                }
-            }
-
-            // Process WARN events — populate LastWarning, don't change status
-            foreach (var evt in sessionEvents.Where(e =>
-                e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase) ||
-                e.Level.Equals("WARNING", StringComparison.OrdinalIgnoreCase)))
-            {
-                if (IsExpectedWarning(evt.Message))
-                    continue;
-
-                var idx = FindItemIndex(evt);
-                if (idx == null) continue;
-
-                var item = items[idx.Value];
-                var warnMsg = !string.IsNullOrEmpty(evt.Message) ? evt.Message : "Warning";
-
-                if (string.IsNullOrEmpty(item.LastWarning))
-                    item.LastWarning = warnMsg;
-
-                if (string.IsNullOrEmpty(item.PendingReason))
-                    item.PendingReason = warnMsg;
-            }
-
-            _logger.LogDebug("Attached session messages to {Count} items", items.Count);
-        }
-
         private void CollectPendingPackages(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, CimianInfo cimianInfo)
         {
             try
             {
-                // Try to collect pending packages and catalogs from manifest files
+                // Try to collect pending packages from manifest files
                 if (osqueryResults.TryGetValue("cimian_manifests_structure", out var manifests))
                 {
                     foreach (var manifest in manifests)
@@ -2884,53 +2608,36 @@ namespace ReportMate.WindowsClient.Services.Modules
                             try
                             {
                                 var yamlContent = File.ReadAllText(manifestPath);
-                                var lines = yamlContent.Split('\n');
-                                bool inManagedInstalls = false;
-                                bool inCatalogs = false;
-                                
-                                foreach (var line in lines)
+                                // Simple parsing for managed_installs - you could use a proper YAML parser here
+                                if (yamlContent.Contains("managed_installs:"))
                                 {
-                                    var trimmedLine = line.Trim();
+                                    var lines = yamlContent.Split('\n');
+                                    bool inManagedInstalls = false;
                                     
-                                    // Check for section headers
-                                    if (trimmedLine.StartsWith("managed_installs:"))
+                                    foreach (var line in lines)
                                     {
-                                        inManagedInstalls = true;
-                                        inCatalogs = false;
-                                        continue;
-                                    }
-                                    if (trimmedLine.StartsWith("catalogs:"))
-                                    {
-                                        inManagedInstalls = false;
-                                        inCatalogs = true;
-                                        continue;
-                                    }
-                                    // Exit current section when a new section starts
-                                    if (trimmedLine.EndsWith(":") && !trimmedLine.StartsWith("-") && !string.IsNullOrEmpty(trimmedLine))
-                                    {
-                                        inManagedInstalls = false;
-                                        inCatalogs = false;
-                                        continue;
-                                    }
-                                    
-                                    // Parse catalogs section
-                                    if (inCatalogs && trimmedLine.StartsWith("-"))
-                                    {
-                                        var catalogName = trimmedLine.Substring(1).Trim();
-                                        if (!string.IsNullOrEmpty(catalogName) && !cimianInfo.Catalogs.Contains(catalogName))
+                                        var trimmedLine = line.Trim();
+                                        if (trimmedLine.StartsWith("managed_installs:"))
                                         {
-                                            cimianInfo.Catalogs.Add(catalogName);
-                                            _logger.LogDebug("Found catalog: {Catalog} in manifest {Manifest}", catalogName, manifestName);
+                                            inManagedInstalls = true;
+                                            continue;
                                         }
-                                    }
-                                    
-                                    // Parse managed_installs section
-                                    if (inManagedInstalls && trimmedLine.StartsWith("-"))
-                                    {
-                                        var packageName = trimmedLine.Substring(1).Trim();
-                                        if (!string.IsNullOrEmpty(packageName) && !cimianInfo.PendingPackages.Contains(packageName))
+                                        
+                                        if (inManagedInstalls)
                                         {
-                                            cimianInfo.PendingPackages.Add(packageName);
+                                            if (trimmedLine.StartsWith("-"))
+                                            {
+                                                var packageName = trimmedLine.Substring(1).Trim();
+                                                if (!string.IsNullOrEmpty(packageName) && !cimianInfo.PendingPackages.Contains(packageName))
+                                                {
+                                                    cimianInfo.PendingPackages.Add(packageName);
+                                                }
+                                            }
+                                            else if (!trimmedLine.StartsWith(" ") && !string.IsNullOrEmpty(trimmedLine))
+                                            {
+                                                // We've moved to a different section
+                                                inManagedInstalls = false;
+                                            }
                                         }
                                     }
                                 }
@@ -2987,10 +2694,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
-                _logger.LogDebug("Collected {PackageCount} pending packages and {CatalogCount} catalogs from Cimian manifests. Catalogs: [{Catalogs}]", 
-                    cimianInfo.PendingPackages.Count, 
-                    cimianInfo.Catalogs.Count, 
-                    string.Join(", ", cimianInfo.Catalogs));
+                _logger.LogDebug("Collected {Count} pending packages from Cimian manifests", cimianInfo.PendingPackages.Count);
             }
             catch (Exception ex)
             {
@@ -3207,7 +2911,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         /// <summary>
         /// Determines if a warning message represents an expected/non-actionable condition
-        /// for PACKAGE-LEVEL warnings only. 
+        /// for PACKAGE-LEVEL warnings only. This does NOT apply to operational warnings.
         /// </summary>
         private static bool IsExpectedWarning(string message)
         {
@@ -3712,244 +3416,5 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogWarning(ex, "Failed to read Cimian run log");
             }
         }
-
-        // MARK: - Catalog Enrichment
-
-        /// <summary>
-        /// Enriches CimianInfo with data from catalog YAML files:
-        ///   1. Populates Cimian.Catalogs with the names of available catalog files
-        ///      (mirrors Mac client's collectManifestCatalogs — lists filenames from
-        ///       C:\ProgramData\ManagedInstalls\catalogs\ without .yaml extension).
-        ///   2. Enriches each CimianItem with category/developer from pkgsinfo entries
-        ///      inside those catalogs (mirrors Mac client's enrichInstallsWithCatalogData).
-        /// </summary>
-        private void EnrichItemsWithCatalogData(InstallsData data)
-        {
-            if (data.Cimian == null)
-                return;
-
-            var (catalogMetadata, catalogNames) = CollectCatalogMetadata();
-
-            // Populate Catalogs from directory (override manifest-parsed list with the
-            // authoritative directory listing, same as Mac client approach)
-            if (catalogNames.Count > 0)
-            {
-                data.Cimian.Catalogs = catalogNames;
-                _logger.LogInformation("Set Cimian.Catalogs from directory: [{Catalogs}]", string.Join(", ", catalogNames));
-            }
-
-            // Enrich items with category/developer
-            if (catalogMetadata.Count == 0 || data.Cimian.Items == null || data.Cimian.Items.Count == 0)
-            {
-                _logger.LogDebug("No catalog metadata or no items to enrich");
-                return;
-            }
-
-            _logger.LogInformation("Enriching {ItemCount} items with catalog metadata ({MetadataCount} packages with category/developer)",
-                data.Cimian.Items.Count, catalogMetadata.Count);
-
-            int enrichedCount = 0;
-            foreach (var item in data.Cimian.Items)
-            {
-                var lookupName = item.ItemName ?? item.Id;
-                if (!string.IsNullOrEmpty(lookupName) && catalogMetadata.TryGetValue(lookupName, out var meta))
-                {
-                    if (string.IsNullOrEmpty(item.Category)) item.Category = meta.Category;
-                    if (string.IsNullOrEmpty(item.Developer)) item.Developer = meta.Developer;
-                    enrichedCount++;
-                }
-            }
-
-            _logger.LogInformation("Enriched {EnrichedCount}/{TotalCount} Cimian items with catalog metadata",
-                enrichedCount, data.Cimian.Items.Count);
-        }
-
-        /// <summary>
-        /// Reads all *.yaml files from C:\ProgramData\ManagedInstalls\catalogs\, returning:
-        ///   - metadata: package name → (category, developer) lookup for item enrichment
-        ///   - catalogNames: sorted list of catalog names (filenames without .yaml extension)
-        ///     matches what the Mac client returns from collectManifestCatalogs()
-        /// </summary>
-        private (Dictionary<string, CatalogEntryMetadata> metadata, List<string> catalogNames) CollectCatalogMetadata()
-        {
-            var metadata = new Dictionary<string, CatalogEntryMetadata>(StringComparer.OrdinalIgnoreCase);
-            var catalogNames = new List<string>();
-            const string catalogsPath = @"C:\ProgramData\ManagedInstalls\catalogs";
-
-            try
-            {
-                if (!Directory.Exists(catalogsPath))
-                {
-                    _logger.LogDebug("Cimian catalogs directory not found: {Path}", catalogsPath);
-                    return (metadata, catalogNames);
-                }
-
-                var catalogFiles = Directory.GetFiles(catalogsPath, "*.yaml");
-                _logger.LogDebug("Found {Count} catalog YAML files in {Path}", catalogFiles.Length, catalogsPath);
-
-                catalogNames = catalogFiles
-                    .Select(f => Path.GetFileNameWithoutExtension(f))
-                    .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                foreach (var catalogFile in catalogFiles)
-                {
-                    try
-                    {
-                        ParseCatalogYaml(catalogFile, metadata);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to parse catalog file: {Path}", catalogFile);
-                    }
-                }
-
-                _logger.LogInformation("Catalog metadata: {PackageCount} packages with metadata from {FileCount} catalogs [{CatalogNames}]",
-                    metadata.Count, catalogFiles.Length, string.Join(", ", catalogNames));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to collect catalog metadata from {Path}", catalogsPath);
-            }
-
-            return (metadata, catalogNames);
-        }
-
-        /// <summary>
-        /// Parses a single Cimian catalog YAML file (a sequence of pkgsinfo entries):
-        ///   - name: Git
-        ///     category: Utilities
-        ///     developer: Git Project
-        ///     version: 2.51.0.1
-        ///     ...
-        /// Only name, category, and developer are extracted.
-        /// </summary>
-        private void ParseCatalogYaml(string filePath, Dictionary<string, CatalogEntryMetadata> metadata)
-        {
-            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(stream);
-
-            string? currentName = null;
-            string? currentCategory = null;
-            string? currentDeveloper = null;
-            int entryCount = 0;
-
-            // Detect the indent level of list items.  Catalogs may use either
-            // a bare sequence  ("- name: …" at column 0)  or be wrapped under
-            // an "items:" key  ("  - name: …" indented 2+ spaces).  We discover
-            // the pattern from the first "- " we encounter.
-            int listIndent = -1;  // -1 = not yet detected
-
-            string? line;
-            while ((line = reader.ReadLine()) != null)
-            {
-                if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#"))
-                    continue;
-
-                var trimmed = line.TrimStart();
-
-                // Detect new array entry: "- " at any indentation level
-                if (trimmed.Length >= 2 && trimmed[0] == '-' && (trimmed[1] == ' ' || trimmed[1] == '\t'))
-                {
-                    int currentIndent = line.Length - trimmed.Length;
-
-                    // First list item determines the expected indent
-                    if (listIndent < 0)
-                        listIndent = currentIndent;
-
-                    // Only treat as a new entry if at the detected list indent
-                    if (currentIndent == listIndent)
-                    {
-                        SaveCatalogEntry(metadata, currentName, currentCategory, currentDeveloper, ref entryCount);
-                        currentName = null;
-                        currentCategory = null;
-                        currentDeveloper = null;
-
-                        // Inline field on the same line as the dash, e.g. "- name: Git"
-                        var afterDash = trimmed.Substring(2).Trim();
-                        ExtractCatalogField(afterDash, ref currentName, ref currentCategory, ref currentDeveloper);
-                        continue;
-                    }
-                }
-
-                // Indented continuation of the current entry (or wrapper keys like "items:")
-                if (line[0] == ' ' || line[0] == '\t' || listIndent < 0)
-                {
-                    ExtractCatalogField(trimmed, ref currentName, ref currentCategory, ref currentDeveloper);
-                }
-            }
-
-            SaveCatalogEntry(metadata, currentName, currentCategory, currentDeveloper, ref entryCount);
-
-            _logger.LogDebug("Parsed catalog {File}: {Count} entries with category/developer metadata",
-                Path.GetFileName(filePath), entryCount);
-        }
-
-        private static void SaveCatalogEntry(
-            Dictionary<string, CatalogEntryMetadata> metadata,
-            string? name, string? category, string? developer, ref int count)
-        {
-            if (string.IsNullOrEmpty(name))
-                return;
-            if (string.IsNullOrEmpty(category) && string.IsNullOrEmpty(developer))
-                return;
-
-            metadata[name] = new CatalogEntryMetadata
-            {
-                Category = category ?? string.Empty,
-                Developer = developer ?? string.Empty
-            };
-            count++;
-        }
-
-        private static void ExtractCatalogField(string trimmedLine, ref string? name, ref string? category, ref string? developer)
-        {
-            // Skip nested YAML sequences/mappings and complex values
-            if (trimmedLine.StartsWith("- ") || trimmedLine.StartsWith("{") || trimmedLine.StartsWith("["))
-                return;
-
-            if (trimmedLine.StartsWith("name:", StringComparison.OrdinalIgnoreCase))
-                name = ExtractCatalogYamlValue(trimmedLine);
-            else if (trimmedLine.StartsWith("category:", StringComparison.OrdinalIgnoreCase))
-                category = ExtractCatalogYamlValue(trimmedLine);
-            else if (trimmedLine.StartsWith("developer:", StringComparison.OrdinalIgnoreCase))
-                developer = ExtractCatalogYamlValue(trimmedLine);
-        }
-
-        private static string ExtractCatalogYamlValue(string line)
-        {
-            var colonIdx = line.IndexOf(':');
-            if (colonIdx < 0 || colonIdx >= line.Length - 1)
-                return string.Empty;
-
-            var value = line.Substring(colonIdx + 1).Trim();
-            if (value.Length == 0)
-                return string.Empty;
-
-            // Strip surrounding quotes
-            if (value.Length >= 2 &&
-                ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\'')))
-            {
-                value = value[1..^1];
-            }
-
-            return value;
-        }
-
-        private sealed class CatalogEntryMetadata
-        {
-            public string Category { get; set; } = string.Empty;
-            public string Developer { get; set; } = string.Empty;
-        }
     }
 }
-
-
-
-
-
-
-
-
-
-
