@@ -1,22 +1,25 @@
 {
   "schedules": {
     "hourly": {
-      "modules": ["security", "profiles", "network", "management", "identity"],
+      "modules": ["security", "network", "management", "identity", "hardware"],
+      "args": "--storage-mode quick",
       "interval_minutes": 60,
-      "description": "Modules that need frequent updates for security, configuration, and identity monitoring (installs module runs from Cimian's postflight script)"
+      "description": "Security/identity monitoring + quick hardware snapshot (drive totals only)"
     },
     "every4hours": {
-      "modules": ["applications", "inventory", "system"],
+      "modules": ["applications", "inventory", "system", "peripherals"],
       "interval_minutes": 240,
-      "description": "Modules that change moderately - software installs and basic device info"
+      "description": "Modules that change moderately - software, device info, and peripheral devices"
     },
     "daily": {
-      "modules": ["hardware", "printers", "displays"],
+      "modules": ["hardware"],
+      "args": "--storage-mode deep",
       "interval_minutes": 1440,
-      "description": "Modules that rarely change - physical hardware and peripheral devices"
+      "description": "Full hardware deep-scan including directory-level storage analysis"
     },
     "all": {
-      "modules": ["security", "profiles", "network", "applications", "inventory", "system", "hardware", "management", "printers", "displays", "identity"],
+      "modules": ["security", "network", "applications", "inventory", "system", "hardware", "management", "peripherals", "identity"],
+      "args": "--storage-mode deep",
       "interval_minutes": 720,
       "description": "Run all available modules (except installs) for comprehensive data collection"
     }
