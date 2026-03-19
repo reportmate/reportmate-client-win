@@ -67,19 +67,22 @@ try {
             schedules = @{
                 hourly = @{
                     interval = "PT1H"
-                    modules = @("security", "profiles", "network", "management")
+                    modules = @("security", "network", "management", "identity", "hardware")
+                    args = "--storage-mode quick"
                 }
                 every4hours = @{
                     interval = "PT4H" 
-                    modules = @("applications", "inventory", "system")
+                    modules = @("applications", "inventory", "system", "peripherals")
                 }
                 daily = @{
                     interval = "P1D"
-                    modules = @("hardware", "printers", "displays")
+                    modules = @("hardware")
+                    args = "--storage-mode deep"
                 }
                 all = @{
                     interval_minutes = 720
-                    modules = @("security", "profiles", "network", "applications", "inventory", "system", "hardware", "management", "printers", "displays")
+                    modules = @("security", "network", "applications", "inventory", "system", "hardware", "management", "peripherals", "identity")
+                    args = "--storage-mode deep"
                 }
             }
         }
@@ -89,7 +92,9 @@ try {
     
     # Create hourly collection task
     Write-Host "Creating hourly collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.hourly.modules -join ',')" -WorkingDirectory $InstallPath
+    $hourlyArg = "--run-modules $($scheduleConfig.schedules.hourly.modules -join ',')"
+    if ($scheduleConfig.schedules.hourly.args) { $hourlyArg += " $($scheduleConfig.schedules.hourly.args)" }
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument $hourlyArg -WorkingDirectory $InstallPath
     $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 1)
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable -Hidden -AllowStartIfOnBatteries
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -98,14 +103,18 @@ try {
     
     # Create 4-hourly collection task  
     Write-Host "Creating 4-hourly collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.every4hours.modules -join ',')" -WorkingDirectory $InstallPath
+    $fourHourlyArg = "--run-modules $($scheduleConfig.schedules.every4hours.modules -join ',')"
+    if ($scheduleConfig.schedules.every4hours.args) { $fourHourlyArg += " $($scheduleConfig.schedules.every4hours.args)" }
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument $fourHourlyArg -WorkingDirectory $InstallPath
     $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 4)
     
     Register-ScheduledTask -TaskName "ReportMate 4-Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits moderately changing device data every 4 hours" -Force
     
     # Create daily collection task
     Write-Host "Creating daily collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.daily.modules -join ',')" -WorkingDirectory $InstallPath
+    $dailyArg = "--run-modules $($scheduleConfig.schedules.daily.modules -join ',')"
+    if ($scheduleConfig.schedules.daily.args) { $dailyArg += " $($scheduleConfig.schedules.daily.args)" }
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument $dailyArg -WorkingDirectory $InstallPath
     $trigger = New-ScheduledTaskTrigger -Daily -At "09:00"
     
     Register-ScheduledTask -TaskName "ReportMate Daily Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits static device data once daily" -Force
