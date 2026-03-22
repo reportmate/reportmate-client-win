@@ -34,7 +34,7 @@ namespace ReportMate.WindowsClient.DataProcessing
             {
                 _logger.LogInformation("Testing API connectivity...");
                 
-                var response = await _httpClient.GetAsync($"{_apiBaseUrl}/api/health");
+                var response = await _httpClient.GetAsync($"{_apiBaseUrl}/api/v1/health");
                 var isHealthy = response.IsSuccessStatusCode;
                 
                 if (isHealthy)
@@ -79,7 +79,7 @@ namespace ReportMate.WindowsClient.DataProcessing
 
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 
-                var response = await _httpClient.PostAsync($"{_apiBaseUrl}/api/device/upsert", content);
+                var response = await _httpClient.PostAsync($"{_apiBaseUrl}/api/v1/device/upsert", content);
 
                 if (response.IsSuccessStatusCode)
                 {

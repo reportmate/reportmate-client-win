@@ -219,7 +219,7 @@ public class DeviceEventRequest
 }
 
 /// <summary>
-/// Structured event request for sending event.json data to /api/events
+/// Structured event request for sending event.json data to /api/v1/events
 /// </summary>
 public class StructuredEventRequest
 {

@@ -168,7 +168,7 @@ public class DataCollectionService : IDataCollectionService
 
         // Send to API
         _logger.LogInformation("=== STEP 5: DATA TRANSMISSION ===");
-        _logger.LogInformation("Sending unified payload directly to ReportMate API via /api/events");
+        _logger.LogInformation("Sending unified payload directly to ReportMate API via /api/v1/events");
         
         // Calculate data size for the unified payload
         var dataSize = 0;
