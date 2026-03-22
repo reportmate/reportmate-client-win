@@ -141,7 +141,7 @@ public class ApiService : IApiService
             _logger.LogInformation("Environment context included");
 
             // Create the payload as a proper dictionary for JSON serialization
-            _logger.LogInformation("Creating API payload for /api/device...");
+            _logger.LogInformation("Creating API payload for /api/v1/device...");
             
             // Create a serializable device info object
             var deviceInfoPayload = new Dictionary<string, object>();
@@ -250,11 +250,11 @@ public class ApiService : IApiService
                     await CachePayloadAsync(jsonContent, deviceSerial, attempt);
                     
                     var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
-                    _logger.LogInformation("Sending POST to /api/device...");
+                    _logger.LogInformation("Sending POST to /api/v1/device...");
                     _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
                     _logger.LogInformation("Device Serial in payload: {DeviceSerial}", payload?.Device ?? "Unknown");
 
-                    var response = await _httpClient.PostAsync("/api/device", httpContent);
+                    var response = await _httpClient.PostAsync("/api/v1/device", httpContent);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
 
                     if (response.IsSuccessStatusCode)
@@ -272,7 +272,7 @@ public class ApiService : IApiService
                     else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
                         // Special handling for 404 - API endpoint not deployed yet
-                        _logger.LogWarning("API endpoint /api/device not found (404). This is unexpected as the endpoint should be available.");
+                        _logger.LogWarning("API endpoint /api/v1/device not found (404). This is unexpected as the endpoint should be available.");
                         _logger.LogInformation("DATA READY FOR TRANSMISSION - Would have sent the following payload:");
                         _logger.LogInformation("Payload size: {PayloadSize} bytes", jsonContent.Length);
                         _logger.LogInformation("Device: {Device}", payload?.Device ?? "Unknown");
@@ -297,7 +297,7 @@ public class ApiService : IApiService
                         }
                         
                         _logger.LogInformation(" SUCCESS: ReportMate client is fully functional and ready to send data!");
-                        _logger.LogInformation("Once the /api/device endpoint is available, this machine will automatically start reporting.");
+                        _logger.LogInformation("Once the /api/v1/device endpoint is available, this machine will automatically start reporting.");
                         
                         // Return true since the client is working correctly
                         return true;
@@ -311,7 +311,7 @@ public class ApiService : IApiService
                         _logger.LogWarning("Status Code: {StatusCode}", response.StatusCode);
                         _logger.LogWarning("Reason Phrase: {ReasonPhrase}", response.ReasonPhrase);
                         _logger.LogWarning("Error Content: {ErrorContent}", errorContent);
-                        _logger.LogWarning("Request URL: {RequestUrl}", _httpClient.BaseAddress + "/api/device");
+                        _logger.LogWarning("Request URL: {RequestUrl}", _httpClient.BaseAddress + "/api/v1/device");
                         _logger.LogWarning("Attempt: {Attempt}/{MaxRetries}", attempt, maxRetries);
                         
                         // Try to parse error response as JSON for additional details
@@ -361,7 +361,7 @@ public class ApiService : IApiService
                     _logger.LogWarning("Exception Type: {ExceptionType}", ex.GetType().Name);
                     _logger.LogWarning("Exception Message: {ExceptionMessage}", ex.Message);
                     _logger.LogWarning("Inner Exception: {InnerException}", ex.InnerException?.Message);
-                    _logger.LogWarning("Request URL: {RequestUrl}", _httpClient.BaseAddress + "/api/device");
+                    _logger.LogWarning("Request URL: {RequestUrl}", _httpClient.BaseAddress + "/api/v1/device");
                     _logger.LogWarning("Device Serial: {DeviceSerial}", deviceSerial);
                     
                     if (ex.Data?.Count > 0)
@@ -415,7 +415,7 @@ public class ApiService : IApiService
             _logger.LogError("Hardware UUID: {HardwareUuid}", hardwareUuid);
             _logger.LogError("Computer Name: {ComputerName}", deviceInfo?.ComputerName ?? "Unknown");
             _logger.LogError("API Base URL: {BaseUrl}", _httpClient.BaseAddress);
-            _logger.LogError("Expected Endpoint: {Endpoint}", "/api/device");
+            _logger.LogError("Expected Endpoint: {Endpoint}", "/api/v1/device");
             _logger.LogError("Payload Size: {PayloadSize} bytes", payload != null ? JsonSerializer.Serialize(payload, _jsonOptions).Length : 0);
             
             if (payload != null)
@@ -492,11 +492,11 @@ public class ApiService : IApiService
                     }
 
                     var dataSizeKB = Math.Round(jsonContent.Length / 1024.0, 2);
-                    _logger.LogInformation("Sending POST to /api/events...");
+                    _logger.LogInformation("Sending POST to /api/v1/events...");
                     _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
                     _logger.LogInformation("Device Serial in payload: {DeviceSerial}", deviceSerial);
 
-                    var response = await _httpClient.PostAsync("/api/events", httpContent);
+                    var response = await _httpClient.PostAsync("/api/v1/events", httpContent);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
 
                     if (response.IsSuccessStatusCode)
@@ -509,7 +509,7 @@ public class ApiService : IApiService
                     }
                     else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
-                        _logger.LogWarning("API endpoint /api/events not found (404). Endpoint may not be deployed yet.");
+                        _logger.LogWarning("API endpoint /api/v1/events not found (404). Endpoint may not be deployed yet.");
                         _logger.LogInformation("DATA READY FOR TRANSMISSION - Unified payload would have been sent:");
                         _logger.LogInformation("Payload size: {PayloadSize} bytes", jsonContent.Length);
                         _logger.LogInformation("Device: {Device}", deviceSerial);
@@ -574,7 +574,7 @@ public class ApiService : IApiService
             _logger.LogInformation("Testing API connectivity");
 
             // Use the health endpoint for connectivity testing
-            var request = new HttpRequestMessage(HttpMethod.Get, "/api/health");
+            var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/health");
             var response = await _httpClient.SendAsync(request);
             
             if (response.IsSuccessStatusCode)
@@ -639,8 +639,8 @@ public class ApiService : IApiService
             var jsonContent = JsonSerializer.Serialize(registrationPayload, ReportMateJsonContext.Default.DictionaryStringObject);
             var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
 
-            _logger.LogInformation("Sending registration request to /api/device...");
-            var response = await _httpClient.PostAsync("/api/device", httpContent);
+            _logger.LogInformation("Sending registration request to /api/v1/device...");
+            var response = await _httpClient.PostAsync("/api/v1/device", httpContent);
 
             _logger.LogInformation("Registration response: {StatusCode}", response.StatusCode);
 
@@ -673,9 +673,9 @@ public class ApiService : IApiService
         {
             _logger.LogInformation("=== DEVICE REGISTRATION CHECK ===");
             _logger.LogInformation("Checking if device is registered: {DeviceId}", deviceId);
-            _logger.LogInformation("API endpoint: GET /api/device/{DeviceId}", deviceId);
+            _logger.LogInformation("API endpoint: GET /api/v1/device/{DeviceId}", deviceId);
 
-            var response = await _httpClient.GetAsync($"/api/device/{deviceId}");
+            var response = await _httpClient.GetAsync($"/api/v1/device/{deviceId}");
             _logger.LogInformation("Registration check response: {StatusCode}", response.StatusCode);
 
             if (response.IsSuccessStatusCode)
@@ -983,7 +983,7 @@ public class ApiService : IApiService
                             
                             _logger.LogInformation("Sending {EventType} event: {Message}", eventType.ToUpper(), message);
                             
-                            var eventResponse = await _httpClient.PostAsync("/api/events", individualEventHttpContent);
+                            var eventResponse = await _httpClient.PostAsync("/api/v1/events", individualEventHttpContent);
                             
                             if (eventResponse.IsSuccessStatusCode)
                             {
@@ -1026,7 +1026,7 @@ public class ApiService : IApiService
                 var fallbackJsonPayload = JsonSerializer.Serialize(fallbackEventRequest, _jsonOptions);
                 var fallbackHttpContent = new StringContent(fallbackJsonPayload, System.Text.Encoding.UTF8, "application/json");
                 
-                var fallbackResponse = await _httpClient.PostAsync("/api/events", fallbackHttpContent);
+                var fallbackResponse = await _httpClient.PostAsync("/api/v1/events", fallbackHttpContent);
                 
                 if (fallbackResponse.IsSuccessStatusCode)
                 {
