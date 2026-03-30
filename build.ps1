@@ -842,6 +842,25 @@ Write-Output ""
 if (-not $SkipNUPKG) {
     Write-Step "Creating NUPKG package..."
     
+    # Ensure NuGet CLI is up-to-date before creating NUPKG
+    Write-Verbose "Checking NuGet CLI version..."
+    try {
+        $nugetPath = (Get-Command nuget.exe -ErrorAction SilentlyContinue).Source
+        if ($nugetPath) {
+            $nugetVersion = & nuget.exe help | Select-String "NuGet Version:" | ForEach-Object { $_.ToString().Split(':')[1].Trim() }
+            Write-Verbose "Current NuGet version: $nugetVersion"
+            
+            # Update NuGet to latest version
+            Write-Verbose "Updating NuGet CLI to latest version..."
+            & nuget.exe update -self | Out-Null
+            Write-Success "NuGet CLI updated successfully"
+        } else {
+            Write-Warning "NuGet CLI not found in PATH - cimipkg may fail"
+        }
+    } catch {
+        Write-Warning "Failed to check/update NuGet CLI: $_"
+    }
+    
     # Download cimipkg if not found
     if (-not $cimipkgPath) {
         Write-Verbose "Downloading cimipkg..."
