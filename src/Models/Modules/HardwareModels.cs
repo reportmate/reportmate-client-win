@@ -22,6 +22,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public NpuInfo? Npu { get; set; }
         public WirelessInfo? Wireless { get; set; }
         public BluetoothInfo? Bluetooth { get; set; }
+        public PowerPlanInfo? PowerPlan { get; set; }
     }
 
     public class ProcessorInfo
@@ -193,5 +194,27 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Status { get; set; } = string.Empty; // Enabled, Disabled, Not Present
         public string BluetoothVersion { get; set; } = string.Empty; // 5.0, 5.2, 5.3, etc.
         public bool IsAvailable { get; set; }
+    }
+
+    /// <summary>
+    /// Power plan information - Active power plan configuration
+    /// </summary>
+    public class PowerPlanInfo
+    {
+        /// <summary>
+        /// Active power plan name (e.g., "Balanced", "High performance", "Lenovo Default")
+        /// </summary>
+        public string Name { get; set; } = string.Empty;
+        
+        /// <summary>
+        /// Active power plan GUID
+        /// </summary>
+        public string Guid { get; set; } = string.Empty;
+        
+        /// <summary>
+        /// True when the active plan is one of the built-in Windows plans (Balanced, High performance, Power saver)
+        /// False for vendor-defined plans like "Lenovo Default"
+        /// </summary>
+        public bool IsStandard { get; set; }
     }
 }
