@@ -1008,8 +1008,11 @@ Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmware
             return layouts.Distinct().ToList();
         }
 
-        private static readonly string PreviousOSVersionPath = 
+        private static readonly string PreviousOSVersionPath =
             Path.Combine(@"C:\ProgramData\ManagedReports\cache", "previous_os_version.json");
+
+        private static readonly string PreviousBootTimePath =
+            Path.Combine(@"C:\ProgramData\ManagedReports\cache", "previous_boot_time.json");
 
         public override Task<List<ReportMateEvent>> GenerateEventsAsync(SystemData data)
         {
@@ -1020,6 +1023,13 @@ Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmware
             if (osUpdateEvent != null)
             {
                 events.Add(osUpdateEvent);
+            }
+
+            // Detect system reboots
+            var rebootEvent = DetectReboot(data);
+            if (rebootEvent != null)
+            {
+                events.Add(rebootEvent);
             }
 
             if (data != null && !string.IsNullOrEmpty(data.OperatingSystem?.Name))
@@ -1135,6 +1145,92 @@ Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmware
                     ["new_version"] = currentDisplay,
                     ["previous_build"] = previousBuild ?? "",
                     ["new_build"] = currentBuild
+                }
+            };
+        }
+
+        /// <summary>
+        /// Detects system reboots by comparing current boot time against stored previous boot time.
+        /// Returns a system event if a reboot occurred, null otherwise.
+        /// Persists current boot time for next comparison.
+        /// </summary>
+        private ReportMateEvent? DetectReboot(SystemData data)
+        {
+            if (data?.LastBootTime == null)
+                return null;
+
+            var currentBootTime = data.LastBootTime.Value;
+            var currentBootTimeStr = currentBootTime.ToString("o");
+            DateTime? previousBootTime = null;
+
+            // Read previous boot time state
+            try
+            {
+                if (File.Exists(PreviousBootTimePath))
+                {
+                    var json = File.ReadAllText(PreviousBootTimePath);
+                    var stored = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                    if (stored != null && stored.TryGetValue("boot_time", out var storedBootTime))
+                    {
+                        if (DateTime.TryParse(storedBootTime, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+                            previousBootTime = parsed;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not read previous boot time state");
+            }
+
+            // Always write current boot time for next comparison
+            try
+            {
+                var stateDir = Path.GetDirectoryName(PreviousBootTimePath);
+                if (!string.IsNullOrEmpty(stateDir) && !Directory.Exists(stateDir))
+                    Directory.CreateDirectory(stateDir);
+
+                var state = new Dictionary<string, string>
+                {
+                    ["boot_time"] = currentBootTimeStr,
+                    ["uptime"] = data.UptimeString ?? "",
+                    ["platform"] = "Windows",
+                    ["recorded_at"] = DateTime.UtcNow.ToString("o")
+                };
+                var stateJson = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(PreviousBootTimePath, stateJson);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not write boot time state");
+            }
+
+            // No previous boot time stored (first run)
+            if (previousBootTime == null)
+            {
+                _logger.LogInformation("No previous boot time recorded, storing {BootTime}", currentBootTimeStr);
+                return null;
+            }
+
+            // Boot time unchanged (within 60 second tolerance for clock drift)
+            if (Math.Abs((currentBootTime - previousBootTime.Value).TotalSeconds) < 60)
+                return null;
+
+            // Boot time changed — system was rebooted
+            var message = "System reboot detected";
+            _logger.LogInformation("{Message} (previous boot: {Previous}, current boot: {Current})",
+                message, previousBootTime.Value.ToString("o"), currentBootTimeStr);
+
+            return new ReportMateEvent
+            {
+                ModuleId = "system",
+                EventType = "system",
+                Message = message,
+                Timestamp = DateTime.UtcNow,
+                Details = new Dictionary<string, object>
+                {
+                    ["previous_boot_time"] = previousBootTime.Value.ToString("o"),
+                    ["current_boot_time"] = currentBootTimeStr,
+                    ["uptime"] = data.UptimeString ?? ""
                 }
             };
         }
