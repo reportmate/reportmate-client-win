@@ -19,6 +19,7 @@
     <Feature Id="ProductFeature" Title="ReportMate Windows Client" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
       <ComponentGroupRef Id="OSQueryModuleFiles" />
+      <ComponentGroupRef Id="SpeedtestComponents" />
       <ComponentGroupRef Id="CimianComponents" />
       <ComponentRef Id="DataConfigFiles" />
     </Feature>
@@ -124,6 +125,15 @@
       </Component>
     </ComponentGroup>
     
+    <!-- Speedtest CLI for Network Quality Testing -->
+    <ComponentGroup Id="SpeedtestComponents" Directory="INSTALLFOLDER">
+      <Component Id="SpeedtestExe" Guid="*">
+        <File Id="SpeedtestCliExe"
+              Source="$(var.SourceDir)\speedtest.exe"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
     <!-- Cimian Integration Components -->
     <ComponentGroup Id="CimianComponents" Directory="CIMIANFOLDER">
       <Component Id="CimianPostflightScript" Guid="*">
