@@ -724,6 +724,74 @@ foreach ($file in $sharedFiles) {
     }
 }
 
+# Ensure Speedtest CLI binary is available, download if missing
+$speedtestSourceDir = Join-Path $sharedResourcesDir "speedtest"
+$speedtestExe = Join-Path $speedtestSourceDir "speedtest.exe"
+if (-not (Test-Path $speedtestExe)) {
+    Write-Step "Downloading Speedtest CLI..."
+    try {
+        # Use Ookla's packagecloud repo for latest signed binaries
+        $speedtestZip = Join-Path $env:TEMP "ookla-speedtest-win64.zip"
+        $speedtestExtract = Join-Path $env:TEMP "ookla-speedtest-extract"
+
+        # Try packagecloud (signed builds), fall back to legacy CDN
+        $downloadUrls = @(
+            "https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-win64.zip"
+        )
+
+        $downloaded = $false
+        foreach ($url in $downloadUrls) {
+            try {
+                Invoke-WebRequest -Uri $url -OutFile $speedtestZip -UseBasicParsing -ErrorAction Stop
+                $downloaded = $true
+                Write-Verbose "Downloaded from: $url"
+                break
+            } catch {
+                Write-Verbose "Failed to download from: $url"
+            }
+        }
+
+        if (-not $downloaded) { throw "All download URLs failed" }
+
+        if (Test-Path $speedtestExtract) { Remove-Item $speedtestExtract -Recurse -Force }
+        Expand-Archive -Path $speedtestZip -DestinationPath $speedtestExtract -Force
+
+        # Ensure target directory exists
+        if (-not (Test-Path $speedtestSourceDir)) { New-Item -ItemType Directory -Path $speedtestSourceDir -Force | Out-Null }
+
+        # Copy only the exe (skip license/readme from zip)
+        Copy-Item (Join-Path $speedtestExtract "speedtest.exe") $speedtestExe -Force
+        Write-Success "Downloaded Speedtest CLI to build resources"
+
+        # Sign the binary with our enterprise cert so Defender doesn't block it
+        if ($env:SIGN_THUMB) {
+            Write-Step "Signing Speedtest CLI with enterprise certificate..."
+            try {
+                signPackage -FilePath $speedtestExe
+                Write-Success "Signed speedtest.exe"
+            } catch {
+                Write-Warning "Failed to sign speedtest.exe: $_ - may be blocked by Defender on managed endpoints"
+            }
+        } else {
+            Write-Warning "No signing certificate available - speedtest.exe will be unsigned (may be blocked by Defender)"
+        }
+
+        # Cleanup temp files
+        Remove-Item $speedtestZip -Force -ErrorAction SilentlyContinue
+        Remove-Item $speedtestExtract -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Warning "Failed to download Speedtest CLI: $_ - network quality testing will be unavailable"
+    }
+}
+
+# Copy Speedtest CLI to Program Files payload (flat, alongside managedreportsrunner.exe)
+if (Test-Path $speedtestExe) {
+    Copy-Item $speedtestExe (Join-Path $ProgramFilesPayloadDir "speedtest.exe") -Force
+    Write-Success "Speedtest CLI bundled into payload"
+} else {
+    Write-Warning "Speedtest CLI not available - network quality testing will be unavailable"
+}
+
 # Don't copy install-scripts directory to avoid confusion with install-tasks.ps1
 # The Configure-ReportMate.ps1 functionality should be integrated into postinstall.ps1
 
@@ -1214,7 +1282,14 @@ if (-not $SkipMSI) {
                 Copy-Item $osquerySourceDir $MsiStagingDir -Recurse -Force
                 Write-Verbose "Copied osquery modules from src to MSI staging"
             }
-            
+
+            # Copy Speedtest CLI to MSI staging (flat, alongside managedreportsrunner.exe)
+            $speedtestExePath = Join-Path $BuildDir "resources\speedtest\speedtest.exe"
+            if (Test-Path $speedtestExePath) {
+                Copy-Item $speedtestExePath (Join-Path $MsiStagingDir "speedtest.exe") -Force
+                Write-Verbose "Copied Speedtest CLI to MSI staging"
+            }
+
             # Create version.txt for MSI
             $versionContent = @"
 ReportMate

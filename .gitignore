@@ -386,6 +386,9 @@ FodyWeavers.xsd
 .DS_Store
 
 # ReportMate specific files
+# Downloaded build dependencies (auto-fetched by build.ps1)
+build/resources/speedtest/speedtest.exe
+
 # Build-time generated source files
 src/Generated/
 
