@@ -148,42 +148,6 @@ jobs:
         
         echo "SHOULD_CREATE_RELEASE=$shouldRelease" >> $env:GITHUB_OUTPUT
         
-    - name: Install WiX Toolset v6
-      shell: pwsh
-      run: |
-        echo "Installing WiX Toolset v6 as dotnet tool..."
-        
-        # Install WiX v6 as a global dotnet tool
-        dotnet tool install --global wix --version 6.0.1
-        
-        # Verify installation using the correct WiX 6 command format
-        try {
-          $wixVersion = & wix --version 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            echo "✅ WiX Toolset v6 installed successfully: $wixVersion"
-          } else {
-            # Try alternative verification methods
-            $toolList = & dotnet tool list --global | Select-String "wix"
-            if ($toolList) {
-              echo "✅ WiX Toolset v6 installed successfully (verified via tool list)"
-              echo "Tool info: $toolList"
-            } else {
-              echo "❌ WiX Toolset v6 installation verification failed"
-              exit 1
-            }
-          }
-        } catch {
-          # Fallback verification
-          $toolList = & dotnet tool list --global | Select-String "wix"
-          if ($toolList) {
-            echo "✅ WiX Toolset v6 installed successfully (verified via tool list)"
-            echo "Tool info: $toolList"
-          } else {
-            echo "❌ Failed to verify WiX installation"
-            exit 1
-          }
-        }
-        
     - name: Build with unified script
       shell: pwsh
       run: |
