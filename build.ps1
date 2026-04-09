@@ -1180,10 +1180,20 @@ Commit: $env:GITHUB_SHA
                 throw "cimipkg failed with exit code: $exitCode"
             }
         } catch {
-            Write-Error "MSI creation failed: $_"
-        } finally {
+            # MSI is now the primary artifact — fail the build loudly if creation
+            # throws, otherwise CI will report success with no MSI produced.
             Pop-Location
+            throw "MSI creation failed: $_"
+        } finally {
+            # Pop-Location here too so we unwind even if the catch above wasn't hit.
+            if ((Get-Location).Path -eq $PkgDir) { Pop-Location }
         }
+    }
+
+    # Final sanity check: verify the MSI actually landed in the output directory.
+    $expectedMsi = Join-Path $OutputDir "ReportMate-$Version.msi"
+    if (-not (Test-Path $expectedMsi)) {
+        throw "MSI creation completed without an exception but $expectedMsi is missing"
     }
 } else {
     Write-Info "Skipping MSI creation"
