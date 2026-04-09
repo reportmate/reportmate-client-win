@@ -2,9 +2,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Management;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -67,6 +70,9 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Collect NETBIOS information
             CollectNetbiosInformation(data, osqueryResults);
+
+            // Collect network quality via Speedtest CLI
+            await CollectNetworkQualityAsync(data);
 
             // Set primary interface based on active connection
             if (!string.IsNullOrEmpty(data.ActiveConnection.InterfaceName))
@@ -2595,6 +2601,129 @@ try {
                 "BF" => "Network Monitor Application",
                 _ => $"Type {type}"
             };
+        }
+
+        /// <summary>
+        /// Collect network quality metrics using bundled Speedtest CLI
+        /// </summary>
+        private async Task CollectNetworkQualityAsync(NetworkData data)
+        {
+            try
+            {
+                // Look for bundled speedtest binary relative to application directory
+                var appDir = AppContext.BaseDirectory;
+                var speedtestPath = Path.Combine(appDir, "speedtest.exe");
+
+                if (!File.Exists(speedtestPath))
+                {
+                    _logger.LogInformation("Speedtest CLI not found at {Path} - network quality data unavailable", speedtestPath);
+                    data.NetworkQuality = new NetworkQualityData { Error = "Speedtest CLI not found" };
+                    return;
+                }
+
+                _logger.LogDebug("Running Speedtest CLI from {Path}", speedtestPath);
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+                using var process = new Process();
+                process.StartInfo.FileName = speedtestPath;
+                process.StartInfo.Arguments = "--format=json --accept-license";
+                process.StartInfo.UseShellExecute = false;
+                process.StartInfo.RedirectStandardOutput = true;
+                process.StartInfo.RedirectStandardError = true;
+                process.StartInfo.CreateNoWindow = true;
+
+                process.Start();
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+
+                try
+                {
+                    await process.WaitForExitAsync(cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    _logger.LogWarning("Speedtest CLI timed out after 60 seconds");
+                    data.NetworkQuality = new NetworkQualityData { Error = "Speedtest timed out" };
+                    return;
+                }
+
+                var output = await outputTask;
+                var error = await errorTask;
+
+                if (process.ExitCode != 0)
+                {
+                    _logger.LogWarning("Speedtest CLI exited with code {ExitCode}: {Error}", process.ExitCode, error);
+                    data.NetworkQuality = new NetworkQualityData { Error = $"Speedtest failed (exit code {process.ExitCode})" };
+                    return;
+                }
+
+                // Parse Ookla Speedtest CLI JSON output
+                using var doc = JsonDocument.Parse(output);
+                var root = doc.RootElement;
+
+                var dlBandwidth = root.GetProperty("download").GetProperty("bandwidth").GetInt64();
+                var ulBandwidth = root.GetProperty("upload").GetProperty("bandwidth").GetInt64();
+                var latency = root.GetProperty("ping").GetProperty("latency").GetDouble();
+                var jitter = root.GetProperty("ping").GetProperty("jitter").GetDouble();
+
+                // Bandwidth is in bytes/sec, convert to Mbps
+                var dlMbps = Math.Round(dlBandwidth * 8.0 / 1_000_000, 2);
+                var ulMbps = Math.Round(ulBandwidth * 8.0 / 1_000_000, 2);
+
+                // Rate download/upload quality
+                var dlRating = RateSpeed(dlMbps, isDownload: true);
+                var ulRating = RateSpeed(ulMbps, isDownload: false);
+                var overallRating = GetOverallRating(dlRating, ulRating);
+
+                // Extract server info
+                var serverName = root.TryGetProperty("server", out var server) && server.TryGetProperty("name", out var sn) ? sn.GetString() ?? "" : "";
+                var serverLocation = server.TryGetProperty("location", out var sl) ? sl.GetString() ?? "" : "";
+
+                data.NetworkQuality = new NetworkQualityData
+                {
+                    DlThroughput = dlMbps.ToString("F2"),
+                    UlThroughput = ulMbps.ToString("F2"),
+                    DlRating = dlRating,
+                    UlRating = ulRating,
+                    Rating = overallRating,
+                    IdleLatency = latency.ToString("F1"),
+                    Jitter = jitter.ToString("F1"),
+                    ServerName = serverName,
+                    ServerLocation = serverLocation,
+                    Source = "speedtest"
+                };
+
+                _logger.LogInformation("Network quality: DL {Download} Mbps ({DlRating}), UL {Upload} Mbps ({UlRating}), Latency {Latency}ms",
+                    dlMbps, dlRating, ulMbps, ulRating, latency);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse Speedtest CLI output");
+                data.NetworkQuality = new NetworkQualityData { Error = "Failed to parse speedtest output" };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect network quality data");
+                data.NetworkQuality = new NetworkQualityData { Error = "Speedtest collection failed" };
+            }
+        }
+
+        private static string RateSpeed(double mbps, bool isDownload)
+        {
+            if (isDownload)
+                return mbps >= 100 ? "High" : mbps >= 25 ? "Medium" : "Low";
+            else
+                return mbps >= 50 ? "High" : mbps >= 10 ? "Medium" : "Low";
+        }
+
+        private static string GetOverallRating(string dlRating, string ulRating)
+        {
+            // Overall rating is the lowest of dl/ul
+            var ratings = new[] { "Low", "Medium", "High" };
+            var dlIndex = Array.IndexOf(ratings, dlRating);
+            var ulIndex = Array.IndexOf(ratings, ulRating);
+            return ratings[Math.Min(dlIndex, ulIndex)];
         }
 
         public override async Task<bool> ValidateModuleDataAsync(NetworkData data)

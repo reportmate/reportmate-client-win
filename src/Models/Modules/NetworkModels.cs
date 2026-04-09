@@ -20,6 +20,22 @@ namespace ReportMate.WindowsClient.Models.Modules
         public ActiveConnectionInfo ActiveConnection { get; set; } = new();
         public string Hostname { get; set; } = string.Empty;
         public string Domain { get; set; } = string.Empty;
+        public NetworkQualityData? NetworkQuality { get; set; }
+    }
+
+    public class NetworkQualityData
+    {
+        public string DlThroughput { get; set; } = string.Empty;
+        public string UlThroughput { get; set; } = string.Empty;
+        public string DlRating { get; set; } = string.Empty;
+        public string UlRating { get; set; } = string.Empty;
+        public string IdleLatency { get; set; } = string.Empty;
+        public string Jitter { get; set; } = string.Empty;
+        public string Rating { get; set; } = string.Empty;
+        public string ServerName { get; set; } = string.Empty;
+        public string ServerLocation { get; set; } = string.Empty;
+        public string Error { get; set; } = string.Empty;
+        public string Source { get; set; } = "speedtest";
     }
 
     public class ActiveConnectionInfo
