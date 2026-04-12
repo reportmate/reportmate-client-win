@@ -1600,27 +1600,86 @@ $policies | ConvertTo-Json -Depth 3 -Compress
             }
         }
 
-        private void ProcessOMAURISettings(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        private async void ProcessOMAURISettings(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
         {
-            if (!osqueryResults.TryGetValue("oma_uri_settings", out var results)) return;
-
-            foreach (var result in results)
+            if (osqueryResults.TryGetValue("oma_uri_settings", out var results) && results.Count > 0)
             {
-                var omaUri = new OMAURISetting
+                foreach (var result in results)
                 {
-                    URI = ExtractOMAURI(result.GetValueOrDefault("path", "").ToString() ?? ""),
-                    Value = result.GetValueOrDefault("data", "").ToString() ?? "",
-                    DataType = result.GetValueOrDefault("type", "").ToString() ?? "",
-                    ProfileName = ExtractProfileName(result.GetValueOrDefault("path", "").ToString() ?? ""),
-                    DeployedDate = DateTime.UtcNow,
-                    Status = "Applied",
-                    Description = GetOMAURIDescription(result.GetValueOrDefault("path", "").ToString() ?? "")
-                };
-
-                data.OMAURISettings.Add(omaUri);
+                    var omaUri = new OMAURISetting
+                    {
+                        URI = ExtractOMAURI(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                        Value = result.GetValueOrDefault("data", "").ToString() ?? "",
+                        DataType = result.GetValueOrDefault("type", "").ToString() ?? "",
+                        ProfileName = ExtractProfileName(result.GetValueOrDefault("path", "").ToString() ?? ""),
+                        DeployedDate = DateTime.UtcNow,
+                        Status = "Applied",
+                        Description = GetOMAURIDescription(result.GetValueOrDefault("path", "").ToString() ?? "")
+                    };
+                    data.OMAURISettings.Add(omaUri);
+                }
+                _logger.LogDebug("Processed {Count} OMA-URI settings from osquery", results.Count);
+                return;
             }
 
-            _logger.LogDebug("Processed {Count} OMA-URI settings", results.Count);
+            // PowerShell fallback: collect applied CSP policies from MDM enrollment providers
+            try
+            {
+                var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(@"
+                    $settings = @()
+                    $enrollPath = 'HKLM:\SOFTWARE\Microsoft\Enrollments'
+                    foreach ($enrollment in Get-ChildItem $enrollPath -EA SilentlyContinue) {
+                        $provider = (Get-ItemProperty $enrollment.PSPath -Name ProviderID -EA SilentlyContinue).ProviderID
+                        if ($provider -eq 'MS DM Server') {
+                            $provPath = Join-Path $enrollment.PSPath 'DMClient\MS DM Server'
+                            if (Test-Path $provPath) {
+                                foreach ($prop in (Get-ItemProperty $provPath -EA SilentlyContinue).PSObject.Properties) {
+                                    if ($prop.Name -notlike 'PS*' -and $prop.Value) {
+                                        $settings += @{ URI=$prop.Name; Value=""$($prop.Value)""; Profile='DMClient' }
+                                    }
+                                }
+                            }
+                            break
+                        }
+                    }
+                    # Also collect from PolicyManager Providers
+                    $provBase = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\Providers'
+                    if (Test-Path $provBase) {
+                        foreach ($prov in Get-ChildItem $provBase -EA SilentlyContinue | Select-Object -First 3) {
+                            $defPath = Join-Path $prov.PSPath 'default'
+                            if (Test-Path $defPath) {
+                                foreach ($area in Get-ChildItem $defPath -EA SilentlyContinue) {
+                                    foreach ($prop in $area.Property) {
+                                        if ($prop -match '_(LastWrite|ProviderSet|WinningProvider)$') { continue }
+                                        $val = $area.GetValue($prop)
+                                        $uri = ""./Device/Vendor/MSFT/Policy/Config/$($area.PSChildName)/$prop""
+                                        $settings += @{ URI=$uri; Value=""$val""; Profile=$prov.PSChildName }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    $settings | Select-Object -First 200 | ConvertTo-Json -Compress -Depth 3");
+
+                if (!string.IsNullOrWhiteSpace(psResult))
+                {
+                    var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                    var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                    foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                    {
+                        data.OMAURISettings.Add(new OMAURISetting
+                        {
+                            URI = (string?)item["URI"] ?? "",
+                            Value = (string?)item["Value"] ?? "",
+                            ProfileName = (string?)item["Profile"] ?? "",
+                            Status = "Applied",
+                            DeployedDate = DateTime.UtcNow
+                        });
+                    }
+                    _logger.LogInformation("PowerShell fallback collected {Count} OMA-URI/CSP settings", data.OMAURISettings.Count);
+                }
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "OMA-URI PowerShell fallback failed"); }
         }
 
         private void ProcessSecurityPolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
