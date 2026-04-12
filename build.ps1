@@ -7,29 +7,26 @@
     
 .DESCRIPTION
     One-stop build script that replicates the CI pipeline locally.
-    Builds all package types: PKG (primary), EXE, NUPKG, MSI, and ZIP.
+    Builds all package types: MSI (primary, via cimipkg), EXE, NUPKG, and ZIP.
     Supports creating tags and releases when run with appropriate parameters.
-    
+
 .PARAMETER Version
     Version to build (default: auto-generated from date in YYYY.MM.DD.HHMM format)
-    
+
 .PARAMETER Configuration
     Build configuration (Release or Debug)
-    
+
 .PARAMETER SkipBuild
     Skip the .NET build step
-    
+
 .PARAMETER SkipNUPKG
     Skip NUPKG creation
-    
+
 .PARAMETER SkipZIP
     Skip ZIP creation
 
 .PARAMETER SkipMSI
-    Skip MSI creation
-
-.PARAMETER SkipPKG
-    Skip PKG creation
+    Skip MSI creation (MSI is built via cimipkg)
     
 .PARAMETER Clean
     Clean all build artifacts first
@@ -88,7 +85,7 @@
 
 .EXAMPLE
     .\build.ps1 -Install
-    Build and automatically install the PKG package (requires admin privileges)
+    Build and automatically install the MSI package (requires admin privileges)
 
 .EXAMPLE
     .\build.ps1 -SkipNUPKG -SkipZIP
@@ -96,7 +93,7 @@
 
 .EXAMPLE
     .\build.ps1 -SkipMSI -SkipNUPKG -SkipZIP
-    Build only PKG (skip other package formats)
+    Build only the EXE (skip all package formats)
 #>
 
 param(
@@ -107,7 +104,6 @@ param(
     [switch]$SkipNUPKG = $false,
     [switch]$SkipZIP = $false,
     [switch]$SkipMSI = $false,
-    [switch]$SkipPKG = $false,
     [switch]$Clean = $false,
     [string]$ApiUrl = "",
     [switch]$CreateTag = $false,
@@ -361,14 +357,12 @@ if ($Clean) {
 Write-Step "Cleaning old binaries from .publish and release directories..."
 $cleanupPaths = @(
     (Join-Path $PublishDir "*.exe"),
-    (Join-Path $PublishDir "*.dll"), 
+    (Join-Path $PublishDir "*.dll"),
     (Join-Path $PublishDir "*.pdb"),
     (Join-Path $OutputDir "*.nupkg"),
-    (Join-Path $OutputDir "*.zip"), 
+    (Join-Path $OutputDir "*.zip"),
     (Join-Path $OutputDir "*.msi"),
-    (Join-Path $OutputDir "*.exe"),
-    (Join-Path $OutputDir "*.wixpdb"),
-    (Join-Path $OutputDir "*.pkg")
+    (Join-Path $OutputDir "*.exe")
 )
 
 foreach ($pattern in $cleanupPaths) {
@@ -457,15 +451,15 @@ if ($CreateRelease) {
     }
 }
 
-# Check cimipkg (for NUPKG and PKG)
+# Check cimipkg (used for both NUPKG and MSI now — cimipkg 2026.04.09+ defaults to .msi output)
 $cimipkgPath = $null
-if (-not $SkipNUPKG -or -not $SkipPKG) {
+if (-not $SkipNUPKG -or -not $SkipMSI) {
     $cimipkgLocations = @(
         (Get-Command cimipkg -ErrorAction SilentlyContinue)?.Source,
         "$RootDir/cimipkg.exe",
         "$OutputDir/cimipkg.exe"
     )
-    
+
     # Find the first location that exists and has content
     foreach ($location in $cimipkgLocations) {
         if ($location -and (Test-Path $location -ErrorAction SilentlyContinue)) {
@@ -474,50 +468,9 @@ if (-not $SkipNUPKG -or -not $SkipPKG) {
             break
         }
     }
-    
+
     if (-not $cimipkgPath) {
         Write-Warning "cimipkg not found - will attempt to download"
-    }
-}
-
-# Check WiX Toolset v6 (for MSI)
-$wixFound = $false
-if (-not $SkipMSI) {
-    # First, restore any local dotnet tools from manifest
-    try {
-        Write-Verbose "Restoring dotnet tools from manifest..."
-        & dotnet tool restore 2>$null | Out-Null
-    } catch {
-        Write-Verbose "No dotnet tools manifest found or restoration failed"
-    }
-    
-    # Check if WiX v6 is available via dotnet tool
-    try {
-        $null = & dotnet wix --version 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            $wixFound = $true
-            Write-Success "WiX Toolset v6 found"
-        }
-    } catch {
-        # Fallback: Check if WiX v6 is installed as dotnet tool (global or local)
-        $globalWix = & dotnet tool list --global 2>$null | Select-String "wix"
-        $localWix = & dotnet tool list 2>$null | Select-String "wix"
-        
-        if ($globalWix -or $localWix) {
-            $wixFound = $true
-            if ($localWix) {
-                Write-Success "WiX Toolset v6 found as dotnet local tool"
-            } else {
-                Write-Success "WiX Toolset v6 found as dotnet global tool"
-            }
-        }
-    }
-    
-    if (-not $wixFound) {
-        Write-Warning "WiX Toolset v6 not found - MSI creation will be skipped"
-        Write-Info "Install with: dotnet tool install --global wix --version 6.0.1"
-        Write-Info "Or locally: dotnet tool install wix --version 6.0.1"
-        $SkipMSI = $true
     }
 }
 
@@ -1041,57 +994,69 @@ if (Test-Path $postinstallCleanPath) {
 
 Write-Output ""
 
-# Create PKG package
-if (-not $SkipPKG) {
-    Write-Step "Creating PKG package..."
-    
-    # Prepare PKG payload
-    Write-Verbose "Preparing PKG payload..."
-    
-    # Ensure PKG payload directory exists (cimipkg NUPKG step may have removed it)
+# Create MSI package via cimipkg
+# cimipkg 2026.04.09+ builds .msi by default using the build/pkg/ project structure
+# (payload/, scripts/postinstall.ps1, build-info.yaml). The postinstall script handles
+# PATH, registry, scheduled tasks, Cimian integration, and osquery bootstrap — everything
+# that used to live in WiX custom actions.
+if (-not $SkipMSI) {
+    Write-Step "Creating MSI package with cimipkg..."
+
+    # Prepare MSI payload
+    Write-Verbose "Preparing cimipkg payload..."
+
+    # Ensure payload directory exists (cimipkg NUPKG step may have removed it)
     New-Item -ItemType Directory -Path $PkgPayloadDir -Force | Out-Null
-    
-    # Copy executable to PKG payload (will be installed to Program Files/ReportMate)
+
+    # Copy executable to payload (installed to Program Files/ReportMate via build-info.yaml install_location)
     Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $PkgPayloadDir -Force
-    Write-Verbose "Copied managedreportsrunner.exe to PKG payload"
-    
-    # Copy configuration files to PKG payload
+    Write-Verbose "Copied managedreportsrunner.exe to payload"
+
+    # Copy configuration files to payload
+    Copy-Item (Join-Path $SrcDir "appsettings.json") $PkgPayloadDir -Force -ErrorAction SilentlyContinue
     Copy-Item (Join-Path $SrcDir "appsettings.yaml") $PkgPayloadDir -Force
     Copy-Item (Join-Path $SrcDir "appsettings.yaml") (Join-Path $PkgPayloadDir "appsettings.template.yaml") -Force
-    Write-Verbose "Copied configuration files to PKG payload"
-    
-    # Copy osquery modules to PKG payload
+    Write-Verbose "Copied configuration files to payload"
+
+    # Copy osquery modules to payload
     $osquerySourceDir = Join-Path $BuildDir "resources\osquery"
     if (Test-Path $osquerySourceDir) {
         Copy-Item $osquerySourceDir $PkgPayloadDir -Recurse -Force
-        Write-Verbose "Copied osquery modules to PKG payload"
+        Write-Verbose "Copied osquery modules to payload"
     }
-    
+
+    # Copy Speedtest CLI alongside managedreportsrunner.exe
+    $speedtestExePath = Join-Path $BuildDir "resources\speedtest\speedtest.exe"
+    if (Test-Path $speedtestExePath) {
+        Copy-Item $speedtestExePath (Join-Path $PkgPayloadDir "speedtest.exe") -Force
+        Write-Verbose "Copied Speedtest CLI to payload"
+    }
+
     # Copy shared resources
     $sharedResourcesDir = Join-Path $BuildDir "resources"
     $sharedFiles = @(
         "module-schedules.json",
         "uninstall-tasks.ps1"
     )
-    
+
     foreach ($file in $sharedFiles) {
         $sourcePath = Join-Path $sharedResourcesDir $file
         if (Test-Path $sourcePath) {
             Copy-Item $sourcePath $PkgPayloadDir -Force
-            Write-Verbose "Copied $file to PKG payload"
+            Write-Verbose "Copied $file to payload"
         }
     }
-    
-    # Copy Cimian integration files to PKG payload
+
+    # Copy Cimian integration files to payload (postinstall.ps1 moves them to C:\Program Files\Cimian)
     $cimianPostflightSource = Join-Path $sharedResourcesDir "cimian-postflight.ps1"
     if (Test-Path $cimianPostflightSource) {
         $pkgCimianDir = Join-Path $PkgPayloadDir "cimian"
         New-Item -ItemType Directory -Path $pkgCimianDir -Force | Out-Null
         Copy-Item $cimianPostflightSource (Join-Path $pkgCimianDir "postflight.ps1") -Force
-        Write-Verbose "Copied Cimian integration files to PKG payload"
+        Write-Verbose "Copied Cimian integration files to payload"
     }
-    
-    # Create version file
+
+    # Create version.txt for the installed payload
     $versionContent = @"
 ReportMate
 Version: $Version
@@ -1100,38 +1065,38 @@ Platform: Windows x64
 Commit: $env:GITHUB_SHA
 "@
     $versionContent | Out-File (Join-Path $PkgPayloadDir "version.txt") -Encoding UTF8
-    
-    # Update PKG build-info.yaml version (replaces {{VERSION}} placeholder; restored after build)
+
+    # Update build-info.yaml version (replaces {{VERSION}} placeholder; restored after build)
     $pkgBuildInfoPath = Join-Path $PkgDir "build-info.yaml"
     $pkgBuildInfoOriginal = $null
     if (Test-Path $pkgBuildInfoPath) {
         $pkgBuildInfoOriginal = Get-Content $pkgBuildInfoPath -Raw
         $modified = $pkgBuildInfoOriginal -replace '\{\{VERSION\}\}', $Version
         Set-Content $pkgBuildInfoPath $modified -Encoding UTF8 -NoNewline
-        Write-Verbose "Updated PKG build-info.yaml version to: $Version"
+        Write-Verbose "Updated build-info.yaml version to: $Version"
     }
-    
-    # Copy .env file from root to PKG build directory for cimipkg
+
+    # Copy .env file from root to cimipkg build directory (sourced by postinstall.ps1)
     $rootEnvFile = Join-Path $RootDir ".env"
     $pkgEnvFile = Join-Path $PkgDir ".env"
     if (Test-Path $rootEnvFile) {
         Copy-Item $rootEnvFile $pkgEnvFile -Force
-        Write-Verbose "Copied .env file to PKG build directory for cimipkg"
+        Write-Verbose "Copied .env file to cimipkg build directory"
     } else {
-        Write-Warning "Root .env file not found at: $rootEnvFile - PKG may fail during installation"
+        Write-Warning "Root .env file not found at: $rootEnvFile - MSI may fail during installation"
     }
-    
-    # Check for cimipkg
+
+    # Download cimipkg if not already resolved
     if (-not $cimipkgPath) {
-        Write-Verbose "Downloading cimipkg for PKG creation..."
+        Write-Verbose "Downloading cimipkg for MSI creation..."
         try {
             $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/windowsadmins/cimian-pkg/releases/latest"
             $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*amd64*" } | Select-Object -First 1 -ExpandProperty browser_download_url
-            
+
             if (-not $downloadUrl) {
                 $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1 -ExpandProperty browser_download_url
             }
-            
+
             if ($downloadUrl) {
                 $cimipkgPath = Join-Path $RootDir "cimipkg.exe"
                 Invoke-WebRequest -Uri $downloadUrl -OutFile $cimipkgPath
@@ -1142,50 +1107,71 @@ Commit: $env:GITHUB_SHA
         } catch {
             Write-Error "Failed to download cimipkg: $_"
             Write-Info "Download manually from: https://github.com/windowsadmins/cimian-pkg/releases"
-            $SkipPKG = $true
+            $SkipMSI = $true
         }
     }
-    
-    if (-not $SkipPKG -and $cimipkgPath) {
+
+    if (-not $SkipMSI -and $cimipkgPath) {
         try {
-            Write-Verbose "Creating PKG with cimipkg from: $cimipkgPath"
+            Write-Verbose "Creating MSI with cimipkg from: $cimipkgPath"
             Push-Location $PkgDir
 
-            
-            # Build PKG using cimipkg (default format is .pkg, not .nupkg)
-            # NOTE: -e flag has issues with argument parsing, skip for now
-            Write-Verbose "Running cimipkg to create PKG package"
-            
-            $output = & $cimipkgPath -verbose . 2>&1
-            
+            # Build MSI using cimipkg (2026.04.09+ defaults to .msi output)
+            Write-Verbose "Running cimipkg to create MSI package"
+
+            $cimipkgArgs = @("--verbose", ".")
+            if ($Sign -and $Thumbprint) {
+                $cimipkgArgs += @("--sign-thumbprint", $Thumbprint)
+            }
+
+            $output = & $cimipkgPath @cimipkgArgs 2>&1
+
             $exitCode = $LASTEXITCODE
             $stdout = ($output | Where-Object { $_ -is [string] }) -join "`n"
             $stderr = ($output | Where-Object { $_ -isnot [string] }) -join "`n"
-            
+
             Write-Verbose "cimipkg stdout: $stdout"
             if ($stderr) {
                 Write-Verbose "cimipkg stderr: $stderr"
             }
             Write-Verbose "cimipkg exit code: $exitCode"
-            
+
             if ($exitCode -eq 0) {
-                # Find generated pkg files
-                $pkgFiles = Get-ChildItem -Path "." -Filter "*.pkg" -Recurse
-                if (-not $pkgFiles) {
-                    $pkgFiles = Get-ChildItem -Path "build" -Filter "*.pkg" -ErrorAction SilentlyContinue
+                # Find generated MSI files
+                $msiFiles = Get-ChildItem -Path "build" -Filter "*.msi" -ErrorAction SilentlyContinue
+                if (-not $msiFiles) {
+                    $msiFiles = Get-ChildItem -Path "." -Filter "*.msi" -Recurse -ErrorAction SilentlyContinue
                 }
-                
-                foreach ($file in $pkgFiles) {
-                    # Move PKG file to output directory with proper naming
-                    $newFileName = "ReportMate-$Version.pkg"
-                    $targetPath = "$OutputDir/$newFileName"
+
+                foreach ($file in $msiFiles) {
+                    # Move MSI file to output directory with proper naming
+                    $newFileName = "ReportMate-$Version.msi"
+                    $targetPath = Join-Path $OutputDir $newFileName
                     Move-Item $file.FullName $targetPath -Force
-                    $pkgSize = (Get-Item $targetPath).Length / 1MB
-                    Write-Success "PKG created: $newFileName ($([math]::Round($pkgSize, 2)) MB)"
+                    $msiSize = (Get-Item $targetPath).Length / 1MB
+                    Write-Success "MSI created: $newFileName ($([math]::Round($msiSize, 2)) MB)"
+
+                    # Sign MSI if signing is enabled and cimipkg didn't already sign it
+                    if ($Sign) {
+                        $sigInfo = Get-AuthenticodeSignature $targetPath
+                        if ($sigInfo.Status -ne "Valid") {
+                            Write-Step "Signing MSI..."
+                            try {
+                                signPackage -FilePath $targetPath
+                                Write-Success "Signed MSI ✔"
+                            }
+                            catch {
+                                Write-Error "Failed to sign MSI: $_"
+                                exit 1
+                            }
+                        } else {
+                            Write-Verbose "MSI already signed by cimipkg"
+                        }
+                    }
                 }
-                
-                if (-not $pkgFiles) {
-                    Write-Warning "No .pkg files found after cimipkg execution"
+
+                if (-not $msiFiles) {
+                    Write-Warning "No .msi files found after cimipkg execution"
                 }
             } else {
                 # Display output when build fails
@@ -1194,199 +1180,29 @@ Commit: $env:GITHUB_SHA
                 throw "cimipkg failed with exit code: $exitCode"
             }
         } catch {
-            Write-Error "PKG creation failed: $_"
-        } finally {
+            # MSI is now the primary artifact — fail the build loudly if creation
+            # throws, otherwise CI will report success with no MSI produced.
             Pop-Location
+            throw "MSI creation failed: $_"
+        } finally {
+            # Pop-Location here too so we unwind even if the catch above wasn't hit.
+            if ((Get-Location).Path -eq $PkgDir) { Pop-Location }
         }
     }
-} else {
-    Write-Info "Skipping PKG creation"
-}
 
-# Restore PKG build-info.yaml to placeholder state
-if ($pkgBuildInfoOriginal) {
-    Set-Content $pkgBuildInfoPath $pkgBuildInfoOriginal -Encoding UTF8 -NoNewline
-    Write-Verbose "Restored PKG build-info.yaml to placeholder"
-}
-
-Write-Output ""
-
-# Create MSI installer
-if (-not $SkipMSI) {
-    Write-Step "Creating MSI installer..."
-    
-    # Check for WiX Toolset
-    $wixFound = $false
-    $wixBuild = Get-Command wix.exe -ErrorAction SilentlyContinue
-    $candle = Get-Command candle.exe -ErrorAction SilentlyContinue
-    $light = Get-Command light.exe -ErrorAction SilentlyContinue
-    
-    if ($wixBuild) {
-        $wixFound = $true
-        Write-Success "WiX Toolset v6 found"
-    } elseif ($candle -and $light) {
-        $wixFound = $true
-        Write-Success "WiX Toolset v3 (legacy) found"
-    } else {
-        Write-Warning "WiX Toolset not found in PATH - checking common locations..."
-        $wixLocations = @(
-            "${env:ProgramFiles}\WiX Toolset v6.0\bin",
-            "${env:ProgramFiles(x86)}\WiX Toolset v6.0\bin",
-            "${env:ProgramFiles}\WiX Toolset v5.0\bin",
-            "${env:ProgramFiles(x86)}\WiX Toolset v5.0\bin",
-            "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin",
-            "${env:ProgramFiles}\WiX Toolset v3.14\bin",
-            "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin",
-            "${env:ProgramFiles}\WiX Toolset v3.11\bin",
-            "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\v7.0A\Bin",
-            "${env:ProgramFiles}\Microsoft SDKs\Windows\v7.0A\Bin"
-        )
-        
-        foreach ($location in $wixLocations) {
-            if (Test-Path "$location\wix.exe") {
-                $env:PATH = "$location;$env:PATH"
-                $wixFound = $true
-                Write-Success "WiX Toolset v6 found at: $location"
-                break
-            } elseif ((Test-Path "$location\candle.exe") -and (Test-Path "$location\light.exe")) {
-                $env:PATH = "$location;$env:PATH"
-                $wixFound = $true
-                Write-Success "WiX Toolset v3 (legacy) found at: $location"
-                break
-            }
-        }
-    }
-    
-    if ($wixFound) {
-        try {
-            Write-Verbose "Preparing MSI staging directory..."
-            
-            # Clean and prepare MSI staging directory
-            if (Test-Path $MsiStagingDir) {
-                Remove-Item $MsiStagingDir -Recurse -Force
-            }
-            New-Item -ItemType Directory -Path $MsiStagingDir -Force | Out-Null
-            
-            # Copy binary files to staging
-            Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") (Join-Path $MsiStagingDir "managedreportsrunner.exe") -Force
-            Write-Verbose "Copied managedreportsrunner.exe to MSI staging"
-            
-            # Copy configuration files to staging
-            Copy-Item (Join-Path $SrcDir "appsettings.json") (Join-Path $MsiStagingDir "appsettings.json") -Force
-            Copy-Item (Join-Path $SrcDir "appsettings.yaml") (Join-Path $MsiStagingDir "appsettings.yaml") -Force
-            Write-Verbose "Copied configuration files to MSI staging"
-            
-            # Copy osquery modules to staging (using centralized build resources as single source of truth)
-            $osquerySourceDir = Join-Path $BuildDir "resources\osquery"
-            if (Test-Path $osquerySourceDir) {
-                Copy-Item $osquerySourceDir $MsiStagingDir -Recurse -Force
-                Write-Verbose "Copied osquery modules from src to MSI staging"
-            }
-
-            # Copy Speedtest CLI to MSI staging (flat, alongside managedreportsrunner.exe)
-            $speedtestExePath = Join-Path $BuildDir "resources\speedtest\speedtest.exe"
-            if (Test-Path $speedtestExePath) {
-                Copy-Item $speedtestExePath (Join-Path $MsiStagingDir "speedtest.exe") -Force
-                Write-Verbose "Copied Speedtest CLI to MSI staging"
-            }
-
-            # Create version.txt for MSI
-            $versionContent = @"
-ReportMate
-Version: $Version
-Build Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')
-Platform: Windows x64
-Commit: $env:GITHUB_SHA
-"@
-            $versionContent | Out-File (Join-Path $MsiStagingDir "version.txt") -Encoding UTF8
-            Write-Verbose "Created version.txt for MSI"
-            
-            # Copy license file for MSI
-            if (Test-Path (Join-Path $BuildDir "msi\License.rtf")) {
-                Copy-Item (Join-Path $BuildDir "msi\License.rtf") (Join-Path $MsiStagingDir "License.rtf") -Force
-                Write-Verbose "Copied license file to MSI staging"
-            }
-            
-            # Copy shared installation scripts
-            $sharedScriptsDir = Join-Path $BuildDir "resources\install-scripts"
-            if (Test-Path $sharedScriptsDir) {
-                Copy-Item $sharedScriptsDir (Join-Path $MsiStagingDir "install-scripts") -Recurse -Force
-                Write-Verbose "Copied shared installation scripts to MSI staging"
-            }
-            
-            # Copy PowerShell task installation scripts
-            $installTasksScript = Join-Path $BuildDir "resources\install-tasks.ps1"
-            $uninstallTasksScript = Join-Path $BuildDir "resources\uninstall-tasks.ps1"
-            
-            if (Test-Path $installTasksScript) {
-                Copy-Item $installTasksScript (Join-Path $MsiStagingDir "install-tasks.ps1") -Force
-                Write-Verbose "Copied install-tasks.ps1 to MSI staging"
-            }
-            
-            if (Test-Path $uninstallTasksScript) {
-                Copy-Item $uninstallTasksScript (Join-Path $MsiStagingDir "uninstall-tasks.ps1") -Force
-                Write-Verbose "Copied uninstall-tasks.ps1 to MSI staging"
-            }
-            
-            # Copy module schedules configuration
-            $scheduleConfigPath = Join-Path $BuildDir "resources\module-schedules.json"
-            if (Test-Path $scheduleConfigPath) {
-                Copy-Item $scheduleConfigPath (Join-Path $MsiStagingDir "module-schedules.json") -Force
-                Write-Verbose "Copied module schedules configuration to MSI staging"
-            }
-            
-            # Copy Cimian postflight script to MSI staging
-            $cimianPostflightPath = Join-Path $BuildDir "resources\cimian-postflight.ps1"
-            if (Test-Path $cimianPostflightPath) {
-                New-Item -ItemType Directory -Path (Join-Path $MsiStagingDir "cimian") -Force | Out-Null
-                Copy-Item $cimianPostflightPath (Join-Path $MsiStagingDir "cimian\postflight.ps1") -Force
-                Write-Verbose "Copied Cimian postflight script to MSI staging"
-            }
-            
-            Write-Verbose "Building MSI with WiX..."
-            
-            # Convert date version to MSI-compatible format
-            # 2025.08.03.1430 -> 25.8.3.1430 (MSI versions need major.minor.build.revision format)
-            $msiVersion = $Version -replace '^20(\d{2})\.0?(\d+)\.0?(\d+)\.(\d{4})$', '$1.$2.$3.$4'
-            Write-Verbose "Converting version $Version to MSI-compatible: $msiVersion"
-            
-            $wxsPath = Join-Path $BuildDir "msi\ReportMate.wxs"
-            $msiPath = Join-Path $OutputDir "ReportMate-$Version.msi"
-            
-            # Use WiX v6 build command
-            Write-Verbose "Using WiX v6 build command"
-            & dotnet wix build -out $msiPath -arch x64 -define "SourceDir=$MsiStagingDir" -define "ResourceDir=$(Join-Path $BuildDir 'resources')" -define "Version=$msiVersion" -define "APIURL=$ApiUrl" $wxsPath
-            if ($LASTEXITCODE -ne 0) {
-                throw "WiX v6 build failed with exit code $LASTEXITCODE"
-            }
-            
-            # Sign MSI if signing is enabled
-            if ($Sign) {
-                Write-Step "Signing MSI..."
-                try {
-                    signPackage -FilePath $msiPath
-                    Write-Success "Signed MSI ✔"
-                }
-                catch {
-                    Write-Error "Failed to sign MSI: $_"
-                    exit 1
-                }
-            }
-            
-            $msiSize = (Get-Item $msiPath).Length / 1MB
-            Write-Success "MSI created: ReportMate-$Version.msi ($([math]::Round($msiSize, 2)) MB)"
-            
-        } catch {
-            Write-Error "MSI creation failed: $($_.Exception.Message)"
-            Write-Warning "Continuing without MSI..."
-        }
-    } else {
-        Write-Warning "WiX Toolset not found - MSI creation skipped"
-        Write-Info "To build MSI installers, install WiX Toolset v3.11 or later"
-        Write-Info "Download from: https://github.com/wixtoolset/wix3/releases"
+    # Final sanity check: verify the MSI actually landed in the output directory.
+    $expectedMsi = Join-Path $OutputDir "ReportMate-$Version.msi"
+    if (-not (Test-Path $expectedMsi)) {
+        throw "MSI creation completed without an exception but $expectedMsi is missing"
     }
 } else {
     Write-Info "Skipping MSI creation"
+}
+
+# Restore build-info.yaml to placeholder state
+if ($pkgBuildInfoOriginal) {
+    Set-Content $pkgBuildInfoPath $pkgBuildInfoOriginal -Encoding UTF8 -NoNewline
+    Write-Verbose "Restored build-info.yaml to placeholder"
 }
 
 Write-Output ""
@@ -1458,7 +1274,7 @@ if ($CreateRelease -and $ghFound) {
         $outputFiles = Get-ChildItem $OutputDir -File -ErrorAction SilentlyContinue
         
         foreach ($file in $outputFiles) {
-            if ($file.Extension -in @('.pkg', '.msi', '.nupkg', '.zip')) {
+            if ($file.Extension -in @('.msi', '.nupkg', '.zip')) {
                 $releaseFiles += $file.FullName
             }
         }
@@ -1471,17 +1287,13 @@ if ($CreateRelease -and $ghFound) {
 ## ReportMate $Version
 
 ### 📦 Package Types
-- **PKG Package**: Modern format for sbin-installer deployment (primary)
-- **MSI Package**: Traditional Windows installer with full UI
-- **NUPKG Package**: For Chocolatey and Cimian package management  
+- **MSI Package**: Windows installer built via cimipkg (primary)
+- **NUPKG Package**: For Chocolatey and Cimian package management
 - **ZIP Archive**: For manual installation and testing
 
 ### 🚀 Quick Start
 
-**PKG Installation (Recommended):**
-Extract PKG and run `scripts/postinstall.ps1` as administrator
-
-**MSI Installation:**
+**MSI Installation (Recommended):**
 ``````cmd
 msiexec.exe /i ReportMate-$Version.msi /quiet
 ``````
@@ -1548,7 +1360,6 @@ if ($outputFiles) {
         $sizeKB = [math]::Round($file.Length / 1KB, 1)
         $icon = switch ($file.Extension) {
             ".nupkg" { "📦" }
-            ".pkg" { "📦" }
             ".zip" { "🗜️ " }
             ".msi" { "🔧" }
             ".exe" { "⚡" }
@@ -1583,31 +1394,12 @@ if ($CreateRelease -and $ghFound) {
 # Install the package if requested
 if ($Install) {
     Write-Step "Installing ReportMate package..."
-    
-    # Prioritize PKG installation if available (primary format)
-    $pkgPath = Join-Path $OutputDir "ReportMate-$Version.pkg"
+
+    # Prioritize MSI installation (primary format; built via cimipkg)
     $msiPath = Join-Path $OutputDir "ReportMate-$Version.msi"
     $nupkgPath = Join-Path $OutputDir "ReportMate-$Version.nupkg"
-    
-    if ((Test-Path $pkgPath) -and (-not $SkipPKG)) {
-        Write-Info "Installing PKG package: ReportMate-$Version.pkg"
-        Write-Info "PKG format is the primary deployment method for ReportMate"
-        try {
-            # PKG files can be installed via sbin-installer or extracted manually
-            Write-Info "PKG installation options:"
-            Write-Info "1. Use sbin-installer for automated installation"
-            Write-Info "2. Extract manually and run scripts"
-            Write-Info "3. Deploy via enterprise management tools"
-            
-            # For now, provide instructions rather than attempting automatic installation
-            # as PKG installation methods may vary by environment
-            Write-Success "PKG package ready for deployment: $pkgPath"
-            Write-Info "Extract the PKG and run scripts/postinstall.ps1 as administrator for manual installation"
-            
-        } catch {
-            Write-Error "PKG package preparation failed: $_"
-        }
-    } elseif ((Test-Path $msiPath) -and (-not $SkipMSI)) {
+
+    if ((Test-Path $msiPath) -and (-not $SkipMSI)) {
         Write-Info "Installing MSI package: ReportMate-$Version.msi"
         try {
             # Check if running as administrator
@@ -1695,8 +1487,7 @@ if ($Install) {
     } else {
         Write-Error "No installation packages found"
         Write-Info "Expected files:"
-        Write-Info "  - PKG: $pkgPath (primary)"
-        Write-Info "  - MSI: $msiPath"
+        Write-Info "  - MSI: $msiPath (primary)"
         Write-Info "  - NUPKG: $nupkgPath"
         Write-Info "Make sure packages were built successfully"
     }
