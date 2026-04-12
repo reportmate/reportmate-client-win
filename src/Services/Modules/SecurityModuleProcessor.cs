@@ -86,7 +86,10 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process certificates
             ProcessCertificates(osqueryResults, data);
 
-            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}, Certificates: {CertCount}, CVEs: {CveCount}, Detections: {DetectionCount}", 
+            // Compute human-readable status display fields
+            ComputeStatusDisplays(data);
+
+            _logger.LogInformation("Security module processed - Antivirus: {AntivirusEnabled}, Firewall: {FirewallEnabled}, BitLocker: {BitLockerEnabled}, TPM: {TpmPresent}, Certificates: {CertCount}, CVEs: {CveCount}, Detections: {DetectionCount}",
                 data.Antivirus.IsEnabled, data.Firewall.IsEnabled, data.Encryption.BitLocker.IsEnabled, data.Tpm.IsPresent, data.Certificates.Count, data.SecurityCves.Count, data.Detections.Count);
 
             return data;

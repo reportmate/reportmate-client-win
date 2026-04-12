@@ -49,12 +49,10 @@ namespace ReportMate.WindowsClient.Models.Modules
         public HardwareData? Hardware { get; set; }
         public ManagementData? Management { get; set; }
         public InstallsData? Installs { get; set; }
-        public ProfilesData? Profiles { get; set; }
         public SecurityData? Security { get; set; }
         public IdentityData? Identity { get; set; }
         public NetworkData? Network { get; set; }
-        public DisplayData? Displays { get; set; }
-        public PrinterData? Printers { get; set; }
+        public PeripheralsModuleData? Peripherals { get; set; }
         public ApplicationsData? Applications { get; set; }
     }
 

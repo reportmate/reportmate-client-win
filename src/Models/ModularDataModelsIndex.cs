@@ -17,7 +17,7 @@ namespace ReportMate.WindowsClient.Models
     // - InstallsModels.cs: InstallsData, CimianInfo, MunkiInfo, ManagedInstall
     // - ManagementModels.cs: ManagementData, MdmEnrollmentInfo, MdmProfile, CompliancePolicy
     // - NetworkModels.cs: NetworkData, NetworkInterface, WifiNetwork, DnsConfiguration, etc.
-    // - ProfilesModels.cs: ProfilesData, ConfigurationProfile, GroupPolicyObject, RegistryPolicy
+    // - PeripheralsModels.cs: PeripheralsModuleData (includes printers, displays, USB, input, audio, etc.)
     // - SecurityModels.cs: SecurityData, AntivirusInfo, FirewallInfo, EncryptionInfo, CertificateInfo, etc.
     // - SystemModels.cs: SystemData, OperatingSystemInfo, SystemUpdate, SystemService, etc.
 }
