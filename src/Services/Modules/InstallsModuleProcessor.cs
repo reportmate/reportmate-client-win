@@ -151,9 +151,12 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process run log
             ProcessRunLog(data);
 
+            // Enrich items with category/developer from catalog files (mirroring Mac/Munki approach)
+            EnrichItemsWithCatalogMetadata(data);
+
             data.LastCheckIn = DateTime.UtcNow;
 
-            _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Items: {ItemCount}", 
+            _logger.LogInformation("Installs module processed for device {DeviceId} - Cimian installed: {CimianInstalled}, Items: {ItemCount}",
                 deviceId, data.Cimian?.IsInstalled ?? false, data.Cimian?.Items?.Count ?? 0);
 
             return data;
@@ -239,6 +242,9 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Collect pending packages from various sources
             CollectPendingPackages(osqueryResults, cimianInfo);
+
+            // Collect catalogs from manifest files (mirroring Mac/Munki approach)
+            CollectCatalogsFromManifests(cimianInfo);
 
             // Check recent session activity
             if (osqueryResults.TryGetValue("cimian_log_sessions", out var logDirs))
@@ -2929,8 +2935,257 @@ namespace ReportMate.WindowsClient.Services.Modules
                 "refusing downgrade"
             };
             
-            return expectedWarnings.Any(warning => 
+            return expectedWarnings.Any(warning =>
                 message.Contains(warning, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Collects catalog names from manifest files (mirrors Mac/Munki approach).
+        /// Reads the catalogs: section from the user's manifest hierarchy.
+        /// Falls back to DefaultCatalog from config.yaml if no catalogs found in manifests.
+        /// </summary>
+        private void CollectCatalogsFromManifests(CimianInfo cimianInfo)
+        {
+            try
+            {
+                const string MANIFESTS_PATH = @"C:\ProgramData\ManagedInstalls\manifests";
+
+                if (!Directory.Exists(MANIFESTS_PATH))
+                {
+                    _logger.LogDebug("Manifests directory not found, skipping catalog collection");
+                    return;
+                }
+
+                var catalogNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var managedPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var processedManifests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                var userManifest = GetUserSpecificManifest(MANIFESTS_PATH);
+                if (!string.IsNullOrEmpty(userManifest))
+                {
+                    ParseManifestRecursively(Path.Combine(MANIFESTS_PATH, userManifest), MANIFESTS_PATH, managedPackages, processedManifests, catalogNames);
+                }
+                else
+                {
+                    var rootManifests = new[] { "Assigned.yaml", "CoreManifest.yaml" };
+                    foreach (var manifest in rootManifests)
+                    {
+                        var manifestPath = Path.Combine(MANIFESTS_PATH, manifest);
+                        if (File.Exists(manifestPath))
+                        {
+                            ParseManifestRecursively(manifestPath, MANIFESTS_PATH, managedPackages, processedManifests, catalogNames);
+                        }
+                    }
+                }
+
+                // Also discover catalogs from the catalogs directory (Mac approach: directory listing)
+                const string CATALOGS_PATH = @"C:\ProgramData\ManagedInstalls\catalogs";
+                if (Directory.Exists(CATALOGS_PATH))
+                {
+                    foreach (var catalogFile in Directory.GetFiles(CATALOGS_PATH, "*.yaml"))
+                    {
+                        var catalogName = Path.GetFileNameWithoutExtension(catalogFile);
+                        if (!string.IsNullOrEmpty(catalogName) && !catalogName.StartsWith("."))
+                        {
+                            catalogNames.Add(catalogName);
+                        }
+                    }
+                }
+
+                if (catalogNames.Any())
+                {
+                    cimianInfo.Catalogs = catalogNames.OrderBy(c => c).ToList();
+                    _logger.LogInformation("Collected {Count} catalogs: {Catalogs}", cimianInfo.Catalogs.Count, string.Join(", ", cimianInfo.Catalogs));
+                }
+                else
+                {
+                    // Fallback: use DefaultCatalog from config if available
+                    var defaultCatalog = GetCimianConfigValue("DefaultCatalog");
+                    if (!string.IsNullOrEmpty(defaultCatalog))
+                    {
+                        cimianInfo.Catalogs = new List<string> { defaultCatalog };
+                        _logger.LogDebug("Using DefaultCatalog from config: {Catalog}", defaultCatalog);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error collecting catalogs from manifests");
+            }
+        }
+
+        /// <summary>
+        /// Reads catalog YAML files to extract category and developer metadata per package,
+        /// then enriches CimianItem objects. Mirrors Mac/Munki's collectCatalogMetadata +
+        /// enrichInstallsWithCatalogData approach.
+        /// </summary>
+        private void EnrichItemsWithCatalogMetadata(InstallsData data)
+        {
+            if (data.Cimian?.Items == null || data.Cimian.Items.Count == 0)
+                return;
+
+            try
+            {
+                const string CATALOGS_PATH = @"C:\ProgramData\ManagedInstalls\catalogs";
+                if (!Directory.Exists(CATALOGS_PATH))
+                {
+                    _logger.LogDebug("Catalogs directory not found, skipping category enrichment");
+                    return;
+                }
+
+                // Build metadata map: package name -> (category, developer)
+                var metadata = new Dictionary<string, (string category, string developer)>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var catalogFile in Directory.GetFiles(CATALOGS_PATH, "*.yaml"))
+                {
+                    try
+                    {
+                        var yamlContent = File.ReadAllText(catalogFile);
+                        if (string.IsNullOrWhiteSpace(yamlContent))
+                            continue;
+
+                        // Cimian catalog YAML files contain an array of pkgsinfo entries.
+                        // Each entry has fields like name, category, developer, version, etc.
+                        // Parse with simple line-based YAML approach (same as manifest parsing).
+                        ParseCatalogForMetadata(yamlContent, metadata);
+
+                        _logger.LogDebug("Parsed catalog {CatalogFile} for metadata, total entries: {Count}",
+                            Path.GetFileName(catalogFile), metadata.Count);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("Failed to parse catalog file {CatalogFile}: {Error}", catalogFile, ex.Message);
+                    }
+                }
+
+                if (metadata.Count == 0)
+                {
+                    _logger.LogDebug("No category/developer metadata found in catalog files");
+                    return;
+                }
+
+                // Enrich items with catalog metadata
+                int enrichedCount = 0;
+                foreach (var item in data.Cimian.Items)
+                {
+                    var itemName = item.ItemName ?? item.DisplayName ?? item.Id;
+                    if (string.IsNullOrEmpty(itemName))
+                        continue;
+
+                    if (metadata.TryGetValue(itemName, out var meta))
+                    {
+                        if (string.IsNullOrEmpty(item.Category) && !string.IsNullOrEmpty(meta.category))
+                        {
+                            item.Category = meta.category;
+                        }
+                        if (string.IsNullOrEmpty(item.Developer) && !string.IsNullOrEmpty(meta.developer))
+                        {
+                            item.Developer = meta.developer;
+                        }
+                        enrichedCount++;
+                    }
+                }
+
+                _logger.LogInformation("Enriched {Count}/{Total} items with catalog metadata (category/developer)",
+                    enrichedCount, data.Cimian.Items.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error enriching items with catalog metadata");
+            }
+        }
+
+        /// <summary>
+        /// Parses a Cimian catalog YAML file to extract package name, category, and developer.
+        /// Catalog files are YAML arrays of pkgsinfo dicts, each with fields like:
+        ///   - name: PackageName
+        ///     category: Management
+        ///     developer: IT Department
+        ///     version: 1.0.0
+        /// </summary>
+        private void ParseCatalogForMetadata(string yamlContent, Dictionary<string, (string category, string developer)> metadata)
+        {
+            var lines = yamlContent.Split('\n');
+            string? currentName = null;
+            string currentCategory = "";
+            string currentDeveloper = "";
+
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#"))
+                    continue;
+
+                // Detect start of a new item entry (YAML list item or top-level key)
+                if (trimmed.StartsWith("- name:") || trimmed.StartsWith("- Name:"))
+                {
+                    // Save previous entry
+                    if (!string.IsNullOrEmpty(currentName))
+                    {
+                        metadata[currentName] = (currentCategory, currentDeveloper);
+                    }
+                    currentName = trimmed.Substring(trimmed.IndexOf(':') + 1).Trim().Trim('"', '\'');
+                    currentCategory = "";
+                    currentDeveloper = "";
+                    continue;
+                }
+
+                // Standalone name field (non-list style)
+                if ((trimmed.StartsWith("name:") || trimmed.StartsWith("Name:")) && !trimmed.StartsWith("- "))
+                {
+                    if (!string.IsNullOrEmpty(currentName))
+                    {
+                        metadata[currentName] = (currentCategory, currentDeveloper);
+                    }
+                    currentName = trimmed.Substring(trimmed.IndexOf(':') + 1).Trim().Trim('"', '\'');
+                    currentCategory = "";
+                    currentDeveloper = "";
+                    continue;
+                }
+
+                // Category field
+                if (trimmed.StartsWith("category:", StringComparison.OrdinalIgnoreCase))
+                {
+                    currentCategory = trimmed.Substring(trimmed.IndexOf(':') + 1).Trim().Trim('"', '\'');
+                    continue;
+                }
+
+                // Developer field
+                if (trimmed.StartsWith("developer:", StringComparison.OrdinalIgnoreCase))
+                {
+                    currentDeveloper = trimmed.Substring(trimmed.IndexOf(':') + 1).Trim().Trim('"', '\'');
+                    continue;
+                }
+            }
+
+            // Save last entry
+            if (!string.IsNullOrEmpty(currentName))
+            {
+                metadata[currentName] = (currentCategory, currentDeveloper);
+            }
+        }
+
+        /// <summary>
+        /// Helper to read a specific value from Cimian's config.yaml
+        /// </summary>
+        private string? GetCimianConfigValue(string key)
+        {
+            try
+            {
+                var configPath = @"C:\ProgramData\ManagedInstalls\config.yaml";
+                if (!File.Exists(configPath)) return null;
+
+                var config = ReadCimianConfigurationFile(configPath);
+                if (config != null && config.TryGetValue(key, out var value))
+                {
+                    return value?.ToString();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error reading Cimian config key: {Key}", key);
+            }
+            return null;
         }
 
         /// <summary>
@@ -3097,7 +3352,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// <summary>
         /// Recursively parses a manifest file and its included manifests
         /// </summary>
-        private void ParseManifestRecursively(string manifestPath, string manifestsBasePath, HashSet<string> managedPackages, HashSet<string> processedManifests)
+        private void ParseManifestRecursively(string manifestPath, string manifestsBasePath, HashSet<string> managedPackages, HashSet<string> processedManifests, HashSet<string>? catalogNames = null)
         {
             try
             {
@@ -3117,23 +3372,24 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                 _logger.LogDebug("Parsing manifest: {ManifestPath}", manifestPath);
                 var yamlContent = File.ReadAllText(manifestPath);
-                
+
                 if (string.IsNullOrWhiteSpace(yamlContent))
                 {
                     return;
                 }
 
-                // Parse YAML content - look for managed_installs and included_manifests sections
+                // Parse YAML content - look for managed_installs, included_manifests, and catalogs sections
                 var lines = yamlContent.Split('\n', StringSplitOptions.RemoveEmptyEntries);
                 bool inManagedInstalls = false;
                 bool inIncludedManifests = false;
-                
+                bool inCatalogs = false;
+
                 _logger.LogDebug("Parsing {LineCount} lines from {ManifestPath}", lines.Length, Path.GetFileName(manifestPath));
-                
+
                 foreach (var line in lines)
                 {
                     var trimmedLine = line.Trim();
-                    
+
                     if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#"))
                         continue;
 
@@ -3142,6 +3398,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         inManagedInstalls = true;
                         inIncludedManifests = false;
+                        inCatalogs = false;
                         _logger.LogDebug("Entered managed_installs section in {ManifestPath}", Path.GetFileName(manifestPath));
                         continue;
                     }
@@ -3149,7 +3406,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         inManagedInstalls = false;
                         inIncludedManifests = true;
+                        inCatalogs = false;
                         _logger.LogDebug("Entered included_manifests section in {ManifestPath}", Path.GetFileName(manifestPath));
+                        continue;
+                    }
+                    else if (trimmedLine.StartsWith("catalogs:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        inManagedInstalls = false;
+                        inIncludedManifests = false;
+                        inCatalogs = true;
+                        _logger.LogDebug("Entered catalogs section in {ManifestPath}", Path.GetFileName(manifestPath));
                         continue;
                     }
                     else if (trimmedLine.EndsWith(":") && !trimmedLine.StartsWith("-"))
@@ -3157,6 +3423,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         // New section started
                         inManagedInstalls = false;
                         inIncludedManifests = false;
+                        inCatalogs = false;
                         continue;
                     }
 
@@ -3164,7 +3431,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (trimmedLine.StartsWith("- "))
                     {
                         var itemValue = trimmedLine.Substring(2).Trim();
-                        
+
                         if (inManagedInstalls && !string.IsNullOrEmpty(itemValue))
                         {
                             managedPackages.Add(itemValue);
@@ -3184,9 +3451,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 // Add .yaml extension
                                 includedManifestPath = Path.Combine(manifestsBasePath, itemValue + ".yaml");
                             }
-                            
+
                             _logger.LogInformation("Following included manifest: {IncludedManifest} -> {IncludedPath}", itemValue, includedManifestPath);
-                            ParseManifestRecursively(includedManifestPath, manifestsBasePath, managedPackages, processedManifests);
+                            ParseManifestRecursively(includedManifestPath, manifestsBasePath, managedPackages, processedManifests, catalogNames);
+                        }
+                        else if (inCatalogs && catalogNames != null && !string.IsNullOrEmpty(itemValue))
+                        {
+                            catalogNames.Add(itemValue);
+                            _logger.LogDebug("Found catalog: {Catalog} in {Manifest}", itemValue, Path.GetFileName(manifestPath));
                         }
                     }
                 }
