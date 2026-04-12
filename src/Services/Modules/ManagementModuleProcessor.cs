@@ -1986,14 +1986,14 @@ $policies | ConvertTo-Json -Depth 3 -Compress
                                 if ($user.PSChildName -in @('OperationalState','Reporting','GRS')) { continue }
                                 foreach ($app in Get-ChildItem $user.PSPath -EA SilentlyContinue) {
                                     $intent = (Get-ItemProperty $app.PSPath -Name Intent -EA SilentlyContinue).Intent
-                                    if ($null -ne $intent) {
-                                        $intentStr = switch ($intent) { 1 { 'Required' } 2 { 'Available' } 3 { 'Uninstall' } default { 'Unknown' } }
-                                        $apps += @{ AppId=$app.PSChildName.Split('_')[0]; Intent=$intentStr; User=$user.PSChildName }
+                                    if ($intent -eq 1 -or $intent -eq 2) {
+                                        $intentStr = switch ($intent) { 1 { 'Required' } 2 { 'Available' } }
+                                        $apps += @{ AppId=$app.PSChildName.Split('_')[0]; Intent=$intentStr }
                                     }
                                 }
                             }
                         }
-                        $apps | Select-Object -First 100 | ConvertTo-Json -Compress");
+                        $apps | Sort-Object AppId -Unique | ConvertTo-Json -Compress");
 
                     if (!string.IsNullOrWhiteSpace(psResult))
                     {

@@ -1567,6 +1567,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                 "",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
 
+            // Remove integrated GPU branding from AMD APU names
+            // "Ryzen 7 PRO 7840U w/ Radeon 780M Graphics" -> "Ryzen 7 PRO 7840U"
+            // "Ryzen 7 PRO 5750GE with Radeon Graphics" -> "Ryzen 7 PRO 5750GE"
+            // "RYZEN AI MAX+ PRO 395 w/ Radeon 8060S" -> "Ryzen AI MAX+ PRO 395"
+            cleaned = System.Text.RegularExpressions.Regex.Replace(
+                cleaned,
+                @"\s+w(?:ith|/)\s+Radeon\s+.*$",
+                "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+
             // Remove standalone "CPU" at the end - redundant for a CPU field
             cleaned = System.Text.RegularExpressions.Regex.Replace(
                 cleaned,
