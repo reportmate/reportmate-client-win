@@ -51,11 +51,10 @@ public class OsQueryService : IOsQueryService
 
             _logger.LogDebug("Executing osquery: {Query}", query);
 
-            // The JSON configs encode backslashes as \\\\ which after JSON parse gives \\
-            // (2 backslashes). osquery's registry paths use single backslashes internally,
-            // so we halve the double backslashes before writing to the query file.
-            var normalizedQuery = query.Replace("\\\\", "\\");
-            await File.WriteAllTextAsync(queryFile, normalizedQuery, System.Text.Encoding.UTF8);
+            // Write query as-is to the temp file. The JSON configs use \\\\ which after
+            // JSON parse gives \\ (2 backslashes). osquery's registry table stores paths
+            // with \\ so the LIKE patterns need \\ to match. No normalization needed.
+            await File.WriteAllTextAsync(queryFile, query, System.Text.Encoding.UTF8);
 
                 var osqueryArgs = "--json";
                 if (query.Contains("windows_events", StringComparison.OrdinalIgnoreCase))
