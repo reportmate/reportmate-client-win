@@ -209,47 +209,41 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
-                // Add WMI monitor information as supplement
-                try
+                // Add WMI/PowerShell monitor information as supplement
+                if (await _wmiHelperService.IsWmiAvailableAsync())
                 {
-                    var wmiMonitors = await _wmiHelperService.QueryWmiMultipleAsync(
-                        "SELECT Name, DeviceID, ScreenWidth, ScreenHeight, Status FROM Win32_DesktopMonitor");
-
-                    if (wmiMonitors?.Any() == true)
+                    try
                     {
-                        foreach (var wmiMonitorRaw in wmiMonitors)
+                        var wmiMonitors = await _wmiHelperService.QueryWmiMultipleAsync(
+                            "SELECT Name, DeviceID, ScreenWidth, ScreenHeight, Status FROM Win32_DesktopMonitor");
+                        if (wmiMonitors?.Any() == true)
                         {
-                            var wmiMonitor = wmiMonitorRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                            var monitorName = GetStringValue(wmiMonitor, "Name");
-
-                            // Skip internal displays
-                            if (monitorName?.Contains("Surface", StringComparison.OrdinalIgnoreCase) == true ||
-                                monitorName?.Contains("Built-in", StringComparison.OrdinalIgnoreCase) == true ||
-                                monitorName?.Contains("Integrated", StringComparison.OrdinalIgnoreCase) == true)
+                            foreach (var wmiMonitorRaw in wmiMonitors)
                             {
-                                continue;
+                                var wmiMonitor = wmiMonitorRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
+                                AddMonitorFromWmiOrPs(data, GetStringValue(wmiMonitor, "Name"), GetStringValue(wmiMonitor, "DeviceID"),
+                                    GetStringValue(wmiMonitor, "ScreenWidth"), GetStringValue(wmiMonitor, "ScreenHeight"), "WMI");
                             }
-
-                            var screenWidth = GetStringValue(wmiMonitor, "ScreenWidth");
-                            var screenHeight = GetStringValue(wmiMonitor, "ScreenHeight");
-
-                            var monitor = new ExternalMonitor
-                            {
-                                FriendlyName = monitorName,
-                                DeviceDescription = !string.IsNullOrEmpty(screenWidth) && !string.IsNullOrEmpty(screenHeight)
-                                    ? $"{monitorName} ({screenWidth}x{screenHeight})"
-                                    : monitorName,
-                                HardwareId = GetStringValue(wmiMonitor, "DeviceID"),
-                                ConnectionType = "WMI",
-                                IsExternal = true
-                            };
-                            data.Displays.ExternalMonitors?.Add(monitor);
                         }
                     }
+                    catch (Exception ex) { _logger.LogError(ex, "Failed to collect WMI monitor information"); }
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger.LogError(ex, "Failed to collect WMI monitor information");
+                    try
+                    {
+                        var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                            "Get-CimInstance Win32_DesktopMonitor | Select-Object Name, DeviceID, ScreenWidth, ScreenHeight | ConvertTo-Json -Compress");
+                        if (!string.IsNullOrWhiteSpace(psResult))
+                        {
+                            var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                                AddMonitorFromWmiOrPs(data, (string?)item["Name"] ?? "", (string?)item["DeviceID"] ?? "",
+                                    item["ScreenWidth"]?.ToString() ?? "", item["ScreenHeight"]?.ToString() ?? "", "PowerShell");
+                        }
+                    }
+                    catch (Exception ex) { _logger.LogWarning(ex, "PowerShell monitor fallback failed"); }
                 }
 
                 _logger.LogInformation("Processed external monitor inventory - Total: {Count}", data.Displays.ExternalMonitors?.Count ?? 0);
@@ -305,41 +299,41 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Add WMI USB device collection as supplement
-            try
+            // Add WMI/PowerShell USB device collection as supplement
+            if (await _wmiHelperService.IsWmiAvailableAsync())
             {
-                var wmiUsbDevices = await _wmiHelperService.QueryWmiMultipleAsync(
-                    "SELECT Name, DeviceID, Description, Status FROM Win32_PnPEntity WHERE DeviceID LIKE 'USB%'");
-
-                if (wmiUsbDevices?.Any() == true)
+                try
                 {
-                    foreach (var wmiUsbRaw in wmiUsbDevices)
+                    var wmiUsbDevices = await _wmiHelperService.QueryWmiMultipleAsync(
+                        "SELECT Name, DeviceID, Description, Status FROM Win32_PnPEntity WHERE DeviceID LIKE 'USB%'");
+                    if (wmiUsbDevices?.Any() == true)
                     {
-                        var wmiUsb = wmiUsbRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                        var deviceName = GetStringValue(wmiUsb, "Name");
-                        var deviceId = GetStringValue(wmiUsb, "DeviceID");
-
-                        // Skip if already exists
-                        if (data.UsbDevices.ConnectedDevices.Any(d => d.Serial == deviceId))
-                            continue;
-
-                        var device = new PeripheralUsbDevice
+                        foreach (var wmiUsbRaw in wmiUsbDevices)
                         {
-                            Model = deviceName,
-                            Vendor = GetStringValue(wmiUsb, "Description"),
-                            Serial = deviceId,
-                            VendorId = ExtractIdFromPath(deviceId, "VID_"),
-                            ModelId = ExtractIdFromPath(deviceId, "PID_"),
-                            Class = DetermineUSBDeviceType(deviceName, ""),
-                            Removable = true
-                        };
-                        data.UsbDevices.ConnectedDevices.Add(device);
+                            var wmiUsb = wmiUsbRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
+                            AddUsbDeviceFromDict(data, GetStringValue(wmiUsb, "Name"), GetStringValue(wmiUsb, "DeviceID"), GetStringValue(wmiUsb, "Description"));
+                        }
                     }
                 }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to collect WMI USB information"); }
             }
-            catch (Exception ex)
+            else if (data.UsbDevices.ConnectedDevices.Count == 0)
             {
-                _logger.LogError(ex, "Failed to collect WMI USB device information");
+                // Only use PowerShell if osquery also returned nothing
+                try
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                        "Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -like 'USB*' } | Select-Object Name, DeviceID, Description | ConvertTo-Json -Compress");
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                            AddUsbDeviceFromDict(data, (string?)item["Name"] ?? "", (string?)item["DeviceID"] ?? "", (string?)item["Description"] ?? "");
+                        _logger.LogDebug("PowerShell fallback collected {Count} USB devices", items.Count);
+                    }
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "PowerShell USB fallback failed"); }
             }
 
             _logger.LogInformation("Processed USB devices - Total: {Count}", data.UsbDevices.ConnectedDevices.Count);
@@ -528,39 +522,69 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Add WMI audio devices as fallback
-            try
+            // Add WMI/PowerShell audio devices as supplement
+            if (await _wmiHelperService.IsWmiAvailableAsync())
             {
-                var wmiAudioDevices = await _wmiHelperService.QueryWmiMultipleAsync(
-                    "SELECT Name, Manufacturer, Status, DeviceID FROM Win32_SoundDevice");
-
-                if (wmiAudioDevices?.Any() == true)
+                try
                 {
-                    foreach (var wmiAudioRaw in wmiAudioDevices)
+                    var wmiAudioDevices = await _wmiHelperService.QueryWmiMultipleAsync(
+                        "SELECT Name, Manufacturer, Status, DeviceID FROM Win32_SoundDevice");
+
+                    if (wmiAudioDevices?.Any() == true)
                     {
-                        var wmiAudio = wmiAudioRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                        var name = GetStringValue(wmiAudio, "Name");
-
-                        // Skip if already exists
-                        if (data.AudioDevices.Devices.Any(d => d.Name == name))
-                            continue;
-
-                        data.AudioDevices.Devices.Add(new AudioDevice
+                        foreach (var wmiAudioRaw in wmiAudioDevices)
                         {
-                            Name = name,
-                            Manufacturer = GetStringValue(wmiAudio, "Manufacturer"),
-                            Status = GetStringValue(wmiAudio, "Status"),
-                            Type = "Output",
-                            IsOutput = true,
-                            ConnectionType = "WMI",
-                            DeviceType = "Audio Device"
-                        });
+                            var wmiAudio = wmiAudioRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
+                            var name = GetStringValue(wmiAudio, "Name");
+                            if (data.AudioDevices.Devices.Any(d => d.Name == name)) continue;
+
+                            data.AudioDevices.Devices.Add(new AudioDevice
+                            {
+                                Name = name,
+                                Manufacturer = GetStringValue(wmiAudio, "Manufacturer"),
+                                Status = GetStringValue(wmiAudio, "Status"),
+                                Type = "Output",
+                                IsOutput = true,
+                                ConnectionType = "WMI",
+                                DeviceType = "Audio Device"
+                            });
+                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to collect WMI audio device information");
+                }
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogError(ex, "Failed to collect WMI audio device information");
+                // PowerShell Get-CimInstance fallback when System.Management is unavailable
+                try
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                        "Get-CimInstance Win32_SoundDevice | Select-Object Name, Manufacturer, Status, DeviceID | ConvertTo-Json -Compress");
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        var audioJson = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                        var items = audioJson is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(audioJson);
+                        foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                        {
+                            var name = (string?)item["Name"] ?? "";
+                            if (data.AudioDevices.Devices.Any(d => d.Name == name)) continue;
+                            data.AudioDevices.Devices.Add(new AudioDevice
+                            {
+                                Name = name,
+                                Manufacturer = (string?)item["Manufacturer"] ?? "",
+                                Status = (string?)item["Status"] ?? "",
+                                Type = "Output", IsOutput = true,
+                                ConnectionType = "PowerShell",
+                                DeviceType = "Audio Device"
+                            });
+                        }
+                        _logger.LogDebug("PowerShell fallback collected {Count} audio devices", items.Count);
+                    }
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "PowerShell audio device fallback failed"); }
             }
 
             _logger.LogInformation("Processed audio devices - Total: {Count}", data.AudioDevices.Devices.Count);
@@ -648,38 +672,55 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Add WMI cameras as fallback
-            try
+            // Add WMI/PowerShell cameras as supplement
+            if (await _wmiHelperService.IsWmiAvailableAsync())
             {
-                var wmiCameras = await _wmiHelperService.QueryWmiMultipleAsync(
-                    "SELECT Name, DeviceID, Status, Manufacturer FROM Win32_PnPEntity WHERE Name LIKE '%Camera%' OR Name LIKE '%Webcam%'");
-
-                if (wmiCameras?.Any() == true)
+                try
                 {
-                    foreach (var wmiCamRaw in wmiCameras)
+                    var wmiCameras = await _wmiHelperService.QueryWmiMultipleAsync(
+                        "SELECT Name, DeviceID, Status, Manufacturer FROM Win32_PnPEntity WHERE Name LIKE '%Camera%' OR Name LIKE '%Webcam%'");
+                    if (wmiCameras?.Any() == true)
                     {
-                        var wmiCam = wmiCamRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                        var name = GetStringValue(wmiCam, "Name");
-
-                        // Skip if already exists
-                        if (data.CameraDevices.Cameras.Any(c => c.Name == name))
-                            continue;
-
-                        data.CameraDevices.Cameras.Add(new CameraDevice
+                        foreach (var wmiCamRaw in wmiCameras)
                         {
-                            Name = name,
-                            Manufacturer = GetStringValue(wmiCam, "Manufacturer"),
-                            ModelId = GetStringValue(wmiCam, "DeviceID"),
-                            Status = GetStringValue(wmiCam, "Status"),
-                            ConnectionType = "WMI",
-                            DeviceType = "Camera"
-                        });
+                            var wmiCam = wmiCamRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
+                            var name = GetStringValue(wmiCam, "Name");
+                            if (data.CameraDevices.Cameras.Any(c => c.Name == name)) continue;
+                            data.CameraDevices.Cameras.Add(new CameraDevice
+                            {
+                                Name = name, Manufacturer = GetStringValue(wmiCam, "Manufacturer"),
+                                ModelId = GetStringValue(wmiCam, "DeviceID"), Status = GetStringValue(wmiCam, "Status"),
+                                ConnectionType = "WMI", DeviceType = "Camera"
+                            });
+                        }
                     }
                 }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to collect WMI camera information"); }
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogError(ex, "Failed to collect WMI camera device information");
+                try
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                        "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -like '*Camera*' -or $_.Name -like '*Webcam*' -or $_.Name -like '*Imaging*' } | Select-Object Name, DeviceID, Status, Manufacturer | ConvertTo-Json -Compress");
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                        {
+                            var name = (string?)item["Name"] ?? "";
+                            if (data.CameraDevices.Cameras.Any(c => c.Name == name)) continue;
+                            data.CameraDevices.Cameras.Add(new CameraDevice
+                            {
+                                Name = name, Manufacturer = (string?)item["Manufacturer"] ?? "",
+                                ModelId = (string?)item["DeviceID"] ?? "", Status = (string?)item["Status"] ?? "",
+                                ConnectionType = "PowerShell", DeviceType = "Camera"
+                            });
+                        }
+                    }
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "PowerShell camera fallback failed"); }
             }
 
             _logger.LogInformation("Processed camera devices - Total: {Count}", data.CameraDevices.Cameras.Count);
@@ -793,67 +834,115 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Add WMI printer collection as supplement
-            try
+            // Add WMI/PowerShell printer collection as supplement
+            if (await _wmiHelperService.IsWmiAvailableAsync())
             {
-                var wmiPrinters = await _wmiHelperService.QueryWmiMultipleAsync(
-                    "SELECT Name, DriverName, Local, Network, PortName, ServerName, ShareName, Location, Comment, Status, Default FROM Win32_Printer");
-
-                if (wmiPrinters?.Any() == true)
+                try
                 {
-                    foreach (var wmiPrinterRaw in wmiPrinters)
+                    var wmiPrinters = await _wmiHelperService.QueryWmiMultipleAsync(
+                        "SELECT Name, DriverName, Local, Network, PortName, ServerName, ShareName, Location, Comment, Status, Default FROM Win32_Printer");
+                    if (wmiPrinters?.Any() == true)
                     {
-                        var wmiPrinter = wmiPrinterRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                        var printerName = GetStringValue(wmiPrinter, "Name");
-
-                        // Skip virtual printers
-                        if (printerName.Contains("Microsoft Print to PDF", StringComparison.OrdinalIgnoreCase) ||
-                            printerName.Contains("Microsoft XPS", StringComparison.OrdinalIgnoreCase) ||
-                            printerName.Contains("Fax", StringComparison.OrdinalIgnoreCase) ||
-                            printerName.Contains("OneNote", StringComparison.OrdinalIgnoreCase))
+                        foreach (var wmiPrinterRaw in wmiPrinters)
                         {
-                            continue;
+                            var wmiPrinter = wmiPrinterRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
+                            AddPrinterFromDictionary(data, wmiPrinter, "WMI");
                         }
-
-                        // Skip if already exists
-                        if (data.Printers.InstalledPrinters.Any(p => p.Name?.Equals(printerName, StringComparison.OrdinalIgnoreCase) == true))
-                            continue;
-
-                        var driverName = GetStringValue(wmiPrinter, "DriverName");
-                        var portName = GetStringValue(wmiPrinter, "PortName");
-                        var isNetwork = GetBoolValue(wmiPrinter, "Network");
-                        var isLocal = GetBoolValue(wmiPrinter, "Local");
-                        var isDefault = GetBoolValue(wmiPrinter, "Default");
-
-                        var printer = new PeripheralInstalledPrinter
-                        {
-                            Name = printerName,
-                            DisplayName = printerName,
-                            Driver = driverName,
-                            PortName = portName,
-                            Location = GetStringValue(wmiPrinter, "Location"),
-                            ShareName = GetStringValue(wmiPrinter, "ShareName"),
-                            ServerName = GetStringValue(wmiPrinter, "ServerName"),
-                            Comment = GetStringValue(wmiPrinter, "Comment"),
-                            Status = GetStringValue(wmiPrinter, "Status"),
-                            IsDefault = isDefault,
-                            IsShared = !string.IsNullOrEmpty(GetStringValue(wmiPrinter, "ShareName")),
-                            IsNetwork = isNetwork,
-                            ConnectionType = DetermineConnectionType(portName),
-                            DeviceType = "Printer"
-                        };
-
-                        ExtractManufacturerAndModel(driverName, printer);
-                        data.Printers.InstalledPrinters.Add(printer);
                     }
                 }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to collect WMI printer information"); }
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogError(ex, "Failed to collect WMI printer information");
+                try
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                        "Get-CimInstance Win32_Printer | Select-Object Name, DriverName, Local, Network, PortName, ServerName, ShareName, Location, Comment, Status, Default | ConvertTo-Json -Compress");
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                        {
+                            var dict = item.ToObject<Dictionary<string, object>>() ?? new();
+                            AddPrinterFromDictionary(data, dict, "PowerShell");
+                        }
+                    }
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "PowerShell printer fallback failed"); }
             }
 
             _logger.LogInformation("Processed printers - Total: {Count}", data.Printers.InstalledPrinters.Count);
+        }
+
+        private void AddUsbDeviceFromDict(PeripheralsModuleData data, string name, string deviceId, string description)
+        {
+            if (data.UsbDevices.ConnectedDevices.Any(d => d.Serial == deviceId)) return;
+            data.UsbDevices.ConnectedDevices.Add(new PeripheralUsbDevice
+            {
+                Model = name, Vendor = description, Serial = deviceId,
+                VendorId = ExtractIdFromPath(deviceId, "VID_"),
+                ModelId = ExtractIdFromPath(deviceId, "PID_"),
+                Class = DetermineUSBDeviceType(name, ""), Removable = true
+            });
+        }
+
+        private void AddMonitorFromWmiOrPs(PeripheralsModuleData data, string name, string deviceId, string width, string height, string source)
+        {
+            if (name.Contains("Surface", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Built-in", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Integrated", StringComparison.OrdinalIgnoreCase)) return;
+            data.Displays.ExternalMonitors?.Add(new ExternalMonitor
+            {
+                FriendlyName = name,
+                DeviceDescription = !string.IsNullOrEmpty(width) && !string.IsNullOrEmpty(height) ? $"{name} ({width}x{height})" : name,
+                HardwareId = deviceId, ConnectionType = source, IsExternal = true
+            });
+        }
+
+        private void AddExternalDriveFromDictionary(PeripheralsModuleData data, Dictionary<string, object> dict)
+        {
+            var deviceId = GetStringValue(dict, "DeviceID");
+            var volumeName = GetStringValue(dict, "VolumeName");
+            if (data.StorageDevices.ExternalDrives.Any(d => d.DevicePath == deviceId)) return;
+            var size = GetStringValue(dict, "Size");
+            var freeSpace = GetStringValue(dict, "FreeSpace");
+            data.StorageDevices.ExternalDrives.Add(new ExternalDrive
+            {
+                Name = !string.IsNullOrEmpty(volumeName) ? volumeName : deviceId,
+                DevicePath = deviceId, VolumeName = volumeName,
+                FileSystem = GetStringValue(dict, "FileSystem"),
+                TotalSize = FormatBytes(size), FreeSpace = FormatBytes(freeSpace),
+                SerialNumber = GetStringValue(dict, "VolumeSerialNumber"),
+                DriveType = "Removable", StorageType = "USB Drive",
+                ConnectionType = "USB", DeviceType = "External Storage"
+            });
+        }
+
+        private void AddPrinterFromDictionary(PeripheralsModuleData data, Dictionary<string, object> dict, string source)
+        {
+            var printerName = GetStringValue(dict, "Name");
+            if (string.IsNullOrEmpty(printerName)) return;
+            if (printerName.Contains("Microsoft Print to PDF", StringComparison.OrdinalIgnoreCase) ||
+                printerName.Contains("Microsoft XPS", StringComparison.OrdinalIgnoreCase) ||
+                printerName.Contains("Fax", StringComparison.OrdinalIgnoreCase) ||
+                printerName.Contains("OneNote", StringComparison.OrdinalIgnoreCase)) return;
+            if (data.Printers.InstalledPrinters.Any(p => p.Name?.Equals(printerName, StringComparison.OrdinalIgnoreCase) == true)) return;
+
+            var driverName = GetStringValue(dict, "DriverName");
+            var portName = GetStringValue(dict, "PortName");
+            var printer = new PeripheralInstalledPrinter
+            {
+                Name = printerName, DisplayName = printerName, Driver = driverName, PortName = portName,
+                Location = GetStringValue(dict, "Location"), ShareName = GetStringValue(dict, "ShareName"),
+                ServerName = GetStringValue(dict, "ServerName"), Comment = GetStringValue(dict, "Comment"),
+                Status = GetStringValue(dict, "Status"), IsDefault = GetBoolValue(dict, "Default"),
+                IsShared = !string.IsNullOrEmpty(GetStringValue(dict, "ShareName")),
+                IsNetwork = GetBoolValue(dict, "Network"),
+                ConnectionType = DetermineConnectionType(portName), DeviceType = "Printer"
+            };
+            ExtractManufacturerAndModel(driverName, printer);
+            data.Printers.InstalledPrinters.Add(printer);
         }
 
         /// <summary>
@@ -969,47 +1058,42 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Add WMI logical disk information
-            try
+            // Add WMI/PowerShell removable drive info
+            if (await _wmiHelperService.IsWmiAvailableAsync())
             {
-                var wmiDrives = await _wmiHelperService.QueryWmiMultipleAsync(
-                    "SELECT DeviceID, VolumeName, DriveType, FileSystem, Size, FreeSpace, VolumeSerialNumber FROM Win32_LogicalDisk WHERE DriveType = 2");
-
-                if (wmiDrives?.Any() == true)
+                try
                 {
-                    foreach (var wmiDriveRaw in wmiDrives)
+                    var wmiDrives = await _wmiHelperService.QueryWmiMultipleAsync(
+                        "SELECT DeviceID, VolumeName, DriveType, FileSystem, Size, FreeSpace, VolumeSerialNumber FROM Win32_LogicalDisk WHERE DriveType = 2");
+                    if (wmiDrives?.Any() == true)
                     {
-                        var wmiDrive = wmiDriveRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                        var deviceId = GetStringValue(wmiDrive, "DeviceID");
-                        var volumeName = GetStringValue(wmiDrive, "VolumeName");
-
-                        // Skip if already exists
-                        if (data.StorageDevices.ExternalDrives.Any(d => d.DevicePath == deviceId))
-                            continue;
-
-                        var size = GetStringValue(wmiDrive, "Size");
-                        var freeSpace = GetStringValue(wmiDrive, "FreeSpace");
-
-                        data.StorageDevices.ExternalDrives.Add(new ExternalDrive
+                        foreach (var wmiDriveRaw in wmiDrives)
                         {
-                            Name = !string.IsNullOrEmpty(volumeName) ? volumeName : deviceId,
-                            DevicePath = deviceId,
-                            VolumeName = volumeName,
-                            FileSystem = GetStringValue(wmiDrive, "FileSystem"),
-                            TotalSize = FormatBytes(size),
-                            FreeSpace = FormatBytes(freeSpace),
-                            SerialNumber = GetStringValue(wmiDrive, "VolumeSerialNumber"),
-                            DriveType = "Removable",
-                            StorageType = "USB Drive",
-                            ConnectionType = "USB",
-                            DeviceType = "External Storage"
-                        });
+                            var wmiDrive = wmiDriveRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
+                            AddExternalDriveFromDictionary(data, wmiDrive);
+                        }
                     }
                 }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to collect WMI storage information"); }
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogError(ex, "Failed to collect WMI storage device information");
+                try
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                        "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2' | Select-Object DeviceID, VolumeName, DriveType, FileSystem, Size, FreeSpace, VolumeSerialNumber | ConvertTo-Json -Compress");
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                        {
+                            var dict = item.ToObject<Dictionary<string, object>>() ?? new();
+                            AddExternalDriveFromDictionary(data, dict);
+                        }
+                    }
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "PowerShell storage fallback failed"); }
             }
 
             _logger.LogInformation("Processed external storage - Total: {Count}", data.StorageDevices.ExternalDrives.Count);
