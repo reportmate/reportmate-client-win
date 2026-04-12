@@ -107,6 +107,20 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogWarning(ex, "Intune logs collection failed");
             }
 
+            // Populate ownership type from dsregcmd join status
+            if (string.IsNullOrEmpty(data.OwnershipType))
+            {
+                data.OwnershipType = (data.DeviceState.EntraJoined || data.DeviceState.DomainJoined || data.DeviceState.EnterpriseJoined)
+                    ? "Corporate" : "Personal";
+            }
+
+            // PowerShell fallback: if osquery-based policy collections are empty on an enrolled device,
+            // collect MDM policies directly from the PolicyManager registry via PowerShell
+            if (data.MdmEnrollment.IsEnrolled)
+            {
+                await CollectMDMPolicyManagerFallbackAsync(data);
+            }
+
             // Set last sync time
             if (data.DeviceState.EntraJoined || data.DeviceState.EnterpriseJoined || data.DeviceState.DomainJoined)
             {
@@ -1783,6 +1797,171 @@ $policies | ConvertTo-Json -Depth 3 -Compress
             }
         }
         #pragma warning restore CS0618
+
+        /// <summary>
+        /// PowerShell fallback for MDM policy collection when osquery registry queries return empty.
+        /// Reads PolicyManager, Group Policy, Win32 managed apps, and compliance policies directly.
+        /// </summary>
+        private async Task CollectMDMPolicyManagerFallbackAsync(ManagementData data)
+        {
+            try
+            {
+                // 1. MDM PolicyManager device policies -> RegistryPolicies + ConfigurationProfiles
+                if (data.RegistryPolicies.Count == 0 && data.ConfigurationProfiles.Count == 0)
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(@"
+                        $policies = @()
+                        $basePath = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device'
+                        if (Test-Path $basePath) {
+                            foreach ($area in Get-ChildItem $basePath -EA SilentlyContinue) {
+                                foreach ($prop in $area.Property) {
+                                    if ($prop -match '_(LastWrite|ProviderSet|WinningProvider)$') { continue }
+                                    $val = $area.GetValue($prop)
+                                    $policies += @{ Area=$area.PSChildName; Name=$prop; Value=""$val""; Source='MDM' }
+                                }
+                            }
+                        }
+                        $gpPath = 'HKLM:\SOFTWARE\Policies'
+                        if (Test-Path $gpPath) {
+                            foreach ($vendor in Get-ChildItem $gpPath -EA SilentlyContinue) {
+                                foreach ($product in Get-ChildItem $vendor.PSPath -EA SilentlyContinue -Recurse) {
+                                    foreach ($prop in $product.Property) {
+                                        $val = $product.GetValue($prop)
+                                        $policies += @{ Area=$vendor.PSChildName+'/'+$product.PSChildName; Name=$prop; Value=""$val""; Source='GP' }
+                                    }
+                                }
+                            }
+                        }
+                        $policies | ConvertTo-Json -Compress -Depth 3");
+
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        try
+                        {
+                            var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                            {
+                                var area = (string?)item["Area"] ?? "";
+                                var name = (string?)item["Name"] ?? "";
+                                var value = (string?)item["Value"] ?? "";
+                                var source = (string?)item["Source"] ?? "";
+
+                                if (source == "GP")
+                                {
+                                    data.RegistryPolicies.Add(new RegistryPolicy
+                                    {
+                                        KeyPath = $"HKLM\\SOFTWARE\\Policies\\{area}",
+                                        ValueName = name,
+                                        Value = value,
+                                        Type = "GroupPolicy",
+                                        Source = "GroupPolicy"
+                                    });
+                                }
+                                else
+                                {
+                                    data.ConfigurationProfiles.Add(new ConfigurationProfile
+                                    {
+                                        Name = $"{area}/{name}",
+                                        Status = "Applied",
+                                        Source = "PolicyManager",
+                                        Category = area,
+                                        Description = value
+                                    });
+                                }
+                            }
+                            _logger.LogInformation("PowerShell fallback collected {ConfigCount} MDM configs, {GPCount} GP policies",
+                                data.ConfigurationProfiles.Count, data.RegistryPolicies.Count);
+                        }
+                        catch (Exception ex) { _logger.LogWarning(ex, "Failed to parse PolicyManager fallback"); }
+                    }
+                }
+
+                // 2. Compliance policies from DeviceCompliance registry
+                if (data.CompliancePolicies.Count == 0)
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(@"
+                        $policies = @()
+                        $path = 'HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device'
+                        if (Test-Path $path) {
+                            $dc = Get-ChildItem $path -EA SilentlyContinue | Where-Object { $_.PSChildName -like '*Compliance*' -or $_.PSChildName -like '*DeviceLock*' -or $_.PSChildName -like '*Security*' }
+                            foreach ($area in $dc) {
+                                foreach ($prop in $area.Property) {
+                                    if ($prop -match '_(LastWrite|ProviderSet|WinningProvider)$') { continue }
+                                    $policies += @{ Area=$area.PSChildName; Name=$prop; Value=""$($area.GetValue($prop))"" }
+                                }
+                            }
+                        }
+                        $policies | ConvertTo-Json -Compress");
+
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        try
+                        {
+                            var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                            {
+                                data.CompliancePolicies.Add(new CompliancePolicy
+                                {
+                                    PolicyName = $"{(string?)item["Area"]}/{(string?)item["Name"]}",
+                                    ComplianceType = (string?)item["Area"] ?? "",
+                                    CurrentValue = (string?)item["Value"] ?? "",
+                                    IsCompliant = true
+                                });
+                            }
+                            _logger.LogInformation("PowerShell fallback collected {Count} compliance policies", data.CompliancePolicies.Count);
+                        }
+                        catch (Exception ex) { _logger.LogWarning(ex, "Failed to parse compliance policy fallback"); }
+                    }
+                }
+
+                // 3. Win32 managed apps
+                if (data.ManagedApps.Count == 0)
+                {
+                    var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(@"
+                        $apps = @()
+                        $win32Path = 'HKLM:\SOFTWARE\Microsoft\IntuneManagementExtension\Win32Apps'
+                        if (Test-Path $win32Path) {
+                            foreach ($user in Get-ChildItem $win32Path -EA SilentlyContinue) {
+                                if ($user.PSChildName -in @('OperationalState','Reporting','GRS')) { continue }
+                                foreach ($app in Get-ChildItem $user.PSPath -EA SilentlyContinue) {
+                                    $intent = (Get-ItemProperty $app.PSPath -Name Intent -EA SilentlyContinue).Intent
+                                    if ($null -ne $intent) {
+                                        $intentStr = switch ($intent) { 1 { 'Required' } 2 { 'Available' } 3 { 'Uninstall' } default { 'Unknown' } }
+                                        $apps += @{ AppId=$app.PSChildName.Split('_')[0]; Intent=$intentStr; User=$user.PSChildName }
+                                    }
+                                }
+                            }
+                        }
+                        $apps | Select-Object -First 100 | ConvertTo-Json -Compress");
+
+                    if (!string.IsNullOrWhiteSpace(psResult))
+                    {
+                        try
+                        {
+                            var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                            {
+                                data.ManagedApps.Add(new ManagementData.ManagedApp
+                                {
+                                    AppId = (string?)item["AppId"] ?? "",
+                                    TargetType = (string?)item["Intent"] ?? "",
+                                    AppType = "Win32"
+                                });
+                            }
+                            _logger.LogInformation("PowerShell fallback collected {Count} managed apps", data.ManagedApps.Count);
+                        }
+                        catch (Exception ex) { _logger.LogWarning(ex, "Failed to parse managed apps fallback"); }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "MDM PolicyManager PowerShell fallback failed");
+            }
+        }
 
         private void CalculatePolicySummary(ManagementData data)
         {
