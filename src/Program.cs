@@ -505,7 +505,6 @@ public class Program
         // Register module processors
         services.AddScoped<IModuleProcessorFactory, ModuleProcessorFactory>();
         services.AddScoped<ApplicationsModuleProcessor>();
-        services.AddScoped<DisplayModuleProcessor>();
         services.AddScoped<HardwareModuleProcessor>();
         services.AddScoped<IdentityModuleProcessor>();
         services.AddScoped<InventoryModuleProcessor>();
@@ -513,7 +512,6 @@ public class Program
         services.AddScoped<ManagementModuleProcessor>();
         services.AddScoped<NetworkModuleProcessor>();
         services.AddScoped<PeripheralsModuleProcessor>();
-        services.AddScoped<PrinterModuleProcessor>();
         services.AddScoped<SecurityModuleProcessor>();
         services.AddScoped<SystemModuleProcessor>();
 

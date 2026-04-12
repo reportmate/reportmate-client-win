@@ -554,13 +554,12 @@ namespace ReportMate.WindowsClient.Services
                         {
                             "applications" => JsonSerializer.Deserialize<ApplicationsData>(json, jsonOptions),
                             "hardware" => JsonSerializer.Deserialize<HardwareData>(json, jsonOptions),
+                            "identity" => JsonSerializer.Deserialize<IdentityData>(json, jsonOptions),
                             "inventory" => JsonSerializer.Deserialize<InventoryData>(json, jsonOptions),
                             "installs" => JsonSerializer.Deserialize<InstallsData>(json, jsonOptions),
                             "management" => JsonSerializer.Deserialize<ManagementData>(json, jsonOptions),
                             "network" => JsonSerializer.Deserialize<NetworkData>(json, jsonOptions),
-                            "printers" => JsonSerializer.Deserialize<PrinterData>(json, jsonOptions),
-                            "displays" => JsonSerializer.Deserialize<DisplayData>(json, jsonOptions),
-                            "profiles" => JsonSerializer.Deserialize<ProfilesData>(json, jsonOptions),
+                            "peripherals" => JsonSerializer.Deserialize<PeripheralsModuleData>(json, jsonOptions),
                             "security" => JsonSerializer.Deserialize<SecurityData>(json, jsonOptions),
                             "system" => JsonSerializer.Deserialize<SystemData>(json, jsonOptions),
                             _ => null
@@ -675,7 +674,7 @@ namespace ReportMate.WindowsClient.Services
                                 {
                                     _logger.LogDebug("Query {QueryName} returned multi-results, parsing JSON array", kvp.Key);
                                     var resultsJson = resultsElement.GetRawText();
-                                    var multiResults = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(resultsJson);
+                                    var multiResults = JsonSerializer.Deserialize(resultsJson, ReportMateJsonContext.Default.ListDictionaryStringObject);
                                     resultList = multiResults ?? new List<Dictionary<string, object>>();
                                     _logger.LogDebug("Query {QueryName} parsed {Count} results from JSON array", kvp.Key, resultList.Count);
                                 }
@@ -987,14 +986,8 @@ namespace ReportMate.WindowsClient.Services
                 case NetworkData networkData:
                     payload.Network = networkData;
                     break;
-                case PrinterData printerData:
-                    payload.Printers = printerData;
-                    break;
-                case DisplayData displayData:
-                    payload.Displays = displayData;
-                    break;
-                case ProfilesData profilesData:
-                    payload.Profiles = profilesData;
+                case PeripheralsModuleData peripheralsData:
+                    payload.Peripherals = peripheralsData;
                     break;
                 case SecurityData securityData:
                     payload.Security = securityData;

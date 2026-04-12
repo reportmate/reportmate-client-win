@@ -51,10 +51,10 @@ namespace ReportMate.WindowsClient.Services
             _logger = logger;
             
             // Register all module processor types
+            // Note: printers/displays are collected within peripherals, profiles within management
             _processorTypes = new Dictionary<string, Type>
             {
                 ["applications"] = typeof(ApplicationsModuleProcessor),
-                ["display"] = typeof(DisplayModuleProcessor),
                 ["hardware"] = typeof(HardwareModuleProcessor),
                 ["identity"] = typeof(IdentityModuleProcessor),
                 ["inventory"] = typeof(InventoryModuleProcessor),
@@ -62,7 +62,6 @@ namespace ReportMate.WindowsClient.Services
                 ["management"] = typeof(ManagementModuleProcessor),
                 ["network"] = typeof(NetworkModuleProcessor),
                 ["peripherals"] = typeof(PeripheralsModuleProcessor),
-                ["printer"] = typeof(PrinterModuleProcessor),
                 ["security"] = typeof(SecurityModuleProcessor),
                 ["system"] = typeof(SystemModuleProcessor)
             };
@@ -71,7 +70,6 @@ namespace ReportMate.WindowsClient.Services
             _dataTypeToProcessorType = new Dictionary<Type, Type>
             {
                 [typeof(ApplicationsData)] = typeof(ApplicationsModuleProcessor),
-                [typeof(DisplayData)] = typeof(DisplayModuleProcessor),
                 [typeof(HardwareData)] = typeof(HardwareModuleProcessor),
                 [typeof(IdentityData)] = typeof(IdentityModuleProcessor),
                 [typeof(InventoryData)] = typeof(InventoryModuleProcessor),
@@ -79,7 +77,6 @@ namespace ReportMate.WindowsClient.Services
                 [typeof(ManagementData)] = typeof(ManagementModuleProcessor),
                 [typeof(NetworkData)] = typeof(NetworkModuleProcessor),
                 [typeof(PeripheralsModuleData)] = typeof(PeripheralsModuleProcessor),
-                [typeof(PrinterData)] = typeof(PrinterModuleProcessor),
                 [typeof(SecurityData)] = typeof(SecurityModuleProcessor),
                 [typeof(SystemData)] = typeof(SystemModuleProcessor)
             };

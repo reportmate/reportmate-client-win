@@ -39,6 +39,9 @@ public class OsQueryService : IOsQueryService
 
     public async Task<Dictionary<string, object>> ExecuteQueryAsync(string query, TimeSpan? timeout = null)
     {
+        // Write query to a temp file and pipe it via cmd.exe to avoid Windows
+        // command-line backslash escaping issues with registry paths.
+        var queryFile = Path.Combine(Path.GetTempPath(), $"osquery_{Guid.NewGuid():N}.sql");
         try
         {
             if (!await IsOsQueryAvailableAsync())
@@ -48,50 +51,57 @@ public class OsQueryService : IOsQueryService
 
             _logger.LogDebug("Executing osquery: {Query}", query);
 
-            // Enable Windows events if the query involves windows_events table
-            var arguments = $"--json \"{query}\"";
-            if (query.Contains("windows_events", StringComparison.OrdinalIgnoreCase))
-            {
-                arguments = $"--disable_events=false --enable_windows_events_subscriber --enable_windows_events_publisher --ephemeral --json \"{query}\"";
-                _logger.LogDebug("Enabling Windows events for this query");
-            }
-            
-            _logger.LogDebug("osquery command: {FileName} {Arguments}", _osqueryPath, arguments);
+            // The JSON configs encode backslashes as \\\\ which after JSON parse gives \\
+            // (2 backslashes). osquery's registry paths use single backslashes internally,
+            // so we halve the double backslashes before writing to the query file.
+            var normalizedQuery = query.Replace("\\\\", "\\");
+            await File.WriteAllTextAsync(queryFile, normalizedQuery, System.Text.Encoding.UTF8);
 
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = _osqueryPath,
-                Arguments = arguments,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                WorkingDirectory = Path.GetDirectoryName(_osqueryPath) ?? Environment.CurrentDirectory
-            };
-
-            using var process = new Process { StartInfo = startInfo };
-            var outputBuilder = new System.Text.StringBuilder();
-            var errorBuilder = new System.Text.StringBuilder();
-
-            process.OutputDataReceived += (sender, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
+                var osqueryArgs = "--json";
+                if (query.Contains("windows_events", StringComparison.OrdinalIgnoreCase))
                 {
-                    outputBuilder.AppendLine(e.Data);
+                    osqueryArgs = "--disable_events=false --enable_windows_events_subscriber --enable_windows_events_publisher --ephemeral --json";
+                    _logger.LogDebug("Enabling Windows events for this query");
                 }
-            };
 
-            process.ErrorDataReceived += (sender, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
+                // Use cmd /c with input redirect to avoid backslash escaping issues
+                var arguments = $"/c \"\"{_osqueryPath}\" {osqueryArgs} < \"{queryFile}\"\"";
+
+
+                var startInfo = new ProcessStartInfo
                 {
-                    errorBuilder.AppendLine(e.Data);
-                }
-            };
+                    FileName = "cmd.exe",
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Path.GetDirectoryName(_osqueryPath) ?? Environment.CurrentDirectory
+                };
 
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
+                using var process = new Process { StartInfo = startInfo };
+                var outputBuilder = new System.Text.StringBuilder();
+                var errorBuilder = new System.Text.StringBuilder();
+
+                process.OutputDataReceived += (sender, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data))
+                    {
+                        outputBuilder.AppendLine(e.Data);
+                    }
+                };
+
+                process.ErrorDataReceived += (sender, e) =>
+                {
+                    if (!string.IsNullOrEmpty(e.Data))
+                    {
+                        errorBuilder.AppendLine(e.Data);
+                    }
+                };
+
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
 
             var timeoutMs = (int)(timeout ?? TimeSpan.FromMinutes(2)).TotalMilliseconds;
             var completed = await Task.Run(() => process.WaitForExit(timeoutMs));
@@ -168,6 +178,10 @@ public class OsQueryService : IOsQueryService
         {
             _logger.LogError(ex, "Error executing osquery: {Query}", query);
             throw;
+        }
+        finally
+        {
+            try { if (File.Exists(queryFile)) File.Delete(queryFile); } catch { /* best-effort cleanup */ }
         }
     }
 

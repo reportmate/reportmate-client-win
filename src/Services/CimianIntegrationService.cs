@@ -271,7 +271,7 @@ namespace ReportMate.WindowsClient.Services
                         api_url = _configuration.ApiUrl,
                         collection_interval = _configuration.CollectionIntervalSeconds,
                         last_collection = DateTime.UtcNow.ToString("O"),
-                        modules_enabled = new[] { "hardware", "system", "network", "inventory", "applications", "security", "installs", "management", "profiles" }
+                        modules_enabled = new[] { "hardware", "system", "network", "inventory", "applications", "security", "installs", "management", "peripherals", "identity" }
                     },
                     cimian_integration = new
                     {

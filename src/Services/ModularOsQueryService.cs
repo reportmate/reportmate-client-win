@@ -29,7 +29,7 @@ namespace ReportMate.WindowsClient.Services
             try
             {
                 var combinedQueries = new Dictionary<string, object>();
-                
+
                 // Find the modular osquery directory in working data directory (ProgramData)
                 var workingDataDir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -37,6 +37,9 @@ namespace ReportMate.WindowsClient.Services
                 var osqueryDir = Path.Combine(workingDataDir, "osquery");
                 var modulesDir = Path.Combine(osqueryDir, "modules");
                 var enabledModulesFile = Path.Combine(osqueryDir, "enabled-modules.json");
+
+                // Self-heal: copy missing module configs from Program Files install location
+                RepairModuleConfigs(osqueryDir, modulesDir);
 
                 if (!Directory.Exists(modulesDir))
                 {
@@ -138,13 +141,16 @@ namespace ReportMate.WindowsClient.Services
             try
             {
                 var moduleQueries = new Dictionary<string, object>();
-                
+
                 // Find the modular osquery directory in working data directory (ProgramData)
                 var workingDataDir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                     "ManagedReports");
                 var osqueryDir = Path.Combine(workingDataDir, "osquery");
                 var modulesDir = Path.Combine(osqueryDir, "modules");
+
+                // Self-heal: copy missing module configs from Program Files install location
+                RepairModuleConfigs(osqueryDir, modulesDir);
 
                 if (!Directory.Exists(modulesDir))
                 {
@@ -177,6 +183,66 @@ namespace ReportMate.WindowsClient.Services
             {
                 _logger.LogError(ex, "Error loading queries for module {ModuleId}", moduleId);
                 return new Dictionary<string, object>();
+            }
+        }
+
+        /// <summary>
+        /// Copy missing osquery module configs from the Program Files install location
+        /// to ProgramData. This handles cases where the installer's postinstall copy
+        /// partially failed or where the binary was updated without re-running the installer.
+        /// </summary>
+        private void RepairModuleConfigs(string targetOsqueryDir, string targetModulesDir)
+        {
+            try
+            {
+                var installDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    "ReportMate", "osquery");
+                var installModulesDir = Path.Combine(installDir, "modules");
+
+                if (!Directory.Exists(installModulesDir))
+                    return;
+
+                // Ensure target directories exist
+                if (!Directory.Exists(targetOsqueryDir))
+                    Directory.CreateDirectory(targetOsqueryDir);
+                if (!Directory.Exists(targetModulesDir))
+                    Directory.CreateDirectory(targetModulesDir);
+
+                // Copy enabled-modules.json if missing or older
+                var sourceEnabledFile = Path.Combine(installDir, "enabled-modules.json");
+                var targetEnabledFile = Path.Combine(targetOsqueryDir, "enabled-modules.json");
+                if (File.Exists(sourceEnabledFile))
+                {
+                    if (!File.Exists(targetEnabledFile) ||
+                        File.GetLastWriteTimeUtc(sourceEnabledFile) > File.GetLastWriteTimeUtc(targetEnabledFile))
+                    {
+                        File.Copy(sourceEnabledFile, targetEnabledFile, true);
+                        _logger.LogInformation("Repaired enabled-modules.json from install location");
+                    }
+                }
+
+                // Copy any missing or outdated module config files
+                var repaired = 0;
+                foreach (var sourceFile in Directory.GetFiles(installModulesDir, "*.json"))
+                {
+                    var fileName = Path.GetFileName(sourceFile);
+                    var targetFile = Path.Combine(targetModulesDir, fileName);
+
+                    if (!File.Exists(targetFile) ||
+                        File.GetLastWriteTimeUtc(sourceFile) > File.GetLastWriteTimeUtc(targetFile))
+                    {
+                        File.Copy(sourceFile, targetFile, true);
+                        repaired++;
+                    }
+                }
+
+                if (repaired > 0)
+                    _logger.LogInformation("Repaired {Count} osquery module config(s) from install location", repaired);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not repair osquery module configs from install location");
             }
         }
 

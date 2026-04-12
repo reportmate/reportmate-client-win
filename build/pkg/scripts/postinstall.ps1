@@ -286,18 +286,41 @@ foreach ($configFile in $configFiles) {
     }
 }
 
-# Copy osquery modules to ProgramData
+# Copy osquery modules to ProgramData (file-by-file with verification)
 $osquerySource = "C:\Program Files\ReportMate\osquery"
 $osqueryDestination = "C:\ProgramData\ManagedReports\osquery"
 
 if (Test-Path $osquerySource) {
-    Write-Host "Copying osquery modules to ProgramData..."
+    Write-Host "Deploying osquery module configs to ProgramData..."
     try {
-        if (Test-Path $osqueryDestination) {
-            Remove-Item $osqueryDestination -Recurse -Force
+        # Ensure destination directories exist
+        $modulesDestDir = Join-Path $osqueryDestination "modules"
+        New-Item -Path $modulesDestDir -ItemType Directory -Force | Out-Null
+
+        # Copy enabled-modules.json
+        $enabledSrc = Join-Path $osquerySource "enabled-modules.json"
+        if (Test-Path $enabledSrc) {
+            Copy-Item $enabledSrc (Join-Path $osqueryDestination "enabled-modules.json") -Force
+            Write-Host "  Copied enabled-modules.json"
         }
-        Copy-Item $osquerySource $osqueryDestination -Recurse -Force
-        Write-Host "osquery modules copied successfully"
+
+        # Copy each module config individually
+        $modulesSrcDir = Join-Path $osquerySource "modules"
+        if (Test-Path $modulesSrcDir) {
+            $copied = 0
+            foreach ($file in Get-ChildItem $modulesSrcDir -Filter "*.json") {
+                Copy-Item $file.FullName (Join-Path $modulesDestDir $file.Name) -Force
+                $copied++
+            }
+            Write-Host "  Copied $copied module config files"
+        }
+
+        # Verify deployment
+        $deployed = (Get-ChildItem $modulesDestDir -Filter "*.json" -ErrorAction SilentlyContinue).Count
+        Write-Host "  Verification: $deployed module configs deployed to $modulesDestDir"
+        if ($deployed -eq 0) {
+            Write-Warning "No module configs deployed - data collection will be degraded"
+        }
     } catch {
         Write-Warning "Failed to copy osquery modules: $_"
     }

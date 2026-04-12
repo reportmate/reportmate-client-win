@@ -24,7 +24,6 @@ public static class ReportMateConstants
     public static readonly string[] AllModules =
     [
         "applications",
-        "displays",
         "hardware",
         "identity",
         "inventory",
@@ -32,7 +31,6 @@ public static class ReportMateConstants
         "management",
         "network",
         "peripherals",
-        "printers",
         "security",
         "system",
     ];
@@ -41,7 +39,6 @@ public static class ReportMateConstants
     public static readonly Dictionary<string, string> ModuleDisplayNames = new()
     {
         ["applications"] = "Applications",
-        ["displays"]     = "Displays",
         ["hardware"]     = "Hardware",
         ["identity"]     = "Identity",
         ["inventory"]    = "Inventory",
@@ -49,7 +46,6 @@ public static class ReportMateConstants
         ["management"]   = "Management",
         ["network"]      = "Network",
         ["peripherals"]  = "Peripherals",
-        ["printers"]     = "Printers",
         ["security"]     = "Security",
         ["system"]       = "System",
     };
