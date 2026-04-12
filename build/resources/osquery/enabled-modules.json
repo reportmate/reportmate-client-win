@@ -1,19 +1,19 @@
 {
   "enabled": [
     "hardware",
-    "system", 
+    "system",
     "network",
     "inventory",
     "applications",
     "security",
     "installs",
     "management",
-    "printers",
-    "peripherals"
+    "peripherals",
+    "identity"
   ],
-  "version": "1.0.0",
-  "generated": "2025-07-12T10:30:00Z",
-  "description": "Complete modular osquery configuration for ReportMate data collection",
+  "version": "1.1.0",
+  "generated": "2026-04-12T00:00:00Z",
+  "description": "Modular osquery configuration for ReportMate data collection",
   "platform": "windows",
-  "note": "All 10 core modules enabled for comprehensive device data collection including printer and display management. Profiles module consolidated into management."
+  "note": "10 core modules. Printers/displays collected within peripherals, profiles within management."
 }
