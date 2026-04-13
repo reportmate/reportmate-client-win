@@ -806,6 +806,36 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Resolve generic GPU names by querying the actual display driver
             // osquery reports "Radeon Graphics Processor (0xNNNN)" instead of actual model
             await ResolveGpuNameAsync(data);
+
+            // For AMD APUs: if the GPU name is still generic ("Radeon" or "AMD Radeon Graphics"),
+            // extract the specific iGPU model from the raw CPU brand string (before it was cleaned).
+            // e.g. "AMD Ryzen 7 PRO 7840U w/ Radeon 780M Graphics" -> GPU = "Radeon 780M"
+            var gpuName = data.Graphics.Name ?? "";
+            if (gpuName.Equals("Radeon", StringComparison.OrdinalIgnoreCase) ||
+                gpuName.Equals("AMD Radeon Graphics", StringComparison.OrdinalIgnoreCase))
+            {
+                // Read raw CPU brand from osquery system_info (uncleaned)
+                string rawCpuBrand = "";
+                if (osqueryResults.TryGetValue("system_info", out var sysInfo) && sysInfo.Count > 0)
+                    rawCpuBrand = GetStringValue(sysInfo[0], "cpu_brand");
+                if (string.IsNullOrEmpty(rawCpuBrand) && osqueryResults.TryGetValue("cpu_info", out var cpuInfoFallback) && cpuInfoFallback.Count > 0)
+                    rawCpuBrand = GetStringValue(cpuInfoFallback[0], "model");
+
+                // Match "w/ Radeon 780M Graphics" or "w/ Radeon 8060S" but NOT "with Radeon Graphics" (no model)
+                var match = System.Text.RegularExpressions.Regex.Match(
+                    rawCpuBrand, @"w(?:ith|/)\s+Radeon\s+(\w+)(?:\s+Graphics)?$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (match.Success)
+                {
+                    var extracted = match.Groups[1].Value.Trim();
+                    if (!string.IsNullOrEmpty(extracted) &&
+                        !extracted.Equals("Graphics", StringComparison.OrdinalIgnoreCase))
+                    {
+                        data.Graphics.Name = $"Radeon {extracted}";
+                        _logger.LogInformation("Enriched GPU name from CPU string: {GpuName}", data.Graphics.Name);
+                    }
+                }
+            }
             
             // Get graphics memory from QWORD registry first (64-bit value for GPUs with >4GB VRAM like RTX 3080)
             if (osqueryResults.TryGetValue("graphics_memory_qword_registry", out var graphicsMemoryQwordRegistry) && 
