@@ -1283,14 +1283,11 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// </summary>
         private async Task ResolveGpuNameAsync(HardwareData data)
         {
-            // Only resolve if the GPU name looks generic (contains PCI ID or is very short)
+            // Always query Win32_VideoController for the authoritative GPU name.
+            // osquery and registry often return generic names like "Radeon Graphics
+            // Processor (0x15BF)", "UHD Graphics Family", or just "Adreno".
             var name = data.Graphics.Name ?? "";
-            var isGeneric = name.Contains("(0x") ||
-                            name.Equals("Adreno", StringComparison.OrdinalIgnoreCase) ||
-                            name.Contains("Graphics Processor") ||
-                            name.Contains("Microsoft Basic");
-
-            if (!isGeneric) return;
+            if (string.IsNullOrEmpty(name)) return;
 
             try
             {
