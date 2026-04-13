@@ -52,9 +52,12 @@
 .PARAMETER Thumbprint
     Override auto-detection with specific certificate thumbprint
 
+.PARAMETER Import
+    Import the built MSI into the Cimian deployment repo using cimiimport --nointeractive
+
 .PARAMETER Install
-    Automatically install the built package using the preferred method (PKG if available, otherwise MSI, then NUPKG via chocolatey) - requires admin privileges
-    
+    Install the built MSI locally using installer --pkg - requires admin privileges
+
 .EXAMPLE
     .\build.ps1
     Build with auto-generated version (YYYY.MM.DD.HHMM format)
@@ -84,8 +87,12 @@
     Build without code signing (even if cert is available)
 
 .EXAMPLE
+    .\build.ps1 -Import
+    Build and import the MSI into the Cimian deployment repo
+
+.EXAMPLE
     .\build.ps1 -Install
-    Build and automatically install the MSI package (requires admin privileges)
+    Build and install the MSI locally using installer --pkg
 
 .EXAMPLE
     .\build.ps1 -SkipNUPKG -SkipZIP
@@ -111,6 +118,7 @@ param(
     [switch]$Verbose = $false,
     [switch]$Sign,
     [switch]$NoSign,
+    [switch]$Import = $false,
     [switch]$Install = $false,
     [string]$Thumbprint
 )
@@ -1391,105 +1399,47 @@ if ($CreateRelease -and $ghFound) {
     Write-Info "7. GitHub release created: $Version"
 }
 
-# Install the package if requested
-if ($Install) {
-    Write-Step "Installing ReportMate package..."
-
-    # Prioritize MSI installation (primary format; built via cimipkg)
+# Import the MSI into Cimian deployment repo if requested
+if ($Import) {
     $msiPath = Join-Path $OutputDir "ReportMate-$Version.msi"
-    $nupkgPath = Join-Path $OutputDir "ReportMate-$Version.nupkg"
 
     if ((Test-Path $msiPath) -and (-not $SkipMSI)) {
-        Write-Info "Installing MSI package: ReportMate-$Version.msi"
-        try {
-            # Check if running as administrator
-            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-            
-            if (-not $isAdmin) {
-                Write-Warning "MSI installation requires administrator privileges. Using native Windows sudo..."
-                
-                # Use msiexec with quiet installation
-                $installLogPath = Join-Path $OutputDir "ReportMate-Install.log"
-                $installCmd = "msiexec.exe /i `"$msiPath`" /quiet /norestart /l*v `"$installLogPath`""
-                
-                # Execute with native sudo
-                sudo powershell -Command $installCmd
-                
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Success "MSI installation completed successfully"
-                    Write-Info "Installation log: $installLogPath"
-                } else {
-                    Write-Error "MSI installation failed with exit code: $LASTEXITCODE"
-                    Write-Info "Check installation log: $installLogPath"
-                    throw "MSI installation failed"
-                }
-            } else {
-                # Already running as admin, install directly
-                Write-Verbose "Installing MSI with msiexec: $msiPath"
-                $installLogPath = Join-Path $OutputDir "ReportMate-Install.log"
-                $installArgs = @(
-                    "/i", "`"$msiPath`"",
-                    "/quiet",
-                    "/norestart",
-                    "/l*v", "`"$installLogPath`""
-                )
-                
-                & msiexec.exe @installArgs
-                
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Success "MSI installation completed successfully"
-                    Write-Info "Installation log: $installLogPath"
-                } else {
-                    Write-Error "MSI installation failed with exit code: $LASTEXITCODE"
-                    Write-Info "Check installation log: $installLogPath"
-                }
-            }
-        } catch {
-            Write-Error "Failed to install MSI: $_"
-            Write-Info "Manual installation: msiexec.exe /i `"$msiPath`" /quiet /norestart"
-        }
-    } elseif (Test-Path $nupkgPath) {
-        Write-Info "Installing NUPKG package: ReportMate-$Version.nupkg"
-        try {
-            # Check if running as administrator
-            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-            
-            if (-not $isAdmin) {
-                Write-Warning "NUPKG installation requires administrator privileges. Using native Windows sudo..."
-                
-                # Use native Windows sudo (available in Windows 11 and modern Windows 10)
-                $installCmd = "choco install `"$nupkgPath`" --source=. --force --yes"
-                
-                # Execute with native sudo
-                sudo powershell -Command $installCmd
-                
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Success "NUPKG installation completed successfully"
-                } else {
-                    Write-Error "NUPKG installation failed with exit code: $LASTEXITCODE"
-                    throw "Chocolatey installation failed"
-                }
-            } else {
-                # Already running as admin, install directly
-                Write-Verbose "Installing with chocolatey: $nupkgPath"
-                choco install "$nupkgPath" --source=. --force --yes
-                
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Success "NUPKG installation completed successfully"
-                } else {
-                    Write-Error "NUPKG installation failed with exit code: $LASTEXITCODE"
-                }
-            }
-        } catch {
-            Write-Error "Failed to install NUPKG: $_"
-            Write-Info "Manual installation: choco install `"$nupkgPath`" --source=. --force --yes"
+        Write-Step "Importing MSI into Cimian deployment repo..."
+        Write-Info "Running: cimiimport `"$msiPath`" --nointeractive"
+
+        & cimiimport $msiPath --nointeractive
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Cimian import completed successfully"
+        } else {
+            Write-Error "Cimian import failed with exit code: $LASTEXITCODE"
+            Write-Info "Manual import: cimiimport `"$msiPath`" --nointeractive"
         }
     } else {
-        Write-Error "No installation packages found"
-        Write-Info "Expected files:"
-        Write-Info "  - MSI: $msiPath (primary)"
-        Write-Info "  - NUPKG: $nupkgPath"
-        Write-Info "Make sure packages were built successfully"
+        Write-Error "No MSI found to import: ReportMate-$Version.msi"
+        Write-Info "Make sure MSI was built successfully (don't use -SkipMSI with -Import)"
+    }
+}
+
+# Install the MSI locally if requested
+if ($Install) {
+    $msiPath = Join-Path $OutputDir "ReportMate-$Version.msi"
+
+    if ((Test-Path $msiPath) -and (-not $SkipMSI)) {
+        Write-Step "Installing MSI package..."
+        Write-Info "Running: installer --pkg `"$msiPath`""
+
+        sudo installer --pkg $msiPath
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "Installation completed successfully"
+        } else {
+            Write-Error "Installation failed with exit code: $LASTEXITCODE"
+            Write-Info "Manual install: sudo installer --pkg `"$msiPath`""
+        }
+    } else {
+        Write-Error "No MSI found to install: ReportMate-$Version.msi"
+        Write-Info "Make sure MSI was built successfully (don't use -SkipMSI with -Install)"
     }
 }
 

@@ -3,7 +3,7 @@ product:
   version: {{VERSION}}
   identifier: "reportmate"
   developer: "Windows Admins Open Source"
-  description: "ReportMate client for gathering Windows endpoint telemetry for monitoring dashboard using osquery and pwsh"
+  description: "Windows client that integrates with Cimian and collects comprehensive device data using osquery for enterprise device management and security monitoring."
 install_location: 'C:\Program Files\ReportMate\'
 postinstall_action: "none"
 signing_certificate: ""
