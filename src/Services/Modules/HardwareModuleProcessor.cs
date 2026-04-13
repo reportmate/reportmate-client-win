@@ -802,6 +802,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                     _logger.LogDebug("Updated graphics name from registry (fallback): {GraphicsName}", firstGpuName);
                 }
             }
+
+            // Resolve generic GPU names by querying the actual display driver
+            // osquery reports "Radeon Graphics Processor (0xNNNN)" instead of actual model
+            await ResolveGpuNameAsync(data);
             
             // Get graphics memory from QWORD registry first (64-bit value for GPUs with >4GB VRAM like RTX 3080)
             if (osqueryResults.TryGetValue("graphics_memory_qword_registry", out var graphicsMemoryQwordRegistry) && 
@@ -1272,6 +1276,60 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// <summary>
         /// Clean product names by removing trademark symbols and standardizing format
         /// </summary>
+        /// <summary>
+        /// Resolve generic GPU names by querying Win32_VideoController via PowerShell.
+        /// osquery returns generic names like "Radeon Graphics Processor (0x15BF)" or "Adreno"
+        /// but the Windows display driver reports the actual model name.
+        /// </summary>
+        private async Task ResolveGpuNameAsync(HardwareData data)
+        {
+            // Only resolve if the GPU name looks generic (contains PCI ID or is very short)
+            var name = data.Graphics.Name ?? "";
+            var isGeneric = name.Contains("(0x") ||
+                            name.Equals("Adreno", StringComparison.OrdinalIgnoreCase) ||
+                            name.Contains("Graphics Processor") ||
+                            name.Contains("Microsoft Basic");
+
+            if (!isGeneric) return;
+
+            try
+            {
+                var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                    "Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, VideoProcessor | ConvertTo-Json -Compress");
+                if (string.IsNullOrWhiteSpace(psResult)) return;
+
+                var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+
+                // Pick the best GPU -- prefer discrete over integrated
+                string? bestName = null;
+                long bestRam = 0;
+                foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                {
+                    var gpuName = CleanProductName((string?)item["Name"] ?? "");
+                    var ram = (long?)item["AdapterRAM"] ?? 0;
+
+                    if (string.IsNullOrEmpty(gpuName)) continue;
+
+                    var isDiscrete = IsDiscreteGpu(gpuName, "");
+                    if (bestName == null || isDiscrete || ram > bestRam)
+                    {
+                        bestName = gpuName;
+                        bestRam = ram;
+                        if (ram > 0 && data.Graphics.MemorySize == 0)
+                            data.Graphics.MemorySize = (int)(ram / (1024 * 1024));
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(bestName) && bestName != name)
+                {
+                    _logger.LogInformation("Resolved GPU name: {OldName} -> {NewName}", name, bestName);
+                    data.Graphics.Name = bestName;
+                }
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "GPU name resolution via PowerShell failed"); }
+        }
+
         private string CleanProductName(string? productName)
         {
             if (string.IsNullOrEmpty(productName))
