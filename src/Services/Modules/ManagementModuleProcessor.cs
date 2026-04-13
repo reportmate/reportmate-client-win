@@ -1664,7 +1664,7 @@ $policies | ConvertTo-Json -Depth 3 -Compress
                 if (!string.IsNullOrWhiteSpace(psResult))
                 {
                     var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                    var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                    var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                     foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                     {
                         data.OMAURISettings.Add(new OMAURISetting
@@ -1898,7 +1898,7 @@ $policies | ConvertTo-Json -Depth 3 -Compress
                         try
                         {
                             var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                             foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                             {
                                 var area = (string?)item["Area"] ?? "";
@@ -1958,7 +1958,7 @@ $policies | ConvertTo-Json -Depth 3 -Compress
                         try
                         {
                             var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                             foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                             {
                                 data.CompliancePolicies.Add(new CompliancePolicy
@@ -2000,7 +2000,7 @@ $policies | ConvertTo-Json -Depth 3 -Compress
                         try
                         {
                             var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                             foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                             {
                                 data.ManagedApps.Add(new ManagementData.ManagedApp

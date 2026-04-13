@@ -959,8 +959,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         // For ARM-based systems like Qualcomm, shared memory may not be reported
                         // Estimate based on system memory for integrated graphics
-                        if (data.Graphics.Name.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase) ||
-                            data.Graphics.Name.Contains("Adreno", StringComparison.OrdinalIgnoreCase))
+                        if (data.Graphics.Name?.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase) == true ||
+                            data.Graphics.Name?.Contains("Adreno", StringComparison.OrdinalIgnoreCase) == true)
                         {
                             // Estimate 1/8 of system memory as shared graphics memory for ARM systems
                             var estimatedGraphicsMemory = ConvertBytesToGB(data.Memory.TotalPhysical / 8);
@@ -974,8 +974,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     _logger.LogWarning(ex, "Failed to query WMI for graphics memory");
                     
                     // Fallback estimation for ARM systems
-                    if (data.Graphics.Name.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase) ||
-                        data.Graphics.Name.Contains("Adreno", StringComparison.OrdinalIgnoreCase))
+                    if (data.Graphics.Name?.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase) == true ||
+                        data.Graphics.Name?.Contains("Adreno", StringComparison.OrdinalIgnoreCase) == true)
                     {
                         var estimatedGraphicsMemory = ConvertBytesToGB(data.Memory.TotalPhysical / 8);
                         data.Graphics.MemorySize = estimatedGraphicsMemory;
@@ -1326,7 +1326,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 if (string.IsNullOrWhiteSpace(psResult)) return;
 
                 var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
 
                 // Pick the best GPU -- prefer discrete over integrated
                 string? bestName = null;
