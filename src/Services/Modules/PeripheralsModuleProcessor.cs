@@ -237,7 +237,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         if (!string.IsNullOrWhiteSpace(psResult))
                         {
                             var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                             foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                                 AddMonitorFromWmiOrPs(data, (string?)item["Name"] ?? "", (string?)item["DeviceID"] ?? "",
                                     item["ScreenWidth"]?.ToString() ?? "", item["ScreenHeight"]?.ToString() ?? "", "PowerShell");
@@ -327,7 +327,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (!string.IsNullOrWhiteSpace(psResult))
                     {
                         var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                         foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                             AddUsbDeviceFromDict(data, (string?)item["Name"] ?? "", (string?)item["DeviceID"] ?? "", (string?)item["Description"] ?? "");
                         _logger.LogDebug("PowerShell fallback collected {Count} USB devices", items.Count);
@@ -566,7 +566,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (!string.IsNullOrWhiteSpace(psResult))
                     {
                         var audioJson = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                        var items = audioJson is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(audioJson);
+                        var items = audioJson is Newtonsoft.Json.Linq.JArray arr ? arr : audioJson != null ? new Newtonsoft.Json.Linq.JArray(audioJson) : new Newtonsoft.Json.Linq.JArray();
                         foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                         {
                             var name = (string?)item["Name"] ?? "";
@@ -706,7 +706,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (!string.IsNullOrWhiteSpace(psResult))
                     {
                         var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                         foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                         {
                             var name = (string?)item["Name"] ?? "";
@@ -830,7 +830,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                 foreach (var printer in printersByName.Values)
                 {
-                    data.Printers.InstalledPrinters.Add(printer);
+                    data.Printers?.InstalledPrinters?.Add(printer);
                 }
             }
 
@@ -861,7 +861,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (!string.IsNullOrWhiteSpace(psResult))
                     {
                         var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                         foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                         {
                             var dict = item.ToObject<Dictionary<string, object>>() ?? new();
@@ -872,13 +872,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                 catch (Exception ex) { _logger.LogWarning(ex, "PowerShell printer fallback failed"); }
             }
 
-            _logger.LogInformation("Processed printers - Total: {Count}", data.Printers.InstalledPrinters.Count);
+            _logger.LogInformation("Processed printers - Total: {Count}", data.Printers?.InstalledPrinters?.Count ?? 0);
         }
 
         private void AddUsbDeviceFromDict(PeripheralsModuleData data, string name, string deviceId, string description)
         {
-            if (data.UsbDevices.ConnectedDevices.Any(d => d.Serial == deviceId)) return;
-            data.UsbDevices.ConnectedDevices.Add(new PeripheralUsbDevice
+            if (data.UsbDevices?.ConnectedDevices?.Any(d => d.Serial == deviceId) == true) return;
+            data.UsbDevices?.ConnectedDevices?.Add(new PeripheralUsbDevice
             {
                 Model = name, Vendor = description, Serial = deviceId,
                 VendorId = ExtractIdFromPath(deviceId, "VID_"),
@@ -892,7 +892,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (name.Contains("Surface", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Built-in", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Integrated", StringComparison.OrdinalIgnoreCase)) return;
-            data.Displays.ExternalMonitors?.Add(new ExternalMonitor
+            data.Displays?.ExternalMonitors?.Add(new ExternalMonitor
             {
                 FriendlyName = name,
                 DeviceDescription = !string.IsNullOrEmpty(width) && !string.IsNullOrEmpty(height) ? $"{name} ({width}x{height})" : name,
@@ -904,10 +904,10 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             var deviceId = GetStringValue(dict, "DeviceID");
             var volumeName = GetStringValue(dict, "VolumeName");
-            if (data.StorageDevices.ExternalDrives.Any(d => d.DevicePath == deviceId)) return;
+            if (data.StorageDevices?.ExternalDrives?.Any(d => d.DevicePath == deviceId) == true) return;
             var size = GetStringValue(dict, "Size");
             var freeSpace = GetStringValue(dict, "FreeSpace");
-            data.StorageDevices.ExternalDrives.Add(new ExternalDrive
+            data.StorageDevices?.ExternalDrives?.Add(new ExternalDrive
             {
                 Name = !string.IsNullOrEmpty(volumeName) ? volumeName : deviceId,
                 DevicePath = deviceId, VolumeName = volumeName,
@@ -927,7 +927,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 printerName.Contains("Microsoft XPS", StringComparison.OrdinalIgnoreCase) ||
                 printerName.Contains("Fax", StringComparison.OrdinalIgnoreCase) ||
                 printerName.Contains("OneNote", StringComparison.OrdinalIgnoreCase)) return;
-            if (data.Printers.InstalledPrinters.Any(p => p.Name?.Equals(printerName, StringComparison.OrdinalIgnoreCase) == true)) return;
+            if (data.Printers?.InstalledPrinters?.Any(p => p.Name?.Equals(printerName, StringComparison.OrdinalIgnoreCase) == true) == true) return;
 
             var driverName = GetStringValue(dict, "DriverName");
             var portName = GetStringValue(dict, "PortName");
@@ -942,7 +942,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 ConnectionType = DetermineConnectionType(portName), DeviceType = "Printer"
             };
             ExtractManufacturerAndModel(driverName, printer);
-            data.Printers.InstalledPrinters.Add(printer);
+            data.Printers?.InstalledPrinters?.Add(printer);
         }
 
         /// <summary>
@@ -1047,7 +1047,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (deviceId.Contains("Disk&", StringComparison.OrdinalIgnoreCase))
                         storageType = "USB Drive";
 
-                    data.StorageDevices.ExternalDrives.Add(new ExternalDrive
+                    data.StorageDevices?.ExternalDrives?.Add(new ExternalDrive
                     {
                         Name = deviceName,
                         DevicePath = deviceId,
@@ -1085,7 +1085,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                     if (!string.IsNullOrWhiteSpace(psResult))
                     {
                         var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : new Newtonsoft.Json.Linq.JArray(json);
+                        var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                         foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
                         {
                             var dict = item.ToObject<Dictionary<string, object>>() ?? new();
@@ -1096,7 +1096,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 catch (Exception ex) { _logger.LogWarning(ex, "PowerShell storage fallback failed"); }
             }
 
-            _logger.LogInformation("Processed external storage - Total: {Count}", data.StorageDevices.ExternalDrives.Count);
+            _logger.LogInformation("Processed external storage - Total: {Count}", data.StorageDevices?.ExternalDrives?.Count ?? 0);
         }
 
         #endregion
