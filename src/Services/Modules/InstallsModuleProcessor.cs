@@ -2325,6 +2325,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             return null;
         }
 
+        /// <summary>
         /// Emits separate events per category for the latest Cimian run, mirroring the
         /// Mac client's generateMunkiEvents shape: success events for installs/updates/
         /// removals (each named individually when there is only one), an error event for
@@ -2339,14 +2340,32 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var allItems = data.Cimian?.Items ?? new List<CimianItem>();
                 var sessionEvents = data.Cimian?.Events ?? new List<CimianEvent>();
                 var latestSession = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
-                var sessionId = latestSession?.SessionId ?? string.Empty;
+
+                // Prefer sessions.json when available; if it's missing but events.jsonl was
+                // loaded from log files, derive the latest session id from the events stream
+                // so we can still scope per-session filtering correctly.
+                var sessionId = latestSession?.SessionId;
+                if (string.IsNullOrEmpty(sessionId))
+                {
+                    sessionId = sessionEvents
+                        .Where(e => !string.IsNullOrWhiteSpace(e.SessionId))
+                        .OrderByDescending(e => e.Timestamp)
+                        .Select(e => e.SessionId)
+                        .FirstOrDefault() ?? string.Empty;
+                }
+
+                // Item is in-session if it was last touched by this session id, or if we have
+                // no session id at all (legacy data without sessions.json or events log).
+                bool InSession(CimianItem i) =>
+                    string.IsNullOrEmpty(sessionId) ||
+                    string.Equals(i.LastSeenInSession, sessionId, StringComparison.OrdinalIgnoreCase);
 
                 var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
                 var failedItems = allItems
                     .Where(i => failedItemStatuses.Any(s =>
                         i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
                         (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)))
-                    .Where(i => !string.IsNullOrEmpty(i.ItemName))
+                    .Where(i => !string.IsNullOrEmpty(i.ItemName) && InSession(i))
                     .GroupBy(i => i.ItemName, StringComparer.OrdinalIgnoreCase)
                     .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion))
                     .ToList();
@@ -2357,23 +2376,37 @@ namespace ReportMate.WindowsClient.Services.Modules
                     .Where(i => warningItemStatuses.Any(s =>
                         i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
                         (i.MappedStatus?.Equals("Warning", StringComparison.OrdinalIgnoreCase) == true)))
-                    .Where(i => !string.IsNullOrEmpty(i.ItemName) && !failedItemNames.Contains(i.ItemName))
+                    .Where(i => !string.IsNullOrEmpty(i.ItemName) && !failedItemNames.Contains(i.ItemName) && InSession(i))
                     .GroupBy(i => i.ItemName, StringComparer.OrdinalIgnoreCase)
                     .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion))
                     .ToList();
 
                 var knownItemNames = allItems.Select(i => i.ItemName).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var operationalWarningEvents = sessionEvents
-                    .Where(e => e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase))
+                    .Where(e => string.IsNullOrEmpty(sessionId) || e.SessionId == sessionId)
+                    .Where(e =>
+                        e.Level.Equals("WARN", StringComparison.OrdinalIgnoreCase) ||
+                        e.Level.Equals("WARNING", StringComparison.OrdinalIgnoreCase))
                     .Where(e => string.IsNullOrEmpty(e.Package) || !knownItemNames.Contains(e.Package))
                     .ToList();
 
+                // Cimian's ingest paths emit different success vocabulary depending on source:
+                // raw events use "Success", session reports use "completed", and items.json
+                // status maps as "Installed". Treat all three as a successful outcome.
+                static bool IsSuccessfulEventStatus(string? status) =>
+                    !string.IsNullOrEmpty(status) &&
+                    (
+                        status.Equals("Success", StringComparison.OrdinalIgnoreCase) ||
+                        status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+                        status.Equals("Installed", StringComparison.OrdinalIgnoreCase)
+                    );
+
                 // Per-package outcomes for the latest session, derived from the events log.
-                // Each package event with Status=Success and Action ∈ {install,update,remove}
+                // Each package event with a successful status and Action ∈ {install,update,remove}
                 // becomes part of a per-action success event below.
                 var sessionSuccessEvents = sessionEvents
                     .Where(e => !string.IsNullOrEmpty(sessionId) && e.SessionId == sessionId)
-                    .Where(e => e.Status.Equals("Success", StringComparison.OrdinalIgnoreCase))
+                    .Where(e => IsSuccessfulEventStatus(e.Status))
                     .Where(e => !string.IsNullOrEmpty(e.Package))
                     .ToList();
 
@@ -2403,6 +2436,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // Fallback when the events log is sparse but session counters confirm activity:
                 // pull items touched by this session from items.json. This keeps event counts
                 // aligned with what the Items table shows while preserving per-item naming.
+                // When the session reports both installs AND updates we cannot tell from
+                // items.json alone which item went into which bucket, so we emit a single
+                // combined success event below rather than guessing.
+                bool fallbackMixedActions = false;
                 if (!installedItems.Any() && !updatedItems.Any() && !removedItems.Any() && latestSession != null
                     && (latestSession.Installs + latestSession.Updates + latestSession.Removals) > 0)
                 {
@@ -2416,12 +2453,25 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                     if (touched.Any())
                     {
-                        if (latestSession.Installs > 0 && latestSession.Updates == 0)
-                            installedItems = touched;
-                        else if (latestSession.Updates > 0 && latestSession.Installs == 0)
-                            updatedItems = touched;
+                        var hasInstalls = latestSession.Installs > 0;
+                        var hasUpdates = latestSession.Updates > 0;
+                        var hasRemovals = latestSession.Removals > 0;
+                        var distinctActions = (hasInstalls ? 1 : 0) + (hasUpdates ? 1 : 0) + (hasRemovals ? 1 : 0);
+
+                        if (distinctActions <= 1)
+                        {
+                            if (hasUpdates) updatedItems = touched;
+                            else if (hasRemovals) removedItems = touched;
+                            else installedItems = touched;
+                        }
                         else
+                        {
+                            // Mixed run with no per-event detail — fold into installedItems as
+                            // the carrier for the combined event below. The flag tells the
+                            // emitter to switch to combined-message wording.
                             installedItems = touched;
+                            fallbackMixedActions = true;
+                        }
                     }
                 }
 
@@ -2459,12 +2509,19 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                 if (installedItems.Any())
                 {
-                    var details = SessionDetails("success", "install");
+                    var details = SessionDetails("success", fallbackMixedActions ? "install_or_update" : "install");
                     details["count"] = installedItems.Count;
                     details["items"] = SerializeItems(installedItems);
-                    events.Add(CreateEvent("success",
-                        FormatActionMessage(installedItems, "installed", "packages"),
-                        details));
+                    if (fallbackMixedActions && latestSession != null)
+                    {
+                        details["session_installs"] = latestSession.Installs;
+                        details["session_updates"] = latestSession.Updates;
+                        details["session_removals"] = latestSession.Removals;
+                    }
+                    string message = fallbackMixedActions
+                        ? $"{installedItems.Count} packages installed or updated"
+                        : FormatActionMessage(installedItems, "installed", "packages");
+                    events.Add(CreateEvent("success", message, details));
                 }
 
                 if (updatedItems.Any())
