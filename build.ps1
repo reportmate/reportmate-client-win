@@ -236,11 +236,12 @@ function Resolve-Cimipkg {
     }
 
     # cimian-pkg releases ship `cimipkg-win-x64.zip` and `cimipkg-win-arm64.zip`.
-    # Map the host's .NET architecture name to the release asset suffix.
+    # Fail loud on any other host architecture rather than silently picking an
+    # asset that won't run.
     $archSuffix = switch ($ProcessArchitecture) {
         'x64'   { 'win-x64' }
         'arm64' { 'win-arm64' }
-        default { 'win-x64' }
+        default { throw "Unsupported host architecture '$ProcessArchitecture' for cimipkg download — only x64 and arm64 are published" }
     }
 
     Write-Verbose "Resolving cimipkg release asset for $archSuffix..."
@@ -261,21 +262,22 @@ function Resolve-Cimipkg {
     if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
     if (Test-Path $zipPath)    { Remove-Item $zipPath -Force }
 
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -ErrorAction Stop
-    Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -ErrorAction Stop
+        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
 
-    $extractedExe = Get-ChildItem -Path $extractDir -Filter 'cimipkg.exe' -Recurse -ErrorAction SilentlyContinue |
-        Select-Object -First 1
+        $extractedExe = Get-ChildItem -Path $extractDir -Filter 'cimipkg.exe' -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
-    if (-not $extractedExe) {
+        if (-not $extractedExe) {
+            throw "cimipkg.exe not found inside $($asset.name)"
+        }
+
+        Move-Item $extractedExe.FullName $targetExe -Force
+    } finally {
         Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
         Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
-        throw "cimipkg.exe not found inside $($asset.name)"
     }
-
-    Move-Item $extractedExe.FullName $targetExe -Force
-    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-    Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
 
     Write-Success "Downloaded cimipkg from $($asset.name) ($($latestRelease.tag_name))"
     return $targetExe
