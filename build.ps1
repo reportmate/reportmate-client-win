@@ -224,6 +224,63 @@ then run the build again.
     exit 1
 }
 
+function Resolve-Cimipkg {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $RootDir,
+        [string] $ProcessArchitecture
+    )
+
+    if (-not $ProcessArchitecture) {
+        $ProcessArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+    }
+
+    # cimian-pkg releases ship `cimipkg-win-x64.zip` and `cimipkg-win-arm64.zip`.
+    # Map the host's .NET architecture name to the release asset suffix.
+    $archSuffix = switch ($ProcessArchitecture) {
+        'x64'   { 'win-x64' }
+        'arm64' { 'win-arm64' }
+        default { 'win-x64' }
+    }
+
+    Write-Verbose "Resolving cimipkg release asset for $archSuffix..."
+    $latestRelease = Invoke-RestMethod -Uri 'https://api.github.com/repos/windowsadmins/cimian-pkg/releases/latest' -ErrorAction Stop
+
+    $asset = $latestRelease.assets |
+        Where-Object { $_.name -like "*$archSuffix*.zip" } |
+        Select-Object -First 1
+
+    if (-not $asset) {
+        throw "No cimipkg release asset matching '*$archSuffix*.zip' in $($latestRelease.tag_name)"
+    }
+
+    $zipPath = Join-Path $RootDir 'cimipkg-download.zip'
+    $extractDir = Join-Path $RootDir 'cimipkg-extracted'
+    $targetExe = Join-Path $RootDir 'cimipkg.exe'
+
+    if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force }
+    if (Test-Path $zipPath)    { Remove-Item $zipPath -Force }
+
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -ErrorAction Stop
+    Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+    $extractedExe = Get-ChildItem -Path $extractDir -Filter 'cimipkg.exe' -Recurse -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+
+    if (-not $extractedExe) {
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        throw "cimipkg.exe not found inside $($asset.name)"
+    }
+
+    Move-Item $extractedExe.FullName $targetExe -Force
+    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Success "Downloaded cimipkg from $($asset.name) ($($latestRelease.tag_name))"
+    return $targetExe
+}
+
 function signPackage {
     <#
       .SYNOPSIS  Authenticode-signs an EXE/MSI/... with our enterprise cert.
@@ -892,22 +949,8 @@ if (-not $SkipNUPKG) {
     
     # Download cimipkg if not found
     if (-not $cimipkgPath) {
-        Write-Verbose "Downloading cimipkg..."
         try {
-            $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/windowsadmins/cimian-pkg/releases/latest"
-            $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*amd64*" } | Select-Object -First 1 -ExpandProperty browser_download_url
-            
-            if (-not $downloadUrl) {
-                $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1 -ExpandProperty browser_download_url
-            }
-            
-            if ($downloadUrl) {
-                $cimipkgPath = Join-Path $RootDir "cimipkg.exe"
-                Invoke-WebRequest -Uri $downloadUrl -OutFile $cimipkgPath
-                Write-Success "Downloaded cimipkg: $downloadUrl"
-            } else {
-                throw "No suitable cimipkg binary found"
-            }
+            $cimipkgPath = Resolve-Cimipkg -RootDir $RootDir
         } catch {
             Write-Error "Failed to download cimipkg: $_"
             Write-Info "Download manually from: https://github.com/windowsadmins/cimian-pkg/releases"
@@ -1096,22 +1139,8 @@ Commit: $env:GITHUB_SHA
 
     # Download cimipkg if not already resolved
     if (-not $cimipkgPath) {
-        Write-Verbose "Downloading cimipkg for MSI creation..."
         try {
-            $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/windowsadmins/cimian-pkg/releases/latest"
-            $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*windows*" -and $_.name -like "*amd64*" } | Select-Object -First 1 -ExpandProperty browser_download_url
-
-            if (-not $downloadUrl) {
-                $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1 -ExpandProperty browser_download_url
-            }
-
-            if ($downloadUrl) {
-                $cimipkgPath = Join-Path $RootDir "cimipkg.exe"
-                Invoke-WebRequest -Uri $downloadUrl -OutFile $cimipkgPath
-                Write-Success "Downloaded cimipkg: $downloadUrl"
-            } else {
-                throw "No suitable cimipkg binary found"
-            }
+            $cimipkgPath = Resolve-Cimipkg -RootDir $RootDir
         } catch {
             Write-Error "Failed to download cimipkg: $_"
             Write-Info "Download manually from: https://github.com/windowsadmins/cimian-pkg/releases"
