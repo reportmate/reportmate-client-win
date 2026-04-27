@@ -279,7 +279,10 @@ function Resolve-Cimipkg {
         Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Write-Success "Downloaded cimipkg from $($asset.name) ($($latestRelease.tag_name))"
+    # Write directly to the host instead of via Write-Success — Write-Success
+    # routes through Write-Output, which would put the message into the
+    # function's success stream and corrupt the returned path.
+    Write-Host "✅ Downloaded cimipkg from $($asset.name) ($($latestRelease.tag_name))" -ForegroundColor Green
     return $targetExe
 }
 
