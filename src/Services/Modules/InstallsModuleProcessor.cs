@@ -683,30 +683,40 @@ namespace ReportMate.WindowsClient.Services.Modules
                 
                 if (Directory.Exists(CIMIAN_LOGS_PATH) && data.Cimian != null)
                 {
-                    var sessionDirs = Directory.GetDirectories(CIMIAN_LOGS_PATH)
-                        .OrderByDescending(d => Path.GetFileName(d))
-                        .ToList();
-                    
-                    _logger.LogDebug("Found {SessionCount} session directories in logs", sessionDirs.Count);
-                    
-                    if (sessionDirs.Any())
+                    // Cimian's log layout is logs/YYYY-MM-DD/HHMM/events.jsonl. Walk both
+                    // levels so we land on an actual session directory rather than the
+                    // date folder (which has no events.jsonl of its own).
+                    var sessionDir = Directory.EnumerateDirectories(CIMIAN_LOGS_PATH)
+                        .OrderByDescending(Path.GetFileName)
+                        .SelectMany(dateDir => Directory.EnumerateDirectories(dateDir)
+                            .Select(timeDir => new
+                            {
+                                Path = timeDir,
+                                SessionId = $"{Path.GetFileName(dateDir)}-{Path.GetFileName(timeDir)}"
+                            }))
+                        .OrderByDescending(s => s.SessionId)
+                        .FirstOrDefault();
+
+                    if (sessionDir != null)
                     {
-                        var latestSessionDir = sessionDirs.First();
-                        var latestSessionId = Path.GetFileName(latestSessionDir);
-                        _logger.LogDebug("Reading events from latest session: {SessionId} ({SessionDir})", latestSessionId, latestSessionDir);
-                        
-                        // Read events from the latest session's events.jsonl
-                        var sessionEvents = ReadCimianEventData(latestSessionDir, latestSessionId);
+                        _logger.LogDebug("Reading events from latest session: {SessionId} ({SessionDir})",
+                            sessionDir.SessionId, sessionDir.Path);
+
+                        var sessionEvents = ReadCimianEventData(sessionDir.Path, sessionDir.SessionId);
                         if (sessionEvents.Any())
                         {
                             data.Cimian.Events.AddRange(sessionEvents);
-                            _logger.LogInformation("Loaded {Count} events from latest session {SessionId} events.jsonl", 
-                                sessionEvents.Count, latestSessionId);
+                            _logger.LogInformation("Loaded {Count} events from latest session {SessionId} events.jsonl",
+                                sessionEvents.Count, sessionDir.SessionId);
                         }
                         else
                         {
-                            _logger.LogDebug("No events found in session {SessionId}", latestSessionId);
+                            _logger.LogDebug("No events found in session {SessionId}", sessionDir.SessionId);
                         }
+                    }
+                    else
+                    {
+                        _logger.LogDebug("No session directories found under {LogsPath}", CIMIAN_LOGS_PATH);
                     }
                 }
                 else
@@ -1533,15 +1543,22 @@ namespace ReportMate.WindowsClient.Services.Modules
                         using var document = JsonDocument.Parse(line);
                         var root = document.RootElement;
 
+                        static string GetStr(JsonElement parent, string name)
+                        {
+                            if (!parent.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
+                                return string.Empty;
+                            return prop.ValueKind == JsonValueKind.String ? (prop.GetString() ?? string.Empty) : prop.ToString();
+                        }
+
                         var cimianEvent = new CimianEvent
                         {
-                            EventId = root.GetProperty("event_id").GetString() ?? "",
+                            EventId = GetStr(root, "event_id"),
                             SessionId = sessionId,
-                            Level = root.GetProperty("level").GetString() ?? "",
-                            EventType = root.GetProperty("event_type").GetString() ?? "",
-                            Action = root.GetProperty("action").GetString() ?? "",
-                            Status = root.GetProperty("status").GetString() ?? "",
-                            Message = root.GetProperty("message").GetString() ?? ""
+                            Level = GetStr(root, "level"),
+                            EventType = GetStr(root, "event_type"),
+                            Action = GetStr(root, "action"),
+                            Status = GetStr(root, "status"),
+                            Message = GetStr(root, "message")
                         };
 
                         if (root.TryGetProperty("timestamp", out var timestampProp))
@@ -1552,15 +1569,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                             }
                         }
 
-                        if (root.TryGetProperty("package", out var packageProp) && packageProp.ValueKind != JsonValueKind.Null)
-                        {
-                            cimianEvent.Package = packageProp.GetString() ?? "";
-                        }
+                        // Cimian renamed package/version to package_name/package_version;
+                        // accept either spelling so old session logs still parse.
+                        cimianEvent.Package = GetStr(root, "package_name");
+                        if (string.IsNullOrEmpty(cimianEvent.Package))
+                            cimianEvent.Package = GetStr(root, "package");
 
-                        if (root.TryGetProperty("version", out var versionProp) && versionProp.ValueKind != JsonValueKind.Null)
-                        {
-                            cimianEvent.Version = versionProp.GetString() ?? "";
-                        }
+                        cimianEvent.Version = GetStr(root, "package_version");
+                        if (string.IsNullOrEmpty(cimianEvent.Version))
+                            cimianEvent.Version = GetStr(root, "version");
 
                         if (root.TryGetProperty("error", out var errorProp) && errorProp.ValueKind != JsonValueKind.Null)
                         {
@@ -1680,16 +1697,51 @@ namespace ReportMate.WindowsClient.Services.Modules
                 
                 foreach (var sessionElement in document.RootElement.EnumerateArray())
                 {
+                    // Cimian's session schema moved hostname/user/process_id/log_version
+                    // under an "environment" sub-object. Read top-level first for
+                    // backwards compatibility, then fall back to environment.
+                    JsonElement envElement = default;
+                    var hasEnv = sessionElement.TryGetProperty("environment", out envElement)
+                                 && envElement.ValueKind == JsonValueKind.Object;
+
+                    static string ReadString(JsonElement parent, string name)
+                    {
+                        if (parent.ValueKind != JsonValueKind.Object) return string.Empty;
+                        if (!parent.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
+                            return string.Empty;
+                        return prop.ValueKind == JsonValueKind.String ? (prop.GetString() ?? string.Empty) : prop.ToString();
+                    }
+
+                    static int ReadInt(JsonElement parent, string name)
+                    {
+                        if (parent.ValueKind != JsonValueKind.Object) return 0;
+                        if (!parent.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null) return 0;
+                        if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var i)) return i;
+                        return int.TryParse(prop.ToString(), out var parsed) ? parsed : 0;
+                    }
+
+                    var hostname = ReadString(sessionElement, "hostname");
+                    if (string.IsNullOrEmpty(hostname) && hasEnv) hostname = ReadString(envElement, "hostname");
+
+                    var user = ReadString(sessionElement, "user");
+                    if (string.IsNullOrEmpty(user) && hasEnv) user = ReadString(envElement, "user");
+
+                    var processId = ReadInt(sessionElement, "process_id");
+                    if (processId == 0 && hasEnv) processId = ReadInt(envElement, "process_id");
+
+                    var logVersion = ReadString(sessionElement, "log_version");
+                    if (string.IsNullOrEmpty(logVersion) && hasEnv) logVersion = ReadString(envElement, "log_version");
+
                     var session = new CimianSession
                     {
-                        SessionId = sessionElement.GetProperty("session_id").GetString() ?? "",
-                        RunType = sessionElement.GetProperty("run_type").GetString() ?? "",
-                        Status = sessionElement.GetProperty("status").GetString() ?? "",
-                        DurationSeconds = sessionElement.GetProperty("duration_seconds").GetInt32(),
-                        Hostname = sessionElement.GetProperty("hostname").GetString() ?? "",
-                        User = sessionElement.GetProperty("user").GetString() ?? "",
-                        ProcessId = sessionElement.GetProperty("process_id").GetInt32(),
-                        LogVersion = sessionElement.GetProperty("log_version").GetString() ?? ""
+                        SessionId = ReadString(sessionElement, "session_id"),
+                        RunType = ReadString(sessionElement, "run_type"),
+                        Status = ReadString(sessionElement, "status"),
+                        DurationSeconds = ReadInt(sessionElement, "duration_seconds"),
+                        Hostname = hostname,
+                        User = user,
+                        ProcessId = processId,
+                        LogVersion = logVersion
                     };
 
                     // Parse config section with enhanced Cimian configuration data
@@ -2361,13 +2413,39 @@ namespace ReportMate.WindowsClient.Services.Modules
                     string.Equals(i.LastSeenInSession, sessionId, StringComparison.OrdinalIgnoreCase);
 
                 var failedItemStatuses = new[] { "Error", "Failed", "Install Loop" };
-                var failedItems = allItems
+                var failedItemsFromCatalog = allItems
                     .Where(i => failedItemStatuses.Any(s =>
                         i.CurrentStatus.Equals(s, StringComparison.OrdinalIgnoreCase) ||
                         (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)))
                     .Where(i => !string.IsNullOrEmpty(i.ItemName) && InSession(i))
                     .GroupBy(i => i.ItemName, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion))
+                    .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion));
+
+                // Cimian's items.json doesn't reliably mark items as Failed when an
+                // install attempt fails — its `current_status` snapshot lags. Pull
+                // failures directly from the session's events.jsonl too, where
+                // event_type/action ∈ {install,update,remove} and status == failed.
+                var failedItemsFromEvents = sessionEvents
+                    .Where(e => string.IsNullOrEmpty(sessionId) || e.SessionId == sessionId)
+                    .Where(e => !string.IsNullOrEmpty(e.Package))
+                    .Where(e => e.Status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
+                                e.Status.Equals("error", StringComparison.OrdinalIgnoreCase))
+                    .Where(e =>
+                        e.Action.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                        e.Action.Equals("update", StringComparison.OrdinalIgnoreCase) ||
+                        e.Action.Equals("upgrade", StringComparison.OrdinalIgnoreCase) ||
+                        e.Action.Equals("remove", StringComparison.OrdinalIgnoreCase) ||
+                        e.Action.Equals("uninstall", StringComparison.OrdinalIgnoreCase) ||
+                        e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                        e.EventType.Equals("update", StringComparison.OrdinalIgnoreCase) ||
+                        e.EventType.Equals("remove", StringComparison.OrdinalIgnoreCase))
+                    .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => new InstallEventItem(g.Key, g.First().Version));
+
+                var failedItems = failedItemsFromCatalog
+                    .Concat(failedItemsFromEvents)
+                    .GroupBy(i => i.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.First())
                     .ToList();
 
                 var failedItemNames = failedItems.Select(x => x.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
