@@ -772,7 +772,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
-                _logger.LogInformation("Enhanced Cimian reports processing completed - Sessions: {Sessions}, Items: {Items}, Events: {Events}", 
+                // Workaround for upstream Cimian gap: items.json never reflects the run's
+                // per-item outcome (last_seen_in_session is always empty, install/failure
+                // counts stay 0, current_status doesn't flip after a successful install).
+                // Walk events.jsonl ourselves and rewrite each touched item's per-run
+                // fields so the dashboard can answer "what did the last run actually do?"
+                // — same model the Mac collector derives from ManagedInstallReport.plist.
+                // See docs/CIMIAN_ITEMS_JSON_FINALIZATION.md for the upstream fix.
+                FinalizeItemsFromEvents(data);
+
+                _logger.LogInformation("Enhanced Cimian reports processing completed - Sessions: {Sessions}, Items: {Items}, Events: {Events}",
                     (data.Cimian?.Sessions?.Count ?? 0), (data.Cimian?.Items?.Count ?? 0), (data.Cimian?.Events?.Count ?? 0));
             }
             catch (Exception ex)
@@ -1531,6 +1540,155 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogWarning("Failed to read Cimian session data from {SessionDir}: {Error}", sessionDir, ex.Message);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Cross-references the latest session's events.jsonl with items.json to derive
+        /// per-run outcome state, mirroring how the Mac collector cross-references
+        /// ManagedInstallReport.plist's InstallResults/RemovalResults with ManagedInstalls.
+        ///
+        /// Cimian's items.json is currently a static catalog snapshot — every item ships
+        /// with last_seen_in_session="", install_count=0, failure_count=0 regardless of
+        /// what just happened. This method rewrites those fields for items the run
+        /// actually acted on (install/update/remove with a terminal status), and leaves
+        /// other items' LastSeenInSession empty so downstream filters can distinguish
+        /// "touched this run" from "merely status-checked."
+        /// </summary>
+        private void FinalizeItemsFromEvents(InstallsData data)
+        {
+            var items = data.Cimian?.Items;
+            var sessionEvents = data.Cimian?.Events;
+            if (items is null || items.Count == 0 || sessionEvents is null || sessionEvents.Count == 0)
+                return;
+
+            // Latest session id: prefer sessions.json; fall back to whatever the
+            // events stream tagged itself with so this still works when sessions
+            // failed to parse for any reason.
+            var latestSessionId = data.Cimian?.Sessions?
+                .OrderByDescending(s => s.StartTime)
+                .Select(s => s.SessionId)
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
+            if (string.IsNullOrEmpty(latestSessionId))
+            {
+                latestSessionId = sessionEvents
+                    .Where(e => !string.IsNullOrWhiteSpace(e.SessionId))
+                    .OrderByDescending(e => e.Timestamp)
+                    .Select(e => e.SessionId)
+                    .FirstOrDefault();
+            }
+            if (string.IsNullOrEmpty(latestSessionId))
+                return;
+
+            // Filter to install/update/remove events from the latest session that name
+            // a package and carry a terminal status. status_check events ("installed"
+            // status with no action) are deliberately excluded — they verify state,
+            // they don't represent an action.
+            static bool IsActionEvent(CimianEvent e) =>
+                e.Action.Equals("install",   StringComparison.OrdinalIgnoreCase) ||
+                e.Action.Equals("update",    StringComparison.OrdinalIgnoreCase) ||
+                e.Action.Equals("upgrade",   StringComparison.OrdinalIgnoreCase) ||
+                e.Action.Equals("remove",    StringComparison.OrdinalIgnoreCase) ||
+                e.Action.Equals("uninstall", StringComparison.OrdinalIgnoreCase) ||
+                e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                e.EventType.Equals("update",  StringComparison.OrdinalIgnoreCase) ||
+                e.EventType.Equals("remove",  StringComparison.OrdinalIgnoreCase);
+
+            static bool IsTerminalStatus(string status) =>
+                status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("success",   StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("installed", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("removed",   StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("failed",    StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("error",     StringComparison.OrdinalIgnoreCase);
+
+            var actedOnLatest = sessionEvents
+                .Where(e => e.SessionId == latestSessionId)
+                .Where(e => !string.IsNullOrEmpty(e.Package))
+                .Where(IsActionEvent)
+                .Where(e => IsTerminalStatus(e.Status))
+                .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(e => e.Timestamp).First(),
+                    StringComparer.OrdinalIgnoreCase);
+
+            // Cumulative counts derived from ALL loaded events, not just the latest
+            // session — Cimian itself reads 7 days of history for this same purpose.
+            var installCounts = sessionEvents
+                .Where(e => !string.IsNullOrEmpty(e.Package))
+                .Where(e => e.Action.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                            e.Action.Equals("update",  StringComparison.OrdinalIgnoreCase) ||
+                            e.Action.Equals("upgrade", StringComparison.OrdinalIgnoreCase))
+                .Where(e => e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+                            e.Status.Equals("success",   StringComparison.OrdinalIgnoreCase))
+                .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+            var failureCounts = sessionEvents
+                .Where(e => !string.IsNullOrEmpty(e.Package))
+                .Where(IsActionEvent)
+                .Where(e => e.Status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
+                            e.Status.Equals("error",  StringComparison.OrdinalIgnoreCase))
+                .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+            int touched = 0, succeeded = 0, failed = 0;
+            foreach (var item in items)
+            {
+                if (string.IsNullOrEmpty(item.ItemName)) continue;
+
+                // Rewrite cumulative counters Cimian leaves at zero. Use the events-
+                // derived value; preserve a higher pre-existing value if Cimian ever
+                // starts populating it correctly.
+                if (installCounts.TryGetValue(item.ItemName, out var ic) && ic > item.InstallCount)
+                    item.InstallCount = ic;
+                if (failureCounts.TryGetValue(item.ItemName, out var fc) && fc > item.FailureCount)
+                    item.FailureCount = fc;
+
+                if (!actedOnLatest.TryGetValue(item.ItemName, out var latest))
+                {
+                    // Item wasn't acted on this run — leave LastSeenInSession empty so
+                    // the "Last Run" filter excludes it. Don't touch CurrentStatus;
+                    // Cimian's catalog-snapshot value is the best we have for those.
+                    item.LastSeenInSession = string.Empty;
+                    continue;
+                }
+
+                touched++;
+                item.LastSeenInSession = latestSessionId;
+                item.LastAttemptTime = latest.Timestamp == default ? null : latest.Timestamp;
+
+                var success = latest.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+                              latest.Status.Equals("success",   StringComparison.OrdinalIgnoreCase) ||
+                              latest.Status.Equals("installed", StringComparison.OrdinalIgnoreCase) ||
+                              latest.Status.Equals("removed",   StringComparison.OrdinalIgnoreCase);
+
+                var isRemoval = latest.Action.Equals("remove",    StringComparison.OrdinalIgnoreCase) ||
+                                latest.Action.Equals("uninstall", StringComparison.OrdinalIgnoreCase) ||
+                                latest.EventType.Equals("remove", StringComparison.OrdinalIgnoreCase);
+
+                if (success)
+                {
+                    succeeded++;
+                    item.CurrentStatus = isRemoval ? "Removed" : "Installed";
+                    item.MappedStatus = isRemoval ? "Removed" : "Installed";
+                    item.LastAttemptStatus = item.CurrentStatus;
+                    if (!isRemoval) item.LastSuccessfulTime = item.LastAttemptTime;
+                }
+                else
+                {
+                    failed++;
+                    item.CurrentStatus = "Failed";
+                    item.MappedStatus = "Failed";
+                    item.LastAttemptStatus = "Failed";
+                    if (!string.IsNullOrEmpty(latest.Error)) item.LastError = latest.Error;
+                    else if (!string.IsNullOrEmpty(latest.Message)) item.LastError = latest.Message;
+                }
+            }
+
+            _logger.LogInformation(
+                "Cimian items finalized from events for session {SessionId}: {Touched} touched ({Succeeded} succeeded, {Failed} failed)",
+                latestSessionId, touched, succeeded, failed);
         }
 
         private List<CimianEvent> ReadCimianEventData(string sessionDir, string sessionId)
