@@ -685,15 +685,31 @@ namespace ReportMate.WindowsClient.Services.Modules
                 {
                     // Cimian's log layout is logs/YYYY-MM-DD/HHMM/events.jsonl. Walk both
                     // levels so we land on an actual session directory rather than the
-                    // date folder (which has no events.jsonl of its own).
+                    // date folder (which has no events.jsonl of its own). Validate folder
+                    // names against the expected formats so a stray subdir like `tmp` or
+                    // `old` can't sort lexicographically ahead of a real session and
+                    // strand us on a directory that always returns 0 events.
                     var sessionDir = Directory.EnumerateDirectories(CIMIAN_LOGS_PATH)
-                        .OrderByDescending(Path.GetFileName)
-                        .SelectMany(dateDir => Directory.EnumerateDirectories(dateDir)
+                        .Select(dateDir => new { Path = dateDir, Name = Path.GetFileName(dateDir) })
+                        .Where(d => DateTime.TryParseExact(
+                            d.Name, "yyyy-MM-dd",
+                            CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                        .OrderByDescending(d => d.Name)
+                        .SelectMany(dateDir => Directory.EnumerateDirectories(dateDir.Path)
                             .Select(timeDir => new
                             {
                                 Path = timeDir,
-                                SessionId = $"{Path.GetFileName(dateDir)}-{Path.GetFileName(timeDir)}"
+                                DateName = dateDir.Name,
+                                TimeName = Path.GetFileName(timeDir)
                             }))
+                        .Where(s => DateTime.TryParseExact(
+                            s.TimeName, "HHmm",
+                            CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                        .Select(s => new
+                        {
+                            s.Path,
+                            SessionId = $"{s.DateName}-{s.TimeName}"
+                        })
                         .OrderByDescending(s => s.SessionId)
                         .FirstOrDefault();
 
@@ -1545,6 +1561,11 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                         static string GetStr(JsonElement parent, string name)
                         {
+                            // TryGetProperty throws if invoked on a non-object element
+                            // (e.g. a malformed events.jsonl line that's an array or
+                            // a scalar). Guard ValueKind so corrupt lines don't blow
+                            // up parsing — the outer try/catch will then skip them.
+                            if (parent.ValueKind != JsonValueKind.Object) return string.Empty;
                             if (!parent.TryGetProperty(name, out var prop) || prop.ValueKind == JsonValueKind.Null)
                                 return string.Empty;
                             return prop.ValueKind == JsonValueKind.String ? (prop.GetString() ?? string.Empty) : prop.ToString();
@@ -1694,7 +1715,18 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                 var json = File.ReadAllText(filePath);
                 using var document = JsonDocument.Parse(json);
-                
+
+                // sessions.json is expected to be a JSON array. If Cimian writes
+                // null/{}/scalar (early-bootstrap states or a corrupted report),
+                // EnumerateArray throws and aborts the whole load — guard explicitly
+                // so the rest of the installs module still gets best-effort data.
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    _logger.LogDebug("Cimian sessions report at {FilePath} is not a JSON array (kind={Kind})",
+                        filePath, document.RootElement.ValueKind);
+                    return sessions;
+                }
+
                 foreach (var sessionElement in document.RootElement.EnumerateArray())
                 {
                     // Cimian's session schema moved hostname/user/process_id/log_version
