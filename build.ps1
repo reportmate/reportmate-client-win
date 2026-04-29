@@ -263,6 +263,27 @@ function Test-SignTool {
 
     if ($picked) {
         $script:SignToolPath = $picked.FullName
+        $signDir = $picked.Directory.FullName
+
+        # Prepend the resolved dir to PATH and strip any stale arm64\signtool
+        # dir already on PATH. cimipkg.exe (and any other tool we call that
+        # resolves signtool via PATH) iterates PATH front-to-back and returns
+        # the first match — leaving an arm64 entry ahead of x64 makes it pick
+        # the wrong binary on x64 hosts. We can't dictate cimipkg's behavior,
+        # but we can hand it a PATH where the right answer comes first.
+        $entries = $env:Path -split ';' | Where-Object { $_ -ne '' }
+        if ($hostArch -ne 'arm64') {
+            $entries = $entries | Where-Object {
+                -not ($_.TrimEnd('\') -ilike '*\Windows Kits\10\bin\*\arm64')
+            }
+        }
+        if (-not ($entries | Where-Object { $_ -ieq $signDir })) {
+            $entries = ,$signDir + $entries
+        } else {
+            $entries = ,$signDir + ($entries | Where-Object { $_ -ine $signDir })
+        }
+        $env:Path = ($entries -join ';')
+
         Write-Success "signtool discovered at $($picked.FullName)"
         return
     }
