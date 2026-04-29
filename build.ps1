@@ -202,15 +202,38 @@ function Test-SignTool {
 
     $roots = $roots | Where-Object { Test-Path $_ } | Select-Object -Unique
 
-    # scan every root for any architecture's signtool.exe
+    # The Windows SDK installs signtool.exe under <kit>\bin\<version>\<arch>\.
+    # Pick the binary that matches the host architecture — picking the
+    # newest-by-mtime regardless of arch silently selects arm64\signtool.exe
+    # on x64 hosts when the arm64 file was written last by the SDK installer
+    # (Win11 26100.0 ships them ~14 seconds apart), causing
+    # "Machine Type Mismatch" at sign time.
+    $hostArch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+    $archPriority = switch ($hostArch) {
+        'x64'   { @('x64', 'x86') }       # x64 hosts can run x86 fallback, never arm64
+        'arm64' { @('arm64', 'x64', 'x86') } # arm64 can emulate x64/x86
+        'x86'   { @('x86') }
+        default { @($hostArch, 'x64', 'x86') }
+    }
+
+    $picked = $null
     foreach ($root in $roots) {
-        $exe = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -EA SilentlyContinue |
-               Sort-Object LastWriteTime -Desc | Select-Object -First 1
-        if ($exe) {
-            Add-ToPath $exe.Directory.FullName
-            Write-Success "signtool discovered at $($exe.FullName)"
-            return
+        $candidates = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -EA SilentlyContinue
+        if (-not $candidates) { continue }
+
+        foreach ($arch in $archPriority) {
+            $match = $candidates |
+                     Where-Object { $_.Directory.Name -ieq $arch } |
+                     Sort-Object LastWriteTime -Desc | Select-Object -First 1
+            if ($match) { $picked = $match; break }
         }
+        if ($picked) { break }
+    }
+
+    if ($picked) {
+        Add-ToPath $picked.Directory.FullName
+        Write-Success "signtool discovered at $($picked.FullName)"
+        return
     }
 
     # graceful failure
