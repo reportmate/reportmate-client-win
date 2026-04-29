@@ -1614,21 +1614,37 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Cumulative counts derived from ALL loaded events, not just the latest
             // session — Cimian itself reads 7 days of history for this same purpose.
+            // Use the same IsActionEvent / IsTerminalStatus predicates as the per-
+            // session outcome detection above so events using EventType (instead of
+            // Action) and the "installed"/"removed" success vocabulary aren't
+            // undercounted.
+            static bool IsInstallishAction(CimianEvent e) =>
+                e.Action.Equals("install",   StringComparison.OrdinalIgnoreCase) ||
+                e.Action.Equals("update",    StringComparison.OrdinalIgnoreCase) ||
+                e.Action.Equals("upgrade",   StringComparison.OrdinalIgnoreCase) ||
+                e.EventType.Equals("install", StringComparison.OrdinalIgnoreCase) ||
+                e.EventType.Equals("update",  StringComparison.OrdinalIgnoreCase);
+
+            static bool IsSuccessStatus(string status) =>
+                status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("success",   StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("installed", StringComparison.OrdinalIgnoreCase);
+
+            static bool IsFailureStatus(string status) =>
+                status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
+                status.Equals("error",  StringComparison.OrdinalIgnoreCase);
+
             var installCounts = sessionEvents
                 .Where(e => !string.IsNullOrEmpty(e.Package))
-                .Where(e => e.Action.Equals("install", StringComparison.OrdinalIgnoreCase) ||
-                            e.Action.Equals("update",  StringComparison.OrdinalIgnoreCase) ||
-                            e.Action.Equals("upgrade", StringComparison.OrdinalIgnoreCase))
-                .Where(e => e.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
-                            e.Status.Equals("success",   StringComparison.OrdinalIgnoreCase))
+                .Where(IsInstallishAction)
+                .Where(e => IsSuccessStatus(e.Status))
                 .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
 
             var failureCounts = sessionEvents
                 .Where(e => !string.IsNullOrEmpty(e.Package))
                 .Where(IsActionEvent)
-                .Where(e => e.Status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
-                            e.Status.Equals("error",  StringComparison.OrdinalIgnoreCase))
+                .Where(e => IsFailureStatus(e.Status))
                 .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
 
@@ -1674,6 +1690,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                     item.MappedStatus = isRemoval ? "Removed" : "Installed";
                     item.LastAttemptStatus = item.CurrentStatus;
                     if (!isRemoval) item.LastSuccessfulTime = item.LastAttemptTime;
+                    // Clear error/warning text from prior failed runs — this is a
+                    // per-run rewrite and stale messages would otherwise leak into
+                    // the success view.
+                    item.LastError = string.Empty;
+                    item.LastWarning = string.Empty;
                 }
                 else
                 {
@@ -1681,8 +1702,17 @@ namespace ReportMate.WindowsClient.Services.Modules
                     item.CurrentStatus = "Failed";
                     item.MappedStatus = "Failed";
                     item.LastAttemptStatus = "Failed";
-                    if (!string.IsNullOrEmpty(latest.Error)) item.LastError = latest.Error;
-                    else if (!string.IsNullOrEmpty(latest.Message)) item.LastError = latest.Message;
+                    // Always overwrite LastError on failure — even when the event
+                    // doesn't carry text, stale text from a prior run would be
+                    // misleading. Build a deterministic fallback from action+status.
+                    item.LastError =
+                        !string.IsNullOrEmpty(latest.Error)   ? latest.Error :
+                        !string.IsNullOrEmpty(latest.Message) ? latest.Message :
+                        !string.IsNullOrEmpty(latest.Action) && !string.IsNullOrEmpty(latest.Status)
+                            ? $"{latest.Action} failed with status '{latest.Status}'" :
+                        !string.IsNullOrEmpty(latest.Action)  ? $"{latest.Action} failed" :
+                        !string.IsNullOrEmpty(latest.Status)  ? $"Operation failed with status '{latest.Status}'" :
+                        "Operation failed";
                 }
             }
 
