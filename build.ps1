@@ -174,26 +174,64 @@ function Get-SigningCertThumbprint {
         Select-Object -First 1 -ExpandProperty Thumbprint
 }
 
-# Function to ensure signtool is available
+# Resolves the right signtool.exe for the host architecture and stores its
+# full path in $script:SignToolPath. The signing step invokes it by full
+# path so we don't rely on PATH order — a stale `signtool.exe` already on
+# PATH (e.g. from a VS Developer prompt that prepends arm64\) used to win
+# the resolution silently and trip "Machine Type Mismatch" at sign time.
 function Test-SignTool {
-    # helper to prepend path only once
-    function Add-ToPath([string]$dir) {
-        if (-not [string]::IsNullOrWhiteSpace($dir) -and
-            -not ($env:Path -split ';' | Where-Object { $_ -ieq $dir })) {
-            $env:Path = "$dir;$env:Path"
-        }
+    # The Windows SDK installs signtool.exe under <kit>\bin\<version>\<arch>\.
+    # Pick the binary that matches the host architecture — relying on PATH
+    # silently selects arm64\signtool.exe on x64 hosts when a Developer
+    # prompt has prepended the arm64 dir, causing "Machine Type Mismatch".
+    $hostArch = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+    $archPriority = switch ($hostArch) {
+        'x64'   { @('x64', 'x86') }            # x64 hosts can fall back to x86, never arm64
+        'arm64' { @('arm64', 'x64', 'x86') }   # arm64 can emulate x64/x86
+        'x86'   { @('x86') }
+        default { @($hostArch, 'x64', 'x86') }
     }
 
-    # already reachable?
-    if (Get-Command signtool.exe -EA SilentlyContinue) { return }
+    # Validate a signtool candidate by reading its PE header — guards against
+    # a non-arch-suffixed signtool.exe (e.g. App Certification Kit, VS Build
+    # Tools shims) being picked when its actual machine type doesn't match.
+    function Test-PeMatchesHost {
+        param([string]$Path, [string]$HostArch)
+        try {
+            $bytes = [System.IO.File]::ReadAllBytes($Path)
+            if ($bytes.Length -lt 0x3C + 4) { return $false }
+            $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
+            if ($bytes.Length -lt $peOffset + 6) { return $false }
+            # PE signature: 'PE\0\0' then 2-byte machine type
+            if ($bytes[$peOffset]    -ne 0x50 -or $bytes[$peOffset+1] -ne 0x45 -or
+                $bytes[$peOffset+2]  -ne 0x00 -or $bytes[$peOffset+3] -ne 0x00) { return $false }
+            $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
+            $expected = switch ($HostArch) {
+                'x64'   { 0x8664 }
+                'arm64' { 0xAA64 }
+                'x86'   { 0x014C }
+                default { 0 }
+            }
+            # x64 hosts can also run x86 (0x014C); arm64 can run x64+x86.
+            $compat = switch ($HostArch) {
+                'x64'   { @(0x8664, 0x014C) }
+                'arm64' { @(0xAA64, 0x8664, 0x014C) }
+                'x86'   { @(0x014C) }
+                default { @($expected) }
+            }
+            return $compat -contains $machine
+        } catch { return $false }
+    }
 
-    # harvest possible SDK roots
+    # harvest possible SDK roots (plus VS Build Tools shim and App Cert Kit)
     $roots = @(
         "${env:ProgramFiles}\Windows Kits\10\bin",
-        "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin",
+        "${env:ProgramFiles(x86)}\Windows Kits\10\App Certification Kit",
+        "${env:ProgramFiles}\Microsoft Visual Studio",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio"
     )
 
-    # add KitsRoot10 from the registry (covers non-standard installs)
     try {
         $kitsRoot = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' `
                      -EA Stop).KitsRoot10
@@ -202,15 +240,52 @@ function Test-SignTool {
 
     $roots = $roots | Where-Object { Test-Path $_ } | Select-Object -Unique
 
-    # scan every root for any architecture's signtool.exe
+    $picked = $null
     foreach ($root in $roots) {
-        $exe = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -EA SilentlyContinue |
-               Sort-Object LastWriteTime -Desc | Select-Object -First 1
-        if ($exe) {
-            Add-ToPath $exe.Directory.FullName
-            Write-Success "signtool discovered at $($exe.FullName)"
-            return
+        $candidates = Get-ChildItem -Path $root -Recurse -Filter signtool.exe -EA SilentlyContinue
+        if (-not $candidates) { continue }
+
+        # Prefer candidates whose immediate parent directory matches host arch.
+        foreach ($arch in $archPriority) {
+            $match = $candidates |
+                     Where-Object { $_.Directory.Name -ieq $arch -and (Test-PeMatchesHost $_.FullName $hostArch) } |
+                     Sort-Object LastWriteTime -Desc | Select-Object -First 1
+            if ($match) { $picked = $match; break }
         }
+        if ($picked) { break }
+
+        # Fallback: any signtool.exe under this root whose PE header passes.
+        $picked = $candidates |
+                  Where-Object { Test-PeMatchesHost $_.FullName $hostArch } |
+                  Sort-Object LastWriteTime -Desc | Select-Object -First 1
+        if ($picked) { break }
+    }
+
+    if ($picked) {
+        $script:SignToolPath = $picked.FullName
+        $signDir = $picked.Directory.FullName
+
+        # Prepend the resolved dir to PATH and strip any stale arm64\signtool
+        # dir already on PATH. cimipkg.exe (and any other tool we call that
+        # resolves signtool via PATH) iterates PATH front-to-back and returns
+        # the first match — leaving an arm64 entry ahead of x64 makes it pick
+        # the wrong binary on x64 hosts. We can't dictate cimipkg's behavior,
+        # but we can hand it a PATH where the right answer comes first.
+        $entries = $env:Path -split ';' | Where-Object { $_ -ne '' }
+        if ($hostArch -ne 'arm64') {
+            $entries = $entries | Where-Object {
+                -not ($_.TrimEnd('\') -ilike '*\Windows Kits\10\bin\*\arm64')
+            }
+        }
+        if (-not ($entries | Where-Object { $_ -ieq $signDir })) {
+            $entries = ,$signDir + $entries
+        } else {
+            $entries = ,$signDir + ($entries | Where-Object { $_ -ine $signDir })
+        }
+        $env:Path = ($entries -join ';')
+
+        Write-Success "signtool discovered at $($picked.FullName)"
+        return
     }
 
     # graceful failure
@@ -303,9 +378,17 @@ function signPackage {
         'http://timestamp.entrust.net/TSS/RFC3161sha2TS'
     )
 
+    # Always invoke by full path to defeat any PATH that resolves
+    # signtool.exe to the wrong architecture (e.g. arm64 on x64 hosts).
+    $signToolExe = if ($script:SignToolPath -and (Test-Path $script:SignToolPath)) {
+        $script:SignToolPath
+    } else {
+        (Get-Command signtool.exe -EA Stop).Source
+    }
+
     foreach ($tsa in $tsaList) {
         Write-Info "Signing '$FilePath' using $tsa ..."
-        & signtool.exe sign `
+        & $signToolExe sign `
             /sha1  $Thumbprint `
             /fd    SHA256 `
             /tr    $tsa `
