@@ -62,6 +62,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Secure Boot information
             await ProcessSecureBootInfo(data);
 
+            // Process Firmware password information
+            await ProcessFirmwarePasswordInfo(data);
+
             // Process Secure Shell information
             await ProcessSecureShellInfo(data);
 
@@ -546,6 +549,141 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to collect UEFI {Store} certificates", storeName);
+            }
+        }
+
+        /// <summary>
+        /// Collect Firmware password protection state.
+        /// Uses SMBIOS Win32_ComputerSystem.AdminPasswordStatus as the cross-OEM source
+        /// (works on Dell, HP, and most others), and augments Lenovo systems with the
+        /// Lenovo_BiosPasswordSettings WMI provider for the full POP/HDP/SVP/SMP bitmask.
+        /// </summary>
+        private async Task ProcessFirmwarePasswordInfo(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting Firmware password status via PowerShell/CIM");
+
+                // PowerShellRunner invokes powershell.exe with -Command "<script>", so embedded
+                // double quotes break argument parsing. Use single quotes throughout the script
+                // and Where-Object instead of -Filter (which would require quoted WQL).
+                var script = @"
+                    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+                    $result = [ordered]@{
+                        Manufacturer = $cs.Manufacturer
+                        Source = 'SMBIOS'
+                        AdminPasswordStatus = [int]$cs.AdminPasswordStatus
+                        AdminPasswordSet = $null
+                        PowerOnPasswordSet = $null
+                        HddPasswordSet = $null
+                        RawState = $null
+                        ErrorMessage = $null
+                    }
+
+                    # SMBIOS AdminPasswordStatus: 0=Disabled, 1=Enabled, 2=NotImplemented, 3=Unknown
+                    switch ([int]$cs.AdminPasswordStatus) {
+                        0 { $result.AdminPasswordSet = $false }
+                        1 { $result.AdminPasswordSet = $true }
+                    }
+
+                    if ($cs.Manufacturer -match 'Lenovo') {
+                        try {
+                            $state = [int](Get-CimInstance -Namespace root\wmi -ClassName Lenovo_BiosPasswordSettings -ErrorAction Stop).PasswordState
+                            $result.Source = 'Lenovo WMI'
+                            $result.RawState = $state
+                            # Bitmask: bit0=POP, bit1=HDP, bit2=SVP, bit3=SMP
+                            $result.PowerOnPasswordSet = (($state -band 1) -ne 0)
+                            $result.HddPasswordSet     = (($state -band 2) -ne 0)
+                            $result.AdminPasswordSet   = (($state -band 4) -ne 0)
+                        } catch {
+                            $result.ErrorMessage = 'Lenovo_BiosPasswordSettings query failed: ' + $_.Exception.Message
+                        }
+                    } elseif ($cs.Manufacturer -match 'Dell') {
+                        # Dell only exposes detail via root\dcim\sysman when Dell Command|Monitor is installed.
+                        try {
+                            $dell = Get-CimInstance -Namespace root\dcim\sysman -ClassName DCIM_BIOSPassword -ErrorAction Stop
+                            if ($dell) {
+                                $result.Source = 'Dell CIM'
+                                $admin = $dell | Where-Object { $_.AttributeName -eq 'Admin' } | Select-Object -First 1
+                                if ($admin) { $result.AdminPasswordSet = ($admin.IsSet -eq $true) -or ($admin.IsSet -eq 1) }
+                                $sys = $dell | Where-Object { $_.AttributeName -eq 'System' } | Select-Object -First 1
+                                if ($sys)   { $result.PowerOnPasswordSet = ($sys.IsSet   -eq $true) -or ($sys.IsSet   -eq 1) }
+                            }
+                        } catch {
+                            # Dell Command|Monitor not present — fall back to SMBIOS value already captured.
+                        }
+                    } elseif ($cs.Manufacturer -match 'HP|Hewlett') {
+                        try {
+                            $hp = Get-CimInstance -Namespace root\HP\InstrumentedBIOS -ClassName HP_BIOSPassword -ErrorAction Stop
+                            if ($hp) {
+                                $result.Source = 'HP CMI'
+                                foreach ($p in $hp) {
+                                    if ($p.Name -match 'Setup|Admin') { $result.AdminPasswordSet = ($p.IsSet -eq $true) }
+                                    elseif ($p.Name -match 'Power|Boot') { $result.PowerOnPasswordSet = ($p.IsSet -eq $true) }
+                                }
+                            }
+                        } catch {
+                            # HP CMI provider not present — fall back to SMBIOS value already captured.
+                        }
+                    }
+
+                    $result | ConvertTo-Json -Compress
+                ";
+
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    // PowerShellRunner returns null on non-zero exit or empty stdout; surface that
+                    // distinction so telemetry/UI can tell 'no data' from 'command failed'.
+                    data.FirmwarePassword.StatusDisplay = "Unknown";
+                    data.FirmwarePassword.ErrorMessage = "PowerShell returned no output (non-zero exit code or empty stdout — check process logs)";
+                    return;
+                }
+
+                using var doc = JsonDocument.Parse(result);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("Manufacturer", out var mfg) && mfg.ValueKind == JsonValueKind.String)
+                    data.FirmwarePassword.Manufacturer = mfg.GetString() ?? string.Empty;
+
+                if (root.TryGetProperty("Source", out var src) && src.ValueKind == JsonValueKind.String)
+                    data.FirmwarePassword.Source = src.GetString() ?? string.Empty;
+
+                if (root.TryGetProperty("AdminPasswordStatus", out var aps) && aps.ValueKind == JsonValueKind.Number)
+                    data.FirmwarePassword.AdminPasswordStatus = aps.GetInt32();
+
+                if (root.TryGetProperty("AdminPasswordSet", out var ap))
+                    data.FirmwarePassword.AdminPasswordSet = ap.ValueKind == JsonValueKind.True ? true
+                        : ap.ValueKind == JsonValueKind.False ? false : (bool?)null;
+
+                if (root.TryGetProperty("PowerOnPasswordSet", out var pop))
+                    data.FirmwarePassword.PowerOnPasswordSet = pop.ValueKind == JsonValueKind.True ? true
+                        : pop.ValueKind == JsonValueKind.False ? false : (bool?)null;
+
+                if (root.TryGetProperty("HddPasswordSet", out var hdp))
+                    data.FirmwarePassword.HddPasswordSet = hdp.ValueKind == JsonValueKind.True ? true
+                        : hdp.ValueKind == JsonValueKind.False ? false : (bool?)null;
+
+                if (root.TryGetProperty("RawState", out var rs) && rs.ValueKind == JsonValueKind.Number)
+                    data.FirmwarePassword.RawState = rs.GetInt32();
+
+                if (root.TryGetProperty("ErrorMessage", out var err) && err.ValueKind == JsonValueKind.String)
+                    data.FirmwarePassword.ErrorMessage = err.GetString();
+
+                _logger.LogInformation("Firmware Password ({Mfg}, source={Source}): Admin={Admin}, PowerOn={Power}, HDD={Hdd}, SMBIOSStatus={SmbiosStatus}",
+                    data.FirmwarePassword.Manufacturer,
+                    data.FirmwarePassword.Source,
+                    data.FirmwarePassword.AdminPasswordSet,
+                    data.FirmwarePassword.PowerOnPasswordSet,
+                    data.FirmwarePassword.HddPasswordSet,
+                    data.FirmwarePassword.AdminPasswordStatus);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect Firmware password status");
+                data.FirmwarePassword.StatusDisplay = "Unknown";
+                data.FirmwarePassword.ErrorMessage = ex.Message;
             }
         }
 
@@ -1388,6 +1526,30 @@ namespace ReportMate.WindowsClient.Services.Modules
             else
             {
                 data.Tpm.StatusDisplay = "Not Present";
+            }
+
+            // Firmware password status display — derived from collected fields
+            if (string.IsNullOrEmpty(data.FirmwarePassword.StatusDisplay))
+            {
+                if (data.FirmwarePassword.AdminPasswordSet == true
+                    || data.FirmwarePassword.PowerOnPasswordSet == true
+                    || data.FirmwarePassword.HddPasswordSet == true)
+                {
+                    data.FirmwarePassword.StatusDisplay = "Set";
+                }
+                else if (data.FirmwarePassword.AdminPasswordStatus == 2)
+                {
+                    data.FirmwarePassword.StatusDisplay = "Not Implemented";
+                }
+                else if (data.FirmwarePassword.AdminPasswordSet == false
+                    || data.FirmwarePassword.AdminPasswordStatus == 0)
+                {
+                    data.FirmwarePassword.StatusDisplay = "Not Set";
+                }
+                else
+                {
+                    data.FirmwarePassword.StatusDisplay = "Unknown";
+                }
             }
         }
 
