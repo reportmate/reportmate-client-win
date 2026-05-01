@@ -564,6 +564,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogDebug("Collecting Firmware password status via PowerShell/CIM");
 
+                // PowerShellRunner invokes powershell.exe with -Command "<script>", so embedded
+                // double quotes break argument parsing. Use single quotes throughout the script
+                // and Where-Object instead of -Filter (which would require quoted WQL).
                 var script = @"
                     $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
                     $result = [ordered]@{
@@ -593,19 +596,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                             $result.HddPasswordSet     = (($state -band 2) -ne 0)
                             $result.AdminPasswordSet   = (($state -band 4) -ne 0)
                         } catch {
-                            $result.ErrorMessage = ""Lenovo_BiosPasswordSettings query failed: $($_.Exception.Message)""
+                            $result.ErrorMessage = 'Lenovo_BiosPasswordSettings query failed: ' + $_.Exception.Message
                         }
                     } elseif ($cs.Manufacturer -match 'Dell') {
                         # Dell only exposes detail via root\dcim\sysman when Dell Command|Monitor is installed.
                         try {
-                            $admin = Get-CimInstance -Namespace root\dcim\sysman -ClassName DCIM_BIOSPassword -Filter ""AttributeName='Admin'"" -ErrorAction Stop
-                            if ($admin) {
+                            $dell = Get-CimInstance -Namespace root\dcim\sysman -ClassName DCIM_BIOSPassword -ErrorAction Stop
+                            if ($dell) {
                                 $result.Source = 'Dell CIM'
-                                $result.AdminPasswordSet = ($admin.IsSet -eq $true) -or ($admin.IsSet -eq 1)
-                            }
-                            $sys = Get-CimInstance -Namespace root\dcim\sysman -ClassName DCIM_BIOSPassword -Filter ""AttributeName='System'"" -ErrorAction SilentlyContinue
-                            if ($sys) {
-                                $result.PowerOnPasswordSet = ($sys.IsSet -eq $true) -or ($sys.IsSet -eq 1)
+                                $admin = $dell | Where-Object { $_.AttributeName -eq 'Admin' } | Select-Object -First 1
+                                if ($admin) { $result.AdminPasswordSet = ($admin.IsSet -eq $true) -or ($admin.IsSet -eq 1) }
+                                $sys = $dell | Where-Object { $_.AttributeName -eq 'System' } | Select-Object -First 1
+                                if ($sys)   { $result.PowerOnPasswordSet = ($sys.IsSet   -eq $true) -or ($sys.IsSet   -eq 1) }
                             }
                         } catch {
                             # Dell Command|Monitor not present — fall back to SMBIOS value already captured.
@@ -632,7 +634,10 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                 if (string.IsNullOrWhiteSpace(result))
                 {
+                    // PowerShellRunner returns null on non-zero exit or empty stdout; surface that
+                    // distinction so telemetry/UI can tell 'no data' from 'command failed'.
                     data.FirmwarePassword.StatusDisplay = "Unknown";
+                    data.FirmwarePassword.ErrorMessage = "PowerShell returned no output (non-zero exit code or empty stdout — check process logs)";
                     return;
                 }
 
