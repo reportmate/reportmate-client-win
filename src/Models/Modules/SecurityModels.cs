@@ -14,6 +14,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public EncryptionInfo Encryption { get; set; } = new();
         public TpmInfo Tpm { get; set; } = new();
         public SecureBootInfo SecureBoot { get; set; } = new();
+        public FirmwarePasswordInfo FirmwarePassword { get; set; } = new();
         public SecureShellInfo SecureShell { get; set; } = new();
         public RdpInfo Rdp { get; set; } = new();
         public DeviceGuardInfo DeviceGuard { get; set; } = new();
@@ -186,6 +187,25 @@ namespace ReportMate.WindowsClient.Models.Modules
         
         // Computed status fields for UI display
         public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled", "Not Present"
+    }
+
+    /// <summary>
+    /// Firmware password protection state.
+    /// SMBIOS AdminPasswordStatus is queried on all OEMs (most report it via standard WMI).
+    /// Lenovo systems are augmented with Lenovo_BiosPasswordSettings for POP/HDP/SVP/SMP detail.
+    /// Dell exposes detail only when Dell Command|Monitor (root\dcim\sysman) is installed.
+    /// </summary>
+    public class FirmwarePasswordInfo
+    {
+        public string Manufacturer { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty; // "SMBIOS", "Lenovo WMI", "Dell CIM", "HP CMI"
+        public bool? AdminPasswordSet { get; set; }     // Supervisor / Setup password
+        public bool? PowerOnPasswordSet { get; set; }   // Power-on password (POP)
+        public bool? HddPasswordSet { get; set; }       // Hard disk password (HDP)
+        public int? RawState { get; set; }              // Raw Lenovo PasswordState bitmask
+        public int? AdminPasswordStatus { get; set; }   // SMBIOS: 0=Disabled, 1=Enabled, 2=NotImplemented, 3=Unknown
+        public string StatusDisplay { get; set; } = string.Empty; // "Set", "Not Set", "Not Implemented", "Unknown"
+        public string? ErrorMessage { get; set; }
     }
 
     public class SecurityUpdate
