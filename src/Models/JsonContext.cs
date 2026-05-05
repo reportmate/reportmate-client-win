@@ -130,6 +130,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(Modules.SecureBootInfo))]
 [JsonSerializable(typeof(Modules.UefiCertificateInfo))]
 [JsonSerializable(typeof(List<Modules.UefiCertificateInfo>))]
+[JsonSerializable(typeof(Modules.FirmwarePasswordInfo))]
 // Individual modular model types (to resolve conflicts)
 [JsonSerializable(typeof(Modules.ProcessorInfo), TypeInfoPropertyName = "ModularProcessorInfo")]
 [JsonSerializable(typeof(Modules.MemoryInfo), TypeInfoPropertyName = "ModularMemoryInfo")]
