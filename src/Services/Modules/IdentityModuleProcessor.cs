@@ -270,9 +270,17 @@ namespace ReportMate.WindowsClient.Services.Modules
                         $_.LocalPath -like 'C:\Users\*' -and
                         $_.LocalPath -notlike '*\Public'
                     }
-                    
+
                     $existingLocalUsers = Get-LocalUser | Select-Object -ExpandProperty SID | ForEach-Object { $_.Value }
-                    
+
+                    # Build a set of admin SIDs from the local Administrators group.
+                    # Members include local users, domain users, and Entra ID users (SIDs S-1-12-1-*).
+                    $adminSids = @{}
+                    try {
+                        Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue |
+                            ForEach-Object { if ($_.SID -and $_.SID.Value) { $adminSids[$_.SID.Value] = $true } }
+                    } catch { }
+
                     $users = foreach ($profile in $profiles) {
                         # Skip if this SID is already a local user
                         if ($existingLocalUsers -contains $profile.SID) { continue }
@@ -328,6 +336,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                             HomeDirectory = $profile.LocalPath
                             AccountType = $accountType
                             IsLocal = $isLocal
+                            IsAdmin = [bool]$adminSids[$sid]
                             LastUseTime = if ($profile.LastUseTime) { $profile.LastUseTime.ToString('o') } else { $null }
                             UserPrincipalName = $upn
                         }
@@ -375,6 +384,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 HomeDirectory = GetJsonStringValue(userElement, "HomeDirectory"),
                                 AccountType = GetJsonStringValue(userElement, "AccountType"),
                                 IsLocal = false,
+                                IsAdmin = GetJsonBoolValue(userElement, "IsAdmin"),
                                 UserPrincipalName = GetJsonStringValue(userElement, "UserPrincipalName")
                             };
 
