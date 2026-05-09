@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9][0-9][0-9][0-9]*'
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~\.nuget\packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
+
+      - name: Derive version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v',''
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Tag: $tag -> Version: $version"
+
+      - name: Build (unsigned)
+        shell: pwsh
+        run: .\build.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -Clean
+
+      - name: List release artifacts
+        shell: pwsh
+        run: |
+          if (Test-Path release) {
+            Get-ChildItem release -Recurse | ForEach-Object {
+              $sizeKB = [math]::Round($_.Length / 1KB, 1)
+              Write-Host "  $($_.Name) ($sizeKB KB)"
+            }
+          }
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $dotnet = (dotnet --version).Trim()
+          $os = (Get-CimInstance Win32_OperatingSystem).Caption.Trim()
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $title = "ReportMate $version"
+
+          $buildInfo = @"
+          ## Build info
+
+          Built with .NET SDK $dotnet on $os, via GitHub Actions: $runUrl. Provided **unsigned**.
+          "@
+
+          $usage = @"
+          ## Quick start
+
+          ``````cmd
+          msiexec /i ReportMate-$version.msi /quiet /norestart
+          ``````
+
+          ## Enterprise configuration (Registry / CSP / OMA-URI)
+
+          - ``HKLM\SOFTWARE\ReportMate\ApiUrl`` --- API endpoint URL
+          - ``HKLM\SOFTWARE\ReportMate\ClientPassphrase`` --- access passphrase
+          - ``HKLM\SOFTWARE\ReportMate\CollectionInterval`` --- data collection interval
+
+          ## Signing for enterprise deployment
+
+          ``````powershell
+          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" managedreportsrunner.exe
+          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" ReportMate-$version.msi
+          ``````
+
+          Built from commit ``$env:GITHUB_SHA``.
+          "@
+
+          $autoNotes = gh api -X POST "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name=$tag --jq .body
+          $notes = "$buildInfo`n`n$autoNotes`n`n$usage"
+
+          $artifacts = @()
+          if (Test-Path release) {
+            $artifacts += Get-ChildItem release -Recurse -File -Include *.msi,*.nupkg,*.zip | ForEach-Object { $_.FullName }
+          }
+          if ($artifacts.Count -eq 0) { throw 'No artifacts to upload' }
+          gh release create $tag @artifacts --title $title --notes $notes
