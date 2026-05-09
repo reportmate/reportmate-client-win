@@ -38,8 +38,6 @@ jobs:
           restore-keys: |
             nuget-${{ runner.os }}-
 
-      - name: Restore
-        run: dotnet restore ReportMate.sln
-
-      - name: Build
-        run: dotnet build ReportMate.sln --configuration Release --no-restore --verbosity minimal
+      - name: Build (regenerates Generated/ModuleVersions.g.cs)
+        shell: pwsh
+        run: .\build.ps1 -NoSign -SkipMSI -SkipNUPKG -SkipZIP -Configuration Release
