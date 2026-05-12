@@ -176,8 +176,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                         data.Usage.ActiveSessions.Count,
                         data.ApplicationsWithUsage);
 
-                    // Build daily per-app summaries for historical retention
+                    // Build daily per-app summaries for historical retention.
+                    // Then merge per-user foreground/active time deltas from the
+                    // companion usagetracker.exe (no-op if it isn't installed or
+                    // hasn't produced any output yet).
                     data.DailyUsageHistory = _usageService.BuildDailySummaries(data.Usage.ActiveSessions);
+                    data.DailyUsageHistory = _usageService.MergeUserSessionTrackerData(
+                        data.DailyUsageHistory, data.InstalledApplications);
                 }
                 else
                 {

@@ -765,6 +765,49 @@ Write-Step "Preparing package payload..."
 Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $ProgramFilesPayloadDir -Force
 Write-Verbose "Copied managedreportsrunner.exe to payload root"
 
+# ─────────────── USAGE TRACKER (user-context companion) ───────────────
+# Builds usagetracker.exe, a small companion that runs per-user via a
+# logon-triggered scheduled task. It populates foreground/active time
+# data that managedreportsrunner.exe (running as SYSTEM in session 0)
+# can't observe directly. See usagetracker/Program.cs for the rationale.
+$usageTrackerProj = Join-Path $RootDir "usagetracker\UsageTracker.csproj"
+$usageTrackerPublishDir = Join-Path $RootDir "usagetracker\bin\$Configuration\net10.0-windows\win-x64\publish"
+if (Test-Path $usageTrackerProj) {
+    Write-Step "Building usagetracker.exe..."
+    dotnet publish $usageTrackerProj `
+        --configuration $Configuration `
+        --runtime win-x64 `
+        --self-contained true `
+        -p:PublishSingleFile=true `
+        -p:PublishTrimmed=true `
+        -p:VersionPrefix=$Version `
+        --verbosity quiet
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "usagetracker build failed (exit $LASTEXITCODE)"
+        exit $LASTEXITCODE
+    }
+    $usageTrackerExe = Join-Path $usageTrackerPublishDir "usagetracker.exe"
+    if (-not (Test-Path $usageTrackerExe)) {
+        Write-Error "usagetracker.exe not found at expected path: $usageTrackerExe"
+        exit 1
+    }
+    if ($Sign) {
+        Write-Step "Signing usagetracker.exe..."
+        try {
+            signPackage -FilePath $usageTrackerExe
+            Write-Success "Signed usagetracker.exe"
+        } catch {
+            Write-Error "Failed to sign usagetracker.exe: $_"
+            exit 1
+        }
+    }
+    Copy-Item $usageTrackerExe (Join-Path $ProgramFilesPayloadDir "usagetracker.exe") -Force
+    $utSize = (Get-Item $usageTrackerExe).Length / 1MB
+    Write-Success ("usagetracker.exe bundled ({0:N1} MB)" -f $utSize)
+} else {
+    Write-Verbose "usagetracker project not found; skipping (legacy build path)"
+}
+
 # Create version file in payload root
 $versionContent = @"
 ReportMate
