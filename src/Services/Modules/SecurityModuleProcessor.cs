@@ -285,17 +285,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var driveLetter = GetStringValue(volume, "drive_letter");
                     var conversionStatus = GetStringValue(volume, "conversion_status");
                     var protectionStatus = GetStringValue(volume, "protection_status");
-                    var lockStatus = GetStringValue(volume, "lock_status");
 
                     if (string.IsNullOrEmpty(driveLetter)) continue;
 
                     // osquery's bitlocker_info returns every volume, encrypted or not.
                     // Treat a drive as encrypted only when protection is on or conversion
-                    // reports active encryption — never on "Fully Decrypted" / protection 0.
+                    // reports an encrypted state — never on "Fully Decrypted" / protection 0.
+                    // "Encrypt" substring matches Fully Encrypted / Encryption In Progress /
+                    // Encryption Paused, and excludes all Decryption variants.
                     var isProtected = protectionStatus == "1" || protectionStatus.Equals("Protection On", StringComparison.OrdinalIgnoreCase);
-                    var isEncryptingByStatus = !string.IsNullOrEmpty(conversionStatus)
-                        && conversionStatus.StartsWith("Encrypt", StringComparison.OrdinalIgnoreCase);
-                    if (!isProtected && !isEncryptingByStatus) continue;
+                    var isEncryptedByStatus = !string.IsNullOrEmpty(conversionStatus)
+                        && conversionStatus.Contains("Encrypt", StringComparison.OrdinalIgnoreCase);
+                    if (!isProtected && !isEncryptedByStatus) continue;
 
                     data.Encryption.BitLocker.EncryptedDrives.Add(driveLetter);
 
