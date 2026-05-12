@@ -1098,6 +1098,12 @@ namespace ReportMate.WindowsClient.Services
                         Publisher = g.First().Publisher,
                         Launches = g.Count(),
                         TotalSeconds = g.Sum(s => s.DurationSeconds),
+                        // Foreground/active counters stay at 0 until the
+                        // user-context usagetracker.exe companion is shipped
+                        // and feeds session-level fg/active deltas into the
+                        // ApplicationUsageSession objects this method consumes.
+                        ForegroundSeconds = g.Sum(s => s.ForegroundSeconds),
+                        ActiveSeconds = g.Sum(s => s.ActiveSeconds),
                         Users = users
                     };
                 })
