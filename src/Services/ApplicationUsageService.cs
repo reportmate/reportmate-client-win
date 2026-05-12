@@ -2,10 +2,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Eventing.Reader;
+using System.IO;
 using System.Linq;
 using System.Security.Principal;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Services
@@ -1075,6 +1077,275 @@ namespace ReportMate.WindowsClient.Services
         /// Groups sessions by (date, app name) and produces cumulative totals.
         /// The API uses UPSERT semantics so last collection of the day wins.
         /// </summary>
+        // ─────────────────────────────────────────────────────────────────
+        // User-session foreground/active time merge
+        //
+        // managedreportsrunner.exe runs as SYSTEM in session 0, where
+        // GetForegroundWindow / GetLastInputInfo can't observe the user's
+        // input or focus. The companion usagetracker.exe runs in each user's
+        // session via a logon-triggered scheduled task and persists
+        // cumulative {foregroundSeconds, activeSeconds} per (exe-path, date)
+        // to %ProgramData%\ManagedReports\usagetracker\{username}.json.
+        //
+        // MergeUserSessionTrackerData reads those files, computes the delta
+        // since the last collection (max(0, current - last) — handles
+        // tracker process restarts), matches exe paths to InstalledApplication
+        // names, and augments the DailyUsageSummary list with the new fields.
+        // The server then accumulates the deltas per (device, date, app).
+        // ─────────────────────────────────────────────────────────────────
+
+        private const string TrackerStateDir = @"C:\ProgramData\ManagedReports\usagetracker";
+        private const string TrackerLastTransmittedFile = "_last_transmitted.json";
+
+        public List<DailyUsageSummary> MergeUserSessionTrackerData(
+            List<DailyUsageSummary> summaries,
+            List<InstalledApplication> installedApps)
+        {
+            try
+            {
+                if (!Directory.Exists(TrackerStateDir))
+                {
+                    _logger.LogDebug("UsageTracker directory not present; skipping foreground/active merge");
+                    return summaries;
+                }
+
+                // 1. Read all per-user tracker files; sum cumulative across users.
+                //    Key: (exePath, date) -> (fgSec, activeSec)
+                var cumulative = new Dictionary<(string ExePath, string Date), (double Fg, double Active)>(
+                    new ExePathDateComparer());
+
+                foreach (var path in Directory.EnumerateFiles(TrackerStateDir, "*.json"))
+                {
+                    var fname = Path.GetFileName(path);
+                    if (fname.StartsWith("_")) continue; // skip internal state files
+
+                    try
+                    {
+                        var json = File.ReadAllText(path);
+                        var state = JsonConvert.DeserializeObject<TrackerStateMirror>(json);
+                        if (state?.ByAppByDate == null) continue;
+
+                        foreach (var (exePath, byDate) in state.ByAppByDate)
+                        {
+                            foreach (var (dateKey, counters) in byDate)
+                            {
+                                var key = (exePath, dateKey);
+                                cumulative.TryGetValue(key, out var existing);
+                                cumulative[key] = (
+                                    existing.Fg + counters.ForegroundSeconds,
+                                    existing.Active + counters.ActiveSeconds);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("Failed to parse usagetracker file {Path}: {Message}", path, ex.Message);
+                    }
+                }
+
+                if (cumulative.Count == 0)
+                {
+                    _logger.LogDebug("UsageTracker files present but contained no entries");
+                    return summaries;
+                }
+
+                // 2. Read last-transmitted state.
+                var lastPath = Path.Combine(TrackerStateDir, TrackerLastTransmittedFile);
+                var last = new Dictionary<string, AppDayCountersMirror>(StringComparer.Ordinal);
+                if (File.Exists(lastPath))
+                {
+                    try
+                    {
+                        var lastJson = File.ReadAllText(lastPath);
+                        last = JsonConvert.DeserializeObject<Dictionary<string, AppDayCountersMirror>>(lastJson)
+                               ?? last;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("Failed to parse last-transmitted state ({Message}); treating as empty", ex.Message);
+                    }
+                }
+
+                // 3. Compute deltas; build new last-transmitted state.
+                var deltas = new Dictionary<(string ExePath, string Date), (double Fg, double Active)>(
+                    new ExePathDateComparer());
+                var nextLast = new Dictionary<string, AppDayCountersMirror>(StringComparer.Ordinal);
+
+                foreach (var (key, current) in cumulative)
+                {
+                    var lookup = $"{key.ExePath}||{key.Date}";
+                    last.TryGetValue(lookup, out var prev);
+                    var prevFg = prev?.ForegroundSeconds ?? 0;
+                    var prevActive = prev?.ActiveSeconds ?? 0;
+
+                    var deltaFg = Math.Max(0, current.Fg - prevFg);
+                    var deltaActive = Math.Max(0, current.Active - prevActive);
+                    if (deltaFg > 0 || deltaActive > 0)
+                        deltas[key] = (deltaFg, deltaActive);
+
+                    nextLast[lookup] = new AppDayCountersMirror
+                    {
+                        ForegroundSeconds = current.Fg,
+                        ActiveSeconds = current.Active,
+                    };
+                }
+
+                // 4. Persist updated last-transmitted state atomically.
+                try
+                {
+                    var tmp = lastPath + ".tmp";
+                    File.WriteAllText(tmp, JsonConvert.SerializeObject(nextLast));
+                    if (File.Exists(lastPath))
+                        File.Replace(tmp, lastPath, destinationBackupFileName: null);
+                    else
+                        File.Move(tmp, lastPath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Failed to persist last-transmitted state: {Message}", ex.Message);
+                    // Continue anyway — we still emit deltas this round; next round
+                    // will see cumulative again and emit it as a delta (slight double-count).
+                }
+
+                if (deltas.Count == 0)
+                {
+                    _logger.LogDebug("UsageTracker: no foreground/active delta since last collection");
+                    return summaries;
+                }
+
+                // 5. Match exe paths to app names; aggregate by (date, app_name).
+                var byDateApp = new Dictionary<(string Date, string AppName), (double Fg, double Active)>(
+                    new DateAppNameComparer());
+
+                foreach (var ((exePath, date), (fg, active)) in deltas)
+                {
+                    var appName = MatchExeToAppName(exePath, installedApps);
+                    if (string.IsNullOrEmpty(appName)) continue;
+
+                    var key = (date, appName);
+                    byDateApp.TryGetValue(key, out var existing);
+                    byDateApp[key] = (existing.Fg + fg, existing.Active + active);
+                }
+
+                // 6. Augment passed summaries; append entries that don't have a
+                //    Security-Log-derived match.
+                var summaryIndex = summaries
+                    .GroupBy(s => (s.Date, s.AppName), new DateAppNameComparer())
+                    .ToDictionary(g => g.Key, g => g.First(), new DateAppNameComparer());
+
+                int augmented = 0, appended = 0;
+                foreach (var (key, (fg, active)) in byDateApp)
+                {
+                    if (summaryIndex.TryGetValue(key, out var existing))
+                    {
+                        existing.ForegroundSeconds += fg;
+                        existing.ActiveSeconds += active;
+                        augmented++;
+                    }
+                    else
+                    {
+                        // Tracker has activity for an app the Security Log path
+                        // didn't pick up (e.g. process started outside the 4h
+                        // lookback). Emit a new summary; use foreground as the
+                        // approximation of total_seconds since we have no
+                        // session data.
+                        summaries.Add(new DailyUsageSummary
+                        {
+                            Date = key.Date,
+                            AppName = key.AppName,
+                            Publisher = "",
+                            Launches = 0,
+                            TotalSeconds = fg,
+                            ForegroundSeconds = fg,
+                            ActiveSeconds = active,
+                            Users = new List<string>(),
+                        });
+                        appended++;
+                    }
+                }
+
+                _logger.LogInformation(
+                    "UsageTracker merge: {Augmented} summaries augmented, {Appended} new summaries from tracker-only apps",
+                    augmented, appended);
+
+                return summaries;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "MergeUserSessionTrackerData failed; returning summaries unchanged");
+                return summaries;
+            }
+        }
+
+        /// <summary>
+        /// Match a foreground-app exe path to the Name of an InstalledApplication.
+        /// Prefer the longest matching InstallLocation prefix; fall back to the
+        /// exe filename without extension.
+        /// </summary>
+        private static string MatchExeToAppName(string exePath, List<InstalledApplication> installedApps)
+        {
+            if (string.IsNullOrWhiteSpace(exePath)) return string.Empty;
+
+            string? bestName = null;
+            int bestLen = 0;
+            var normExe = exePath.Replace('/', '\\').TrimEnd('\\');
+
+            foreach (var app in installedApps)
+            {
+                var loc = app.InstallLocation;
+                if (string.IsNullOrWhiteSpace(loc)) continue;
+                var normLoc = loc.Replace('/', '\\').TrimEnd('\\');
+                if (normLoc.Length == 0) continue;
+                if (normExe.StartsWith(normLoc, StringComparison.OrdinalIgnoreCase) &&
+                    (normExe.Length == normLoc.Length || normExe[normLoc.Length] == '\\'))
+                {
+                    if (normLoc.Length > bestLen)
+                    {
+                        bestLen = normLoc.Length;
+                        bestName = app.Name;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(bestName)) return bestName!;
+            try { return Path.GetFileNameWithoutExtension(exePath) ?? string.Empty; }
+            catch { return string.Empty; }
+        }
+
+        private sealed class TrackerStateMirror
+        {
+            [JsonProperty("byAppByDate")]
+            public Dictionary<string, Dictionary<string, AppDayCountersMirror>>? ByAppByDate { get; set; }
+        }
+
+        private sealed class AppDayCountersMirror
+        {
+            [JsonProperty("foregroundSeconds")]
+            public double ForegroundSeconds { get; set; }
+            [JsonProperty("activeSeconds")]
+            public double ActiveSeconds { get; set; }
+        }
+
+        private sealed class ExePathDateComparer : IEqualityComparer<(string ExePath, string Date)>
+        {
+            public bool Equals((string ExePath, string Date) a, (string ExePath, string Date) b) =>
+                StringComparer.OrdinalIgnoreCase.Equals(a.ExePath, b.ExePath) &&
+                StringComparer.Ordinal.Equals(a.Date, b.Date);
+            public int GetHashCode((string ExePath, string Date) k) =>
+                HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(k.ExePath ?? ""),
+                                 StringComparer.Ordinal.GetHashCode(k.Date ?? ""));
+        }
+
+        private sealed class DateAppNameComparer : IEqualityComparer<(string Date, string AppName)>
+        {
+            public bool Equals((string Date, string AppName) a, (string Date, string AppName) b) =>
+                StringComparer.Ordinal.Equals(a.Date, b.Date) &&
+                StringComparer.OrdinalIgnoreCase.Equals(a.AppName, b.AppName);
+            public int GetHashCode((string Date, string AppName) k) =>
+                HashCode.Combine(StringComparer.Ordinal.GetHashCode(k.Date ?? ""),
+                                 StringComparer.OrdinalIgnoreCase.GetHashCode(k.AppName ?? ""));
+        }
+
         public List<DailyUsageSummary> BuildDailySummaries(List<ApplicationUsageSession> sessions)
         {
             if (sessions.Count == 0)

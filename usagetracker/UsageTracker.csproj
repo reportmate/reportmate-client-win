@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>false</UseWindowsForms>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <AssemblyName>usagetracker</AssemblyName>
+    <AssemblyTitle>ReportMate User Session Tracker</AssemblyTitle>
+    <AssemblyDescription>Per-user foreground + active time tracker for ReportMate Windows client</AssemblyDescription>
+    <AssemblyCompany>ReportMate</AssemblyCompany>
+    <AssemblyProduct>ReportMate</AssemblyProduct>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</VersionPrefix>
+    <AssemblyVersion>$(VersionPrefix)</AssemblyVersion>
+    <FileVersion>$(VersionPrefix)</FileVersion>
+    <InformationalVersion>$(VersionPrefix)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+
+</Project>
