@@ -136,12 +136,18 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime StartTime { get; set; }
         public DateTime? EndTime { get; set; }
         public double DurationSeconds { get; set; }
+        // Idle-time split: foreground = app held OS focus; active = foreground
+        // AND user input within prior 300s. Populated by the user-context
+        // usagetracker.exe companion when present; zero otherwise.
+        public double ForegroundSeconds { get; set; }
+        public double ActiveSeconds { get; set; }
         public bool IsActive { get; set; }
     }
 
     /// <summary>
-    /// Per-application daily usage summary for historical retention.
-    /// Cumulative: last collection of the day wins (UPSERT semantics).
+    /// Per-application daily usage summary. The API accumulates these across
+    /// transmissions (rev 158+: total_seconds += new, active_seconds += new,
+    /// foreground_seconds += new). Clients send window-deltas, not cumulatives.
     /// </summary>
     public class DailyUsageSummary
     {
@@ -150,6 +156,11 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Publisher { get; set; } = string.Empty;
         public int Launches { get; set; }
         public double TotalSeconds { get; set; }
+        // Idle-time aggregates — sum of per-session foreground/active counters.
+        // Stays 0 until usagetracker.exe is shipped (then populated by reading
+        // its JSON output during ApplicationUsageService.BuildDailySummaries).
+        public double ForegroundSeconds { get; set; }
+        public double ActiveSeconds { get; set; }
         public List<string> Users { get; set; } = new();
     }
 }
