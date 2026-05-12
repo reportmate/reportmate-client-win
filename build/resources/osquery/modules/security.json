@@ -29,7 +29,7 @@
       "description": "Firewall product information"
     },
     "bitlocker_info": {
-      "query": "SELECT device_id, drive_letter, conversion_status, lock_status, encryption_method, version FROM bitlocker_info;",
+      "query": "SELECT device_id, drive_letter, conversion_status, protection_status, lock_status, encryption_method, version FROM bitlocker_info;",
       "interval": 3600,
       "description": "BitLocker encryption status"
     },
