@@ -20,7 +20,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? WarrantyExpiration { get; set; }
         
         // Additional fields from external inventory source
-        public string Catalog { get; set; } = string.Empty;    // From Inventory.yaml catalog field
-        public string Usage { get; set; } = string.Empty;      // From Inventory.yaml usage field
+        public string Catalog { get; set; } = string.Empty;
+        public string Usage { get; set; } = string.Empty;
+        public string Fleet { get; set; } = string.Empty;
     }
 }
