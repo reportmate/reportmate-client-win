@@ -370,10 +370,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                             data.AssetTag = assetTag;
                         }
                     }
+                    else if (trimmed.StartsWith("fleet:"))
+                    {
+                        var fleetValue = ExtractYamlValue(trimmed, "fleet:").Trim();
+                        if (!string.IsNullOrEmpty(fleetValue) && fleetValue.Trim(',').Length > 0)
+                        {
+                            data.Fleet = fleetValue;
+                        }
+                    }
                 }
-                
-                _logger.LogInformation("External inventory loaded - Catalog: '{Catalog}', Usage: '{Usage}', AssetTag: '{AssetTag}', Location: '{Location}', Owner: '{Owner}', Department: '{Department}'",
-                    data.Catalog, data.Usage, data.AssetTag, data.Location, data.Owner, data.Department);
+
+                _logger.LogInformation("External inventory loaded - Catalog: '{Catalog}', Usage: '{Usage}', AssetTag: '{AssetTag}', Location: '{Location}', Owner: '{Owner}', Department: '{Department}', Fleet: '{Fleet}'",
+                    data.Catalog, data.Usage, data.AssetTag, data.Location, data.Owner, data.Department, data.Fleet);
             }
             catch (Exception ex)
             {
