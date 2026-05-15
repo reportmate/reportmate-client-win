@@ -372,8 +372,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                     else if (trimmed.StartsWith("fleet:"))
                     {
-                        var fleetValue = ExtractYamlValue(trimmed, "fleet:").Trim(',').Trim();
-                        if (!string.IsNullOrEmpty(fleetValue))
+                        var fleetValue = ExtractYamlValue(trimmed, "fleet:").Trim();
+                        if (!string.IsNullOrEmpty(fleetValue) && fleetValue.Trim(',').Length > 0)
                         {
                             data.Fleet = fleetValue;
                         }
