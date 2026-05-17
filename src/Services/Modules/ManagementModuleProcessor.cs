@@ -127,7 +127,20 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.LastSync = DateTime.UtcNow;
             }
 
-            _logger.LogInformation("Management module processed - Enrolled: {Enrolled}, Method: {Method}, Provider: {Provider}, ManagedApps: {AppCount}, IntunePolicies: {IntunePolicyCount}, SecurityPolicies: {SecurityPolicyCount}, TotalPolicies: {TotalPolicies}", 
+            // Reconcile provider: some enrollment-detection paths set IsEnrolled
+            // without a Provider (e.g. an EnrollmentState was found but the
+            // registry carried no Microsoft ProviderID). When the device is
+            // enrolled and we collected Intune-specific data, the provider is
+            // Microsoft Intune - surface it so it does not read as Unmanaged.
+            if (data.MdmEnrollment.IsEnrolled && string.IsNullOrEmpty(data.MdmEnrollment.Provider)
+                && (data.IntunePolicies.Count > 0 || data.MDMConfigurations.Count > 0
+                    || !string.IsNullOrEmpty(data.TenantDetails.TenantName)))
+            {
+                data.MdmEnrollment.Provider = "Microsoft Intune";
+                _logger.LogDebug("Provider inferred as Microsoft Intune from collected Intune data");
+            }
+
+            _logger.LogInformation("Management module processed - Enrolled: {Enrolled}, Method: {Method}, Provider: {Provider}, ManagedApps: {AppCount}, IntunePolicies: {IntunePolicyCount}, SecurityPolicies: {SecurityPolicyCount}, TotalPolicies: {TotalPolicies}",
                 data.MdmEnrollment.IsEnrolled, data.MdmEnrollment.EnrollmentMethod ?? "unknown", data.MdmEnrollment.Provider ?? "unknown", data.ManagedApps.Count, data.IntunePolicies.Count, data.SecurityPolicies.Count, data.TotalPoliciesApplied);
 
             return data;
