@@ -300,10 +300,12 @@ public class WmiHelperService : IWmiHelperService
         {
             _logger.LogDebug("Executing PowerShell command: {Command}", command);
 
+            var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command));
+
             var processInfo = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
