@@ -562,9 +562,9 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         /// <summary>
         /// Collect Firmware password protection state.
-        /// Uses SMBIOS Win32_ComputerSystem.AdminPasswordStatus as the cross-OEM source
-        /// (works on Dell, HP, and most others), and augments Lenovo systems with the
-        /// Lenovo_BiosPasswordSettings WMI provider for the full POP/HDP/SVP/SMP bitmask.
+        /// Lenovo: Lenovo_BiosPasswordSettings WMI provider; any non-zero PasswordState means set.
+        /// Dell: DellBIOSProvider module's DellSmbios:\Security\IsAdminPasswordSet.
+        /// HP and others: SMBIOS Win32_ComputerSystem.AdminPasswordStatus, augmented by HP CMI when available.
         /// </summary>
         private async Task ProcessFirmwarePasswordInfo(SecurityData data)
         {
@@ -577,9 +577,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // and Where-Object instead of -Filter (which would require quoted WQL).
                 var script = @"
                     $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+                    $m = $cs.Manufacturer
                     $result = [ordered]@{
-                        Manufacturer = $cs.Manufacturer
-                        Source = 'SMBIOS'
+                        Manufacturer = $m
+                        Source = $null
                         AdminPasswordStatus = [int]$cs.AdminPasswordStatus
                         AdminPasswordSet = $null
                         PowerOnPasswordSet = $null
@@ -588,39 +589,39 @@ namespace ReportMate.WindowsClient.Services.Modules
                         ErrorMessage = $null
                     }
 
-                    # SMBIOS AdminPasswordStatus: 0=Disabled, 1=Enabled, 2=NotImplemented, 3=Unknown
-                    switch ([int]$cs.AdminPasswordStatus) {
-                        0 { $result.AdminPasswordSet = $false }
-                        1 { $result.AdminPasswordSet = $true }
-                    }
-
-                    if ($cs.Manufacturer -match 'Lenovo') {
-                        try {
-                            $state = [int](Get-CimInstance -Namespace root\wmi -ClassName Lenovo_BiosPasswordSettings -ErrorAction Stop).PasswordState
-                            $result.Source = 'Lenovo WMI'
-                            $result.RawState = $state
-                            # Bitmask: bit0=POP, bit1=HDP, bit2=SVP, bit3=SMP
-                            $result.PowerOnPasswordSet = (($state -band 1) -ne 0)
-                            $result.HddPasswordSet     = (($state -band 2) -ne 0)
-                            $result.AdminPasswordSet   = (($state -band 4) -ne 0)
-                        } catch {
-                            $result.ErrorMessage = 'Lenovo_BiosPasswordSettings query failed: ' + $_.Exception.Message
+                    if ($m -match 'Lenovo') {
+                        $result.Source = 'Lenovo WMI'
+                        $bios = Get-CimInstance -Namespace root\wmi -ClassName Lenovo_BiosPasswordSettings -ErrorAction SilentlyContinue
+                        if (-not $bios) {
+                            $result.ErrorMessage = 'Lenovo: Lenovo_BiosPasswordSettings class not found'
+                        } else {
+                            $s = [int]$bios.PasswordState
+                            $result.RawState = $s
+                            $result.AdminPasswordSet = ($s -ne 0)
                         }
-                    } elseif ($cs.Manufacturer -match 'Dell') {
-                        # Dell only exposes detail via root\dcim\sysman when Dell Command|Monitor is installed.
-                        try {
-                            $dell = Get-CimInstance -Namespace root\dcim\sysman -ClassName DCIM_BIOSPassword -ErrorAction Stop
-                            if ($dell) {
-                                $result.Source = 'Dell CIM'
-                                $admin = $dell | Where-Object { $_.AttributeName -eq 'Admin' } | Select-Object -First 1
-                                if ($admin) { $result.AdminPasswordSet = ($admin.IsSet -eq $true) -or ($admin.IsSet -eq 1) }
-                                $sys = $dell | Where-Object { $_.AttributeName -eq 'System' } | Select-Object -First 1
-                                if ($sys)   { $result.PowerOnPasswordSet = ($sys.IsSet   -eq $true) -or ($sys.IsSet   -eq 1) }
+                    } elseif ($m -match 'Dell') {
+                        $result.Source = 'DellBIOSProvider'
+                        Import-Module DellBIOSProvider -ErrorAction SilentlyContinue
+                        $item = Get-Item -Path DellSmbios:\Security\IsAdminPasswordSet -ErrorAction SilentlyContinue
+                        if ($item) {
+                            $val = $item.CurrentValue
+                            if ($val -is [bool]) {
+                                $result.AdminPasswordSet = $val
+                            } elseif (""$val"" -match '^(?i:true|1|yes|enabled)$') {
+                                $result.AdminPasswordSet = $true
+                            } elseif (""$val"" -match '^(?i:false|0|no|disabled)$') {
+                                $result.AdminPasswordSet = $false
                             }
-                        } catch {
-                            # Dell Command|Monitor not present — fall back to SMBIOS value already captured.
+                        } else {
+                            $result.ErrorMessage = 'Dell: DellBIOSProvider unavailable'
                         }
-                    } elseif ($cs.Manufacturer -match 'HP|Hewlett') {
+                    } elseif ($m -match 'HP|Hewlett') {
+                        $result.Source = 'SMBIOS'
+                        # SMBIOS AdminPasswordStatus: 0=Disabled, 1=Enabled, 2=NotImplemented, 3=Unknown
+                        switch ([int]$cs.AdminPasswordStatus) {
+                            0 { $result.AdminPasswordSet = $false }
+                            1 { $result.AdminPasswordSet = $true }
+                        }
                         try {
                             $hp = Get-CimInstance -Namespace root\HP\InstrumentedBIOS -ClassName HP_BIOSPassword -ErrorAction Stop
                             if ($hp) {
@@ -632,6 +633,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                             }
                         } catch {
                             # HP CMI provider not present — fall back to SMBIOS value already captured.
+                        }
+                    } else {
+                        $result.Source = 'SMBIOS'
+                        switch ([int]$cs.AdminPasswordStatus) {
+                            0 { $result.AdminPasswordSet = $false }
+                            1 { $result.AdminPasswordSet = $true }
                         }
                     }
 
