@@ -572,9 +572,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 _logger.LogDebug("Collecting Firmware password status via PowerShell/CIM");
 
-                // PowerShellRunner invokes powershell.exe with -Command "<script>", so embedded
-                // double quotes break argument parsing. Use single quotes throughout the script
-                // and Where-Object instead of -Filter (which would require quoted WQL).
+                // PowerShellRunner invokes powershell.exe via -EncodedCommand (base64), so embedded
+                // double quotes are safe at the shell layer. Single quotes are still preferred here
+                // because the script is a C# verbatim string ("" escapes get noisy fast).
                 var script = @"
                     $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
                     $m = $cs.Manufacturer
@@ -611,6 +611,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 $result.AdminPasswordSet = $true
                             } elseif (""$val"" -match '^(?i:false|0|no|disabled)$') {
                                 $result.AdminPasswordSet = $false
+                            } else {
+                                $result.ErrorMessage = 'Dell: unrecognized IsAdminPasswordSet value: ' + ""$val""
                             }
                         } else {
                             $result.ErrorMessage = 'Dell: DellBIOSProvider unavailable'
