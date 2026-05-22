@@ -130,14 +130,22 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Reconcile provider: some enrollment-detection paths set IsEnrolled
             // without a Provider (e.g. an EnrollmentState was found but the
             // registry carried no Microsoft ProviderID). When the device is
-            // enrolled and we collected Intune-specific data, the provider is
-            // Microsoft Intune - surface it so it does not read as Unmanaged.
-            if (data.MdmEnrollment.IsEnrolled && string.IsNullOrEmpty(data.MdmEnrollment.Provider)
-                && (data.IntunePolicies.Count > 0 || data.MDMConfigurations.Count > 0
-                    || !string.IsNullOrEmpty(data.TenantDetails.TenantName)))
+            // enrolled and we have Intune-specific evidence, surface the provider
+            // so it does not read as Unmanaged. TenantName is intentionally NOT
+            // used here — dsregcmd populates it for any Entra-joined device,
+            // including ones managed by non-Microsoft MDMs.
+            if (data.MdmEnrollment.IsEnrolled && string.IsNullOrEmpty(data.MdmEnrollment.Provider))
             {
-                data.MdmEnrollment.Provider = "Microsoft Intune";
-                _logger.LogDebug("Provider inferred as Microsoft Intune from collected Intune data");
+                var pointsAtIntune =
+                    data.TenantDetails.MdmUrl.Contains("manage.microsoft.com", StringComparison.OrdinalIgnoreCase)
+                    || data.TenantDetails.DeviceManagementSrvUrl.Contains("manage.microsoft.com", StringComparison.OrdinalIgnoreCase);
+
+                if (data.IntunePolicies.Count > 0 || data.MDMConfigurations.Count > 0 || pointsAtIntune)
+                {
+                    data.MdmEnrollment.Provider = "Microsoft Intune";
+                    _logger.LogDebug("Provider inferred as Microsoft Intune from collected Intune data (policies={Policies}, configs={Configs}, intuneUrl={Url})",
+                        data.IntunePolicies.Count, data.MDMConfigurations.Count, pointsAtIntune);
+                }
             }
 
             _logger.LogInformation("Management module processed - Enrolled: {Enrolled}, Method: {Method}, Provider: {Provider}, ManagedApps: {AppCount}, IntunePolicies: {IntunePolicyCount}, SecurityPolicies: {SecurityPolicyCount}, TotalPolicies: {TotalPolicies}",
