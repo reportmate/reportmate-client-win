@@ -30,10 +30,12 @@ try {
 $expectedPayload = @(
     'managedreportsrunner.exe'
     'usagetracker.exe'
-    'appsettings.json'
     'appsettings.yaml'
     'module-schedules.json'
 )
+# appsettings.json is not required: build.ps1 copies it with
+# -ErrorAction SilentlyContinue, so the source may legitimately not ship one.
+# appsettings.yaml is the canonical config and is always copied.
 $missing = @()
 foreach ($name in $expectedPayload) {
     if (-not (Test-Path (Join-Path $InstallDir $name))) { $missing += $name }
@@ -369,22 +371,11 @@ try {
         Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
     }
     
-    # Load module schedules configuration
+    # Load module schedules configuration. Guaranteed present by the
+    # payload presence check at the top of this script.
     $scheduleConfigPath = Join-Path $InstallPath "module-schedules.json"
-    if (Test-Path $scheduleConfigPath) {
-        $scheduleConfig = Get-Content $scheduleConfigPath | ConvertFrom-Json
-        Write-Host "Loaded module schedules configuration"
-    } else {
-        Write-Warning "Module schedules configuration not found, using defaults"
-        $scheduleConfig = @{
-            schedules = @{
-                hourly = @{ interval = "PT1H"; modules = @("security", "installs", "profiles", "system", "network", "management") }
-                every4hours = @{ interval = "PT4H"; modules = @("applications", "inventory") }
-                daily = @{ interval = "P1D"; modules = @("hardware", "printers", "displays") }
-                all = @{ interval_minutes = 720; modules = "all" }
-            }
-        }
-    }
+    $scheduleConfig = Get-Content $scheduleConfigPath | ConvertFrom-Json
+    Write-Host "Loaded module schedules configuration"
 
     $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
     
@@ -426,8 +417,10 @@ try {
 
 } catch {
     # Task registration is must-have -- without it, the client never runs.
-    # Re-throw so the master catch fails the install loudly.
-    throw "Failed to create scheduled tasks: $_"
+    # Bare `throw` re-raises the original ErrorRecord so the master catch
+    # gets the full stack trace and exception type, not a wrapped string.
+    Write-Host "Failed to create scheduled tasks: $_" -ForegroundColor Red
+    throw
 }
 
 # CIMIAN INTEGRATION
