@@ -1,22 +1,52 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# ReportMate Post-Installation Script - PKG Format
-# ═══════════════════════════════════════════════════════════════════════════════
+# ReportMate Post-Installation Script (cimipkg)
 #
-# This script handles the complete installation of ReportMate after files are copied
-# to their target location by cimipkg. It configures registry settings, creates
-# scheduled tasks, sets up data directories, and ensures proper integration.
+# Runs after cimipkg's payload copy. Configures registry, scheduled tasks,
+# data directories, and Cimian integration.
 #
-# ═══════════════════════════════════════════════════════════════════════════════
+# Hard-fails (exit 1) on errors so broken installs are visible in install
+# logs and ARP rather than discoverable weeks later via stale dashboard
+# data. Nice-to-have operations (PATH addition, Start Menu, winget-based
+# osquery install) keep their own try/catch + Write-Warning so they can
+# soft-fail without breaking the install. Must-have operations (scheduled
+# task registration, payload presence) throw and bubble to the master
+# catch.
 
-Write-Host "ReportMate Post-Installation Script (PKG Format)"
-Write-Host "=================================================="
+$ErrorActionPreference = "Stop"
 
-$ErrorActionPreference = "Continue"
+Write-Host "ReportMate Post-Installation Script (cimipkg)"
+Write-Host "============================================="
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ADD TO SYSTEM PATH: Make managedreportsrunner.exe accessible from anywhere
-# ═══════════════════════════════════════════════════════════════════════════════
 $InstallDir = "C:\Program Files\ReportMate"
+
+try {
+
+# ----------------------------------------------------------------------------
+# Verify expected files from the payload.
+# A missing file means cimipkg's CAB extraction or our build produced an
+# incomplete package -- fail loud here rather than register scheduled tasks
+# against missing binaries (which would fail silently at run time and only
+# surface when the dashboard goes dark).
+# ----------------------------------------------------------------------------
+$expectedPayload = @(
+    'managedreportsrunner.exe'
+    'usagetracker.exe'
+    'appsettings.yaml'
+    'module-schedules.json'
+)
+# appsettings.json is not required: build.ps1 copies it with
+# -ErrorAction SilentlyContinue, so the source may legitimately not ship one.
+# appsettings.yaml is the canonical config and is always copied.
+$missing = @()
+foreach ($name in $expectedPayload) {
+    if (-not (Test-Path (Join-Path $InstallDir $name))) { $missing += $name }
+}
+if ($missing.Count -gt 0) {
+    throw "Missing expected files from payload: $($missing -join ', ')"
+}
+
+# ----------------------------------------------------------------------------
+# ADD TO SYSTEM PATH: make managedreportsrunner.exe accessible from anywhere
+# ----------------------------------------------------------------------------
 Write-Host "Adding ReportMate to system PATH..."
 
 try {
@@ -341,22 +371,11 @@ try {
         Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
     }
     
-    # Load module schedules configuration
+    # Load module schedules configuration. Guaranteed present by the
+    # payload presence check at the top of this script.
     $scheduleConfigPath = Join-Path $InstallPath "module-schedules.json"
-    if (Test-Path $scheduleConfigPath) {
-        $scheduleConfig = Get-Content $scheduleConfigPath | ConvertFrom-Json
-        Write-Host "Loaded module schedules configuration"
-    } else {
-        Write-Warning "Module schedules configuration not found, using defaults"
-        $scheduleConfig = @{
-            schedules = @{
-                hourly = @{ interval = "PT1H"; modules = @("security", "installs", "profiles", "system", "network", "management") }
-                every4hours = @{ interval = "PT4H"; modules = @("applications", "inventory") }
-                daily = @{ interval = "P1D"; modules = @("hardware", "printers", "displays") }
-                all = @{ interval_minutes = 720; modules = "all" }
-            }
-        }
-    }
+    $scheduleConfig = Get-Content $scheduleConfigPath | ConvertFrom-Json
+    Write-Host "Loaded module schedules configuration"
 
     $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
     
@@ -395,9 +414,13 @@ try {
     }
     
     Write-Host "Scheduled tasks installed successfully"
-    
+
 } catch {
-    Write-Warning "Failed to create scheduled tasks: $_"
+    # Task registration is must-have -- without it, the client never runs.
+    # Bare `throw` re-raises the original ErrorRecord so the master catch
+    # gets the full stack trace and exception type, not a wrapped string.
+    Write-Host "Failed to create scheduled tasks: $_" -ForegroundColor Red
+    throw
 }
 
 # CIMIAN INTEGRATION
@@ -532,3 +555,11 @@ Write-Host "Next steps:"
 Write-Host "1. Configuration is ready - ReportMate will use registry settings automatically"
 Write-Host "2. Test connectivity: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' test"
 Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\managedreportsrunner.exe' run"
+
+}
+catch {
+    Write-Host "ReportMate postinstall failed: $_" -ForegroundColor Red
+    exit 1
+}
+
+exit 0
