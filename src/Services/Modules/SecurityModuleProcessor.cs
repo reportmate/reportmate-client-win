@@ -2182,15 +2182,15 @@ try {
             $ns = New-Object System.Xml.XmlNamespaceManager($xml.NameTable)
             $ns.AddNamespace('e', 'http://schemas.microsoft.com/win/2004/08/events/event')
             
-            $threatName = ($xml.SelectSingleNode('//e:Data[@Name=""""Threat Name""""]', $ns)).'#text'
-            $severityId = ($xml.SelectSingleNode('//e:Data[@Name=""""Severity ID""""]', $ns)).'#text'
-            $categoryId = ($xml.SelectSingleNode('//e:Data[@Name=""""Category ID""""]', $ns)).'#text'
-            $statusId = ($xml.SelectSingleNode('//e:Data[@Name=""""Status Code""""]', $ns)).'#text'
-            $path = ($xml.SelectSingleNode('//e:Data[@Name=""""Path""""]', $ns)).'#text'
-            $process = ($xml.SelectSingleNode('//e:Data[@Name=""""Process Name""""]', $ns)).'#text'
-            $user = ($xml.SelectSingleNode('//e:Data[@Name=""""Detection User""""]', $ns)).'#text'
-            $threatId = ($xml.SelectSingleNode('//e:Data[@Name=""""Threat ID""""]', $ns)).'#text'
-            $action = ($xml.SelectSingleNode('//e:Data[@Name=""""Action Name""""]', $ns)).'#text'
+            $threatName = ($xml.SelectSingleNode('//e:Data[@Name=""Threat Name""]', $ns)).'#text'
+            $severityId = ($xml.SelectSingleNode('//e:Data[@Name=""Severity ID""]', $ns)).'#text'
+            $categoryId = ($xml.SelectSingleNode('//e:Data[@Name=""Category ID""]', $ns)).'#text'
+            $statusId = ($xml.SelectSingleNode('//e:Data[@Name=""Status Code""]', $ns)).'#text'
+            $path = ($xml.SelectSingleNode('//e:Data[@Name=""Path""]', $ns)).'#text'
+            $process = ($xml.SelectSingleNode('//e:Data[@Name=""Process Name""]', $ns)).'#text'
+            $user = ($xml.SelectSingleNode('//e:Data[@Name=""Detection User""]', $ns)).'#text'
+            $threatId = ($xml.SelectSingleNode('//e:Data[@Name=""Threat ID""]', $ns)).'#text'
+            $action = ($xml.SelectSingleNode('//e:Data[@Name=""Action Name""]', $ns)).'#text'
 
             [PSCustomObject]@{
                 ThreatID = $threatId
