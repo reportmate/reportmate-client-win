@@ -1,8 +1,11 @@
 # ReportMate Pre-Installation Script (cimipkg)
 #
 # Runs before cimipkg's payload copy. Its job is to leave the install location
-# free of any process holding handles on managedreportsrunner.exe,
-# usagetracker.exe, or osqueryi.exe.
+# free of any process holding handles on managedreportsrunner.exe or
+# usagetracker.exe. osqueryi.exe is also killed (in case the runner spawned
+# it as a child) but is not lock-verified -- it lives under
+# C:\Program Files\osquery\, not under our install dir, so it cannot block
+# payload replacement here.
 #
 # If a binary stays locked, the MSI engine defers replacement to the next
 # reboot via MoveFileEx. ARP and the registry get updated, but the on-disk
