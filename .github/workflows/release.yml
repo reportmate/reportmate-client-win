@@ -10,8 +10,7 @@ permissions:
   contents: write
 
 env:
-  DOTNET_VERSION: '10.0.x'
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   release:
@@ -19,91 +18,104 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          submodules: recursive
 
-      - name: Setup .NET
+      - name: Setup .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-version: '10.0.x'
+          dotnet-quality: preview
 
       - name: Cache NuGet packages
         uses: actions/cache@v4
         with:
           path: ~\.nuget\packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
-
-      - name: Derive version from tag
-        id: version
-        shell: pwsh
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag -replace '^v',''
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Tag: $tag -> Version: $version"
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
       - name: Build (unsigned)
         shell: pwsh
-        run: .\build.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -Clean
+        run: .\build.ps1 -NoSign
+
+      - name: Capture build info
+        id: version
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Path release -Filter 'ReportMate-*.msi' | Select-Object -First 1
+          if (-not $msi) { throw 'No MSI produced by build.ps1' }
+          if ($msi.Name -match '^ReportMate-(\d{4}\.\d{2}\.\d{2}\.\d{4})\.msi$') {
+            $datestamp = $Matches[1]
+          } else {
+            throw "Could not parse datestamp version from $($msi.Name)"
+          }
+          $dotnetVersion = (dotnet --version).Trim()
+          $osCaption = (Get-CimInstance Win32_OperatingSystem).Caption.Trim()
+          $cimipkgExe = Join-Path $PWD 'cimipkg.exe'
+          if (-not (Test-Path $cimipkgExe)) { throw "cimipkg.exe not found at $cimipkgExe -- build.ps1 should have downloaded it" }
+          $cimipkgVersion = (& $cimipkgExe --version 2>$null | Select-Object -First 1).Trim()
+          if (-not $cimipkgVersion) { throw 'cimipkg --version returned nothing' }
+          "datestamp=$datestamp"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "dotnet=$dotnetVersion"          | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "os=$osCaption"                  | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "cimipkg=$cimipkgVersion"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "datestamp: $datestamp"
+          Write-Host "dotnet:    $dotnetVersion"
+          Write-Host "os:        $osCaption"
+          Write-Host "cimipkg:   $cimipkgVersion"
 
       - name: List release artifacts
         shell: pwsh
-        run: |
-          if (Test-Path release) {
-            Get-ChildItem release -Recurse | ForEach-Object {
-              $sizeKB = [math]::Round($_.Length / 1KB, 1)
-              Write-Host "  $($_.Name) ($sizeKB KB)"
-            }
-          }
+        run: Get-ChildItem -Path release -Recurse -Include '*.msi','*.nupkg','*.intunewin','*.zip' | Select-Object FullName, @{N='SizeMB';E={[math]::Round($_.Length/1MB,1)}}
 
       - name: Create GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ github.ref_name }}"
-          $version = "${{ steps.version.outputs.version }}"
-          $dotnet = (dotnet --version).Trim()
-          $os = (Get-CimInstance Win32_OperatingSystem).Caption.Trim()
+          $tag = '${{ github.ref_name }}'
+          $datestamp = '${{ steps.version.outputs.datestamp }}'
+          $dotnet = '${{ steps.version.outputs.dotnet }}'
+          $os = '${{ steps.version.outputs.os }}'
+          $cimipkg = '${{ steps.version.outputs.cimipkg }}'
           $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
-          $title = "ReportMate $version"
+          $title = "ReportMate $datestamp"
 
           $buildInfo = @"
           ## Build info
 
-          Built with .NET SDK $dotnet on $os, via GitHub Actions: $runUrl. Provided **unsigned**.
+          This release was built with .NET SDK $dotnet on $os, using cimian-pkg $cimipkg, via a GitHub Actions workflow here: $runUrl. It is provided **unsigned** -- see signing instructions at the bottom.
           "@
 
-          $usage = @"
-          ## Quick start
-
-          ``````cmd
-          msiexec /i ReportMate-$version.msi /quiet /norestart
-          ``````
-
-          ## Enterprise configuration (Registry / CSP / OMA-URI)
-
-          - ``HKLM\SOFTWARE\ReportMate\ApiUrl`` --- API endpoint URL
-          - ``HKLM\SOFTWARE\ReportMate\ClientPassphrase`` --- access passphrase
-          - ``HKLM\SOFTWARE\ReportMate\CollectionInterval`` --- data collection interval
-
+          $signing = @"
           ## Signing for enterprise deployment
 
+          Sign the binaries and MSI with your organization's code signing certificate before distribution:
+
           ``````powershell
-          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" managedreportsrunner.exe
-          signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" ReportMate-$version.msi
+          `$cert = "Your Certificate Name"
+          `$timestampUrl = "http://timestamp.digicert.com"
+
+          # Sign all binaries (run after extracting the MSI payload)
+          Get-ChildItem -Recurse -Include *.exe,*.dll | ForEach-Object {
+              signtool sign /fd SHA256 /tr `$timestampUrl /td SHA256 /n `$cert `$_.FullName
+          }
+
+          # Sign the MSI installer (run separately, after binaries are signed and repackaged)
+          Get-ChildItem -Filter "ReportMate-*.msi" | ForEach-Object {
+              signtool sign /fd SHA256 /tr `$timestampUrl /td SHA256 /n `$cert `$_.FullName
+          }
           ``````
 
           Built from commit ``$env:GITHUB_SHA``.
           "@
 
           $autoNotes = gh api -X POST "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" -f tag_name=$tag --jq .body
-          $notes = "$buildInfo`n`n$autoNotes`n`n$usage"
+          $notes = "$buildInfo`n`n$autoNotes`n`n$signing"
 
-          $artifacts = @()
-          if (Test-Path release) {
-            $artifacts += Get-ChildItem release -Recurse -File -Include *.msi,*.nupkg,*.zip | ForEach-Object { $_.FullName }
-          }
+          $artifacts = Get-ChildItem -Path release -Recurse -Include '*.msi','*.nupkg','*.intunewin','*.zip' | ForEach-Object { $_.FullName }
           if ($artifacts.Count -eq 0) { throw 'No artifacts to upload' }
           gh release create $tag @artifacts --title $title --notes $notes
