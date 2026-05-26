@@ -1,121 +1,142 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# ReportMate Pre-Installation Script - PKG Format
-# ═══════════════════════════════════════════════════════════════════════════════
+# ReportMate Pre-Installation Script (cimipkg)
 #
-# This script runs before ReportMate files are installed. It handles cleanup
-# of any existing installation and prepares the system for the new installation.
+# Runs before cimipkg's payload copy. Its job is to leave the install location
+# free of any process holding handles on managedreportsrunner.exe or
+# usagetracker.exe. osqueryi.exe is also killed (in case the runner spawned
+# it as a child) but is not lock-verified -- it lives under
+# C:\Program Files\osquery\, not under our install dir, so it cannot block
+# payload replacement here.
 #
-# ═══════════════════════════════════════════════════════════════════════════════
+# If a binary stays locked, the MSI engine defers replacement to the next
+# reboot via MoveFileEx. ARP and the registry get updated, but the on-disk
+# .exe is still the previous build -- and the scheduled task keeps firing
+# the old binary indefinitely. That mismatch is the failure mode this
+# script exists to prevent.
 
-Write-Host "ReportMate Pre-Installation Script (PKG Format)"
-Write-Host "==============================================="
+$ErrorActionPreference = 'Continue'
 
-$ErrorActionPreference = "Continue"
+Write-Host "ReportMate Pre-Installation Script (cimipkg)"
+Write-Host "============================================"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# STOP ALL REPORTMATE PROCESSES - Must complete before file copy
-# ═══════════════════════════════════════════════════════════════════════════════
+$InstallDir = 'C:\Program Files\ReportMate'
 
-# Function to forcefully stop a process and wait for file release
-function Stop-ReportMateProcess {
-    param([string]$ProcessName, [string]$BinaryPath)
-    
-    $maxAttempts = 5
-    $attempt = 0
-    
-    while ($attempt -lt $maxAttempts) {
-        $processes = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue
-        if (-not $processes) { break }
-        
-        $attempt++
-        Write-Host "Stopping $ProcessName processes (attempt $attempt/$maxAttempts)..."
-        $processes | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-    }
-    
-    # Verify file is not locked
-    if ($BinaryPath -and (Test-Path $BinaryPath)) {
-        $maxWait = 10
-        $waited = 0
-        while ($waited -lt $maxWait) {
-            try {
-                $stream = [System.IO.File]::Open($BinaryPath, 'Open', 'ReadWrite', 'None')
-                $stream.Close()
-                Write-Host "File $ProcessName.exe is now unlocked"
-                return $true
-            } catch {
-                $waited++
-                Write-Host "Waiting for $ProcessName.exe to be released ($waited/$maxWait)..."
-                Start-Sleep -Seconds 1
-            }
-        }
-        Write-Warning "File may still be locked after $maxWait seconds"
-    }
-    return $true
+# ----------------------------------------------------------------------------
+# 1. Disable scheduled tasks first.
+#    Stopping a running task does not prevent Task Scheduler from launching
+#    it again seconds later, so disable each task before killing processes.
+# ----------------------------------------------------------------------------
+$reportMateTasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+    $_.TaskName -like '*ReportMate*' -or
+    $_.Description -like '*ReportMate*' -or
+    $_.TaskName -like '*Report*Mate*'
 }
 
-# Stop old runner.exe processes
-Stop-ReportMateProcess -ProcessName "runner" -BinaryPath "C:\Program Files\ReportMate\runner.exe"
-
-# Stop new managedreportsrunner.exe processes  
-Stop-ReportMateProcess -ProcessName "managedreportsrunner" -BinaryPath "C:\Program Files\ReportMate\managedreportsrunner.exe"
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# MIGRATION: Forcefully remove old runner.exe binary (renamed to managedreportsrunner.exe)
-# ═══════════════════════════════════════════════════════════════════════════════
-$OldBinaryPath = "C:\Program Files\ReportMate\runner.exe"
-
-# Forcefully delete the old binary
-if (Test-Path $OldBinaryPath) {
-    Write-Host "Migration: Forcefully removing old runner.exe binary..."
+foreach ($task in $reportMateTasks) {
     try {
-        # Try normal deletion first
-        Remove-Item $OldBinaryPath -Force -ErrorAction Stop
-        Write-Host "Old runner.exe binary removed successfully"
-    } catch {
-        # If that fails, try taking ownership and removing
-        Write-Host "Standard removal failed, attempting forceful removal..."
-        try {
-            $acl = Get-Acl $OldBinaryPath
-            $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-            $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "Allow")
-            $acl.SetAccessRule($accessRule)
-            Set-Acl $OldBinaryPath $acl -ErrorAction SilentlyContinue
-            Remove-Item $OldBinaryPath -Force -ErrorAction Stop
-            Write-Host "Old runner.exe binary removed with elevated permissions"
-        } catch {
-            Write-Warning "Could not remove old runner.exe: $_ - Will be cleaned up on next reboot"
-            # Schedule deletion on reboot as last resort
-            cmd /c "del /f /q `"$OldBinaryPath`"" 2>$null
+        Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue | Out-Null
+        if ($task.State -eq 'Running') {
+            Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
         }
+        Write-Host "  Disabled task: $($task.TaskName)"
+    } catch {
+        Write-Warning "  Failed to disable task '$($task.TaskName)': $_"
     }
 }
 
-# Stop any running ReportMate scheduled tasks
-Write-Host "Stopping any running ReportMate tasks..."
-Get-ScheduledTask | Where-Object { 
-    $_.TaskName -like "*ReportMate*" -or 
-    $_.Description -like "*ReportMate*" -or
-    $_.TaskName -like "*Report*Mate*"
-} | ForEach-Object {
-    if ($_.State -eq "Running") {
-        Write-Host "  Stopping task: $($_.TaskName)"
-        Stop-ScheduledTask -TaskName $_.TaskName -ErrorAction SilentlyContinue
-    }
-}
-
-# Clean up any temporary files or locks
-$tempPaths = @(
-    "C:\ProgramData\ManagedReports\cache\*.lock",
-    "C:\ProgramData\ManagedReports\logs\*.tmp"
+# ----------------------------------------------------------------------------
+# 2. Kill all ReportMate processes.
+#    Stop-Process first (clean). Then taskkill /F /T as the hard fallback:
+#    it reaches across user sessions (usagetracker.exe runs in the logged-in
+#    user's session, not session 0) and kills child processes such as
+#    osqueryi.exe spawned by the runner.
+# ----------------------------------------------------------------------------
+$processNames = @('managedreportsrunner', 'usagetracker', 'runner')
+$exeNames     = @(
+    'managedreportsrunner.exe'
+    'usagetracker.exe'
+    'runner.exe'
+    'osqueryi.exe'
 )
 
-foreach ($pattern in $tempPaths) {
-    $files = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue
-    if ($files) {
-        $files | Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Host "Cleaned temporary files: $pattern"
+foreach ($name in $processNames) {
+    $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
+    if ($procs) {
+        Write-Host "  Stop-Process: $($procs.Count) $name process(es)"
+        $procs | Stop-Process -Force -ErrorAction SilentlyContinue
     }
+}
+Start-Sleep -Seconds 2
+
+foreach ($exe in $exeNames) {
+    try { & taskkill.exe /F /IM $exe /T 2>$null | Out-Null } catch { }
+}
+Start-Sleep -Seconds 2
+
+# ----------------------------------------------------------------------------
+# 3. Verify install-dir binaries are unlocked. If anything is still locked
+#    after the kill attempts, warn loudly -- the install will succeed but
+#    the new binary will not land until reboot.
+# ----------------------------------------------------------------------------
+function Test-FileUnlocked {
+    param([string]$Path)
+    if (-not (Test-Path $Path)) { return $true }
+    try {
+        $stream = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
+        $stream.Close()
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+$binariesToVerify = @(
+    Join-Path $InstallDir 'managedreportsrunner.exe'
+    Join-Path $InstallDir 'usagetracker.exe'
+)
+
+foreach ($bin in $binariesToVerify) {
+    if (-not (Test-Path $bin)) { continue }
+    $name = Split-Path $bin -Leaf
+    $waited = 0
+    while (-not (Test-FileUnlocked $bin) -and $waited -lt 10) {
+        Write-Host "  Waiting for $name to be released ($($waited + 1)/10)..."
+        Start-Sleep -Seconds 1
+        $waited++
+    }
+    if (Test-FileUnlocked $bin) {
+        Write-Host "  Unlocked: $name"
+    } else {
+        Write-Warning "  Still locked after 10s: $bin -- MSI may defer file replacement to reboot"
+    }
+}
+
+# ----------------------------------------------------------------------------
+# 4. Legacy migration: remove the old runner.exe (predecessor of
+#    managedreportsrunner.exe) so it cannot be invoked again by anything
+#    referencing the old path.
+# ----------------------------------------------------------------------------
+$legacyRunner = Join-Path $InstallDir 'runner.exe'
+if (Test-Path $legacyRunner) {
+    try {
+        Remove-Item $legacyRunner -Force -ErrorAction Stop
+        Write-Host "Removed legacy runner.exe"
+    } catch {
+        Write-Warning "Could not remove legacy runner.exe: $_"
+        try { & cmd.exe /c "del /f /q `"$legacyRunner`"" 2>$null } catch { }
+    }
+}
+
+# ----------------------------------------------------------------------------
+# 5. Clean ephemeral cache/lock files
+# ----------------------------------------------------------------------------
+$tempPatterns = @(
+    'C:\ProgramData\ManagedReports\cache\*.lock'
+    'C:\ProgramData\ManagedReports\logs\*.tmp'
+)
+foreach ($pattern in $tempPatterns) {
+    Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "Pre-installation cleanup completed"
+exit 0
