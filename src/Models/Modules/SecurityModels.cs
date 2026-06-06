@@ -27,6 +27,194 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<CertificateInfo> Certificates { get; set; } = new();
         public CertificateSummary CertificateSummary { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
+
+        // Phase 2 additions — protection posture and configuration auditing
+        public LsaProtectionInfo LsaProtection { get; set; } = new();
+        public TamperProtectionInfo TamperProtection { get; set; } = new();
+        public UacInfo Uac { get; set; } = new();
+        public PendingRebootInfo PendingReboot { get; set; } = new();
+        public List<AsrRuleState> AsrRules { get; set; } = new();
+        public DefenderVersionsInfo DefenderVersions { get; set; } = new();
+        public DefenderExclusionsInfo DefenderExclusions { get; set; } = new();
+        public JoinStateInfo JoinState { get; set; } = new();
+
+        // Phase 3 — compliance & inventory
+        public List<LocalAdminMember> LocalAdmins { get; set; } = new();
+        public LapsInfo Laps { get; set; } = new();
+        public AppLockerInfo AppLocker { get; set; } = new();
+        public SmartScreenInfo SmartScreen { get; set; } = new();
+        public AuditPolicyInfo AuditPolicy { get; set; } = new();
+        public List<EdrProductInfo> EdrProducts { get; set; } = new();
+        public WindowsHelloInfo WindowsHello { get; set; } = new();
+        public TpmOwnershipInfo TpmOwnership { get; set; } = new();
+        public PasswordPolicyInfo PasswordPolicy { get; set; } = new();
+        public AutoLoginInfo AutoLogin { get; set; } = new();
+    }
+
+    public class LocalAdminMember
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Sid { get; set; } = string.Empty;
+        public string PrincipalSource { get; set; } = string.Empty; // Local / ActiveDirectory / AzureAD
+        public string ObjectClass { get; set; } = string.Empty;     // User / Group
+    }
+
+    public class LapsInfo
+    {
+        public bool WindowsLapsConfigured { get; set; } // Windows LAPS (built-in, Win11+)
+        public bool LegacyLapsInstalled { get; set; }   // Legacy Microsoft LAPS msi
+        public string BackupDirectory { get; set; } = string.Empty; // "Active Directory" / "Azure AD" / ""
+        public string AdminAccountName { get; set; } = string.Empty;
+    }
+
+    public class AppLockerInfo
+    {
+        public bool ServiceRunning { get; set; }
+        public string ServiceStartType { get; set; } = string.Empty; // Manual/Automatic/Disabled
+        public bool PolicyConfigured { get; set; }
+        public string EffectivePolicySummary { get; set; } = string.Empty; // brief Mode hint per RuleCollection
+        public bool WdacEnabled { get; set; }    // Code Integrity (WDAC) policy in effect
+        public bool WdacAuditMode { get; set; }  // audit vs enforce
+    }
+
+    public class SmartScreenInfo
+    {
+        public string WindowsState { get; set; } = string.Empty;   // "Block" / "Warn" / "Off" / ""
+        public bool? EdgeEnabled { get; set; }
+        public bool? EdgePuaProtection { get; set; }                // potentially unwanted application protection
+    }
+
+    public class AuditPolicyInfo
+    {
+        public List<AuditCategorySetting> Categories { get; set; } = new();
+        public string ErrorMessage { get; set; } = string.Empty;
+    }
+
+    public class AuditCategorySetting
+    {
+        public string Category { get; set; } = string.Empty;     // e.g. "Logon"
+        public string Subcategory { get; set; } = string.Empty;  // e.g. "Logon"
+        public string Setting { get; set; } = string.Empty;      // "Success" / "Failure" / "Success and Failure" / "No Auditing"
+    }
+
+    public class EdrProductInfo
+    {
+        public string Name { get; set; } = string.Empty;        // e.g. "CrowdStrike Falcon Sensor"
+        public string Vendor { get; set; } = string.Empty;      // e.g. "CrowdStrike"
+        public string Source { get; set; } = string.Empty;      // "WMI:SecurityCenter2" / "Service" / "Process"
+        public bool ServiceRunning { get; set; }
+        public string Version { get; set; } = string.Empty;
+        public string Sid { get; set; } = string.Empty;         // optional SecurityCenter2 product SID
+    }
+
+    public class WindowsHelloInfo
+    {
+        public bool FaceSensorPresent { get; set; }
+        public bool FingerprintSensorPresent { get; set; }
+        public bool? PinConfigured { get; set; }
+        public bool? PassportForWorkEnabled { get; set; } // Windows Hello for Business
+    }
+
+    public class TpmOwnershipInfo
+    {
+        public bool? IsOwned { get; set; }
+        public bool? IsReady { get; set; }
+        public bool? AutoProvisioning { get; set; }
+        public string ManufacturerIdTxt { get; set; } = string.Empty;
+        public string ManagedAuthLevel { get; set; } = string.Empty;
+    }
+
+    public class PasswordPolicyInfo
+    {
+        public int? MinPasswordLength { get; set; }
+        public int? MaxPasswordAgeDays { get; set; }
+        public int? MinPasswordAgeDays { get; set; }
+        public int? PasswordHistoryLength { get; set; }
+        public int? LockoutThreshold { get; set; }
+        public int? LockoutDurationMinutes { get; set; }
+        public bool? ComplexityRequired { get; set; }
+        public string ErrorMessage { get; set; } = string.Empty;
+    }
+
+    public class AutoLoginInfo
+    {
+        public bool AutoAdminLogon { get; set; }   // value "1" present
+        public bool HasDefaultUserName { get; set; }
+        public bool HasDefaultPassword { get; set; } // PRESENCE ONLY — never the value
+        public bool HasDefaultDomainName { get; set; }
+        public string DefaultUserName { get; set; } = string.Empty; // safe to surface; password never is
+    }
+
+    public class LsaProtectionInfo
+    {
+        public bool? Enabled { get; set; } // null = unknown / not configured
+        public int? RunAsPpl { get; set; } // 0 = off, 1 = PPL, 2 = PPL with UEFI lock
+        public string Mode { get; set; } = string.Empty; // "Disabled" / "PPL" / "PPLBoot"
+    }
+
+    public class TamperProtectionInfo
+    {
+        public bool? IsTamperProtected { get; set; }
+        public string Source { get; set; } = string.Empty; // "Get-MpComputerStatus" / "registry"
+    }
+
+    public class UacInfo
+    {
+        public bool? EnableLua { get; set; }
+        public int? ConsentPromptBehaviorAdmin { get; set; }
+        public int? PromptOnSecureDesktop { get; set; }
+        // Computed level: "AlwaysNotify" / "NotifyChangesSecure" / "NotifyChangesNoDim" / "NeverNotify" / "Disabled" / "Custom"
+        public string Level { get; set; } = string.Empty;
+    }
+
+    public class PendingRebootInfo
+    {
+        public bool CbsServicing { get; set; }      // Component Based Servicing RebootPending key
+        public bool WindowsUpdate { get; set; }     // WindowsUpdate\Auto Update\RebootRequired
+        public bool FileRename { get; set; }        // PendingFileRenameOperations
+        public bool Required { get; set; }          // any of the above
+    }
+
+    public class AsrRuleState
+    {
+        public string Id { get; set; } = string.Empty;          // GUID of the rule
+        public string Name { get; set; } = string.Empty;        // Human-readable name (mapped client-side)
+        public int Action { get; set; }                          // 0=Off, 1=Block, 2=Audit, 6=Warn
+        public string State { get; set; } = string.Empty;        // "Off" / "Block" / "Audit" / "Warn" / "Unknown(N)"
+    }
+
+    public class DefenderVersionsInfo
+    {
+        public string AmEngineVersion { get; set; } = string.Empty;
+        public string AmProductVersion { get; set; } = string.Empty;
+        public string AmServiceVersion { get; set; } = string.Empty;
+        public string NisEngineVersion { get; set; } = string.Empty;
+        public string AntivirusSignatureVersion { get; set; } = string.Empty;
+        public string AntispywareSignatureVersion { get; set; } = string.Empty;
+    }
+
+    public class DefenderExclusionsInfo
+    {
+        public List<string> Paths { get; set; } = new();
+        public List<string> Extensions { get; set; } = new();
+        public List<string> Processes { get; set; } = new();
+        public List<string> IpAddresses { get; set; } = new();
+        public int TotalCount { get; set; } // sum of all four; useful for fleet aggregation
+    }
+
+    public class JoinStateInfo
+    {
+        public bool? AzureAdJoined { get; set; }
+        public bool? DomainJoined { get; set; }
+        public bool? WorkplaceJoined { get; set; }
+        public bool? EnterpriseJoined { get; set; }
+        public string TenantName { get; set; } = string.Empty;
+        public string TenantId { get; set; } = string.Empty;
+        public string DeviceId { get; set; } = string.Empty;
+        public string DomainName { get; set; } = string.Empty;
+        // From dsregcmd "Internet Details": NTP sync, MDM enrollment etc. captured as raw key/value bag.
+        public Dictionary<string, string> Raw { get; set; } = new();
+        public string ErrorMessage { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -39,6 +227,16 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled", "Unknown"
         public List<UefiCertificateInfo> DbCertificates { get; set; } = new(); // Secure Boot DB certs
         public List<UefiCertificateInfo> KekCertificates { get; set; } = new(); // Key Exchange Key certs
+        // Collection-side failures so the dashboard can distinguish "zero certs" from "parse failed".
+        // Populated per-store (db / KEK). Empty when the parser ran cleanly.
+        public List<UefiCollectionError> CollectionErrors { get; set; } = new();
+    }
+
+    public class UefiCollectionError
+    {
+        public string Store { get; set; } = string.Empty; // "db" / "KEK"
+        public string Stage { get; set; } = string.Empty; // "ps_invoke" / "base64_decode" / "size_too_small" / "list_parse" / "x509_load" / "no_output"
+        public string Message { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -114,12 +312,24 @@ namespace ReportMate.WindowsClient.Models.Modules
 
     public class FirewallInfo
     {
+        // True only when ALL profiles (Domain, Private, Public) are enabled.
         public bool IsEnabled { get; set; }
-        public string Profile { get; set; } = string.Empty; // Domain, Private, Public
+        // Deprecated single-profile string; kept for back-compat with old payloads. Use Profiles instead.
+        public string Profile { get; set; } = string.Empty;
+        // Per-profile state. A profile may be enabled with permissive default actions, so the dashboard needs all three.
+        public List<FirewallProfileState> Profiles { get; set; } = new();
+        // Reserved for future rule collection. Currently never populated — leaving the field for schema stability.
         public List<FirewallRule> Rules { get; set; } = new();
-        
         // Computed status fields for UI display
-        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Disabled"
+        public string StatusDisplay { get; set; } = string.Empty; // "Enabled", "Partially Enabled", "Disabled"
+    }
+
+    public class FirewallProfileState
+    {
+        public string Name { get; set; } = string.Empty; // "Domain", "Private", "Public"
+        public bool Enabled { get; set; }
+        public string DefaultInboundAction { get; set; } = string.Empty; // "Allow" / "Block" / "NotConfigured"
+        public string DefaultOutboundAction { get; set; } = string.Empty;
     }
 
     public class FirewallRule
@@ -356,6 +566,10 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? DetectedAt { get; set; }
         public DateTime? ResolvedAt { get; set; }
         public int EventId { get; set; } // Windows Event Log EventID (1116=Detection, 1117=Action)
+        // Count of duplicates collapsed into this entry. 1 = single occurrence; FirstSeenAt/LastSeenAt span the window when Count > 1.
+        public int Count { get; set; } = 1;
+        public DateTime? FirstSeenAt { get; set; }
+        public DateTime? LastSeenAt { get; set; }
     }
 
     /// <summary>

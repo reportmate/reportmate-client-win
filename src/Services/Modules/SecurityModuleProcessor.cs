@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
+using ReportMate.WindowsClient.Services;
 using ReportMate.WindowsClient.Services.Modules;
 using ReportMate.WindowsClient.Models;
 
@@ -50,6 +51,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process firewall information
             ProcessFirewallInfo(osqueryResults, data);
 
+            // Collect per-profile firewall state via PowerShell (Domain/Private/Public)
+            await ProcessFirewallProfilesAsync(data);
+
             // Process BitLocker/encryption information
             ProcessEncryptionInfo(osqueryResults, data);
 
@@ -88,6 +92,18 @@ namespace ReportMate.WindowsClient.Services.Modules
 
             // Process certificates
             ProcessCertificates(osqueryResults, data);
+
+            // Collect protection posture: LSA, Tamper, UAC, pending reboot, ASR rules, Defender versions/exclusions
+            await ProcessProtectionPostureAsync(data);
+
+            // Collect device join state (Entra / AD / Workplace) via dsregcmd
+            await ProcessJoinStateAsync(data);
+
+            // Collect compliance / inventory snapshot (LAPS, AppLocker, SmartScreen, EDR, Hello, audit, etc.)
+            await ProcessComplianceInventoryAsync(data);
+
+            // Collapse duplicate detection alerts (same threat / process / source) into one entry with Count
+            DedupeDetections(data);
 
             // Compute human-readable status display fields
             ComputeStatusDisplays(data);
@@ -273,6 +289,83 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
         }
 
+        private async Task ProcessFirewallProfilesAsync(SecurityData data)
+        {
+            try
+            {
+                const string script =
+                    "Get-NetFirewallProfile -ErrorAction Stop | " +
+                    "Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction | " +
+                    "ConvertTo-Json -Compress";
+
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    _logger.LogDebug("Get-NetFirewallProfile returned no output; leaving per-profile state empty");
+                    return;
+                }
+
+                // ConvertTo-Json returns an object when there's a single item, an array otherwise.
+                var trimmed = result.Trim();
+                if (!trimmed.StartsWith("["))
+                {
+                    trimmed = "[" + trimmed + "]";
+                }
+
+                using var doc = JsonDocument.Parse(trimmed);
+                var profiles = new List<FirewallProfileState>();
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    var profile = new FirewallProfileState
+                    {
+                        Name = el.TryGetProperty("Name", out var n) ? (n.ValueKind == JsonValueKind.String ? n.GetString() ?? string.Empty : n.ToString()) : string.Empty,
+                        Enabled = ParsePsBool(el, "Enabled"),
+                        DefaultInboundAction = el.TryGetProperty("DefaultInboundAction", out var i) ? (i.ValueKind == JsonValueKind.String ? i.GetString() ?? string.Empty : i.ToString()) : string.Empty,
+                        DefaultOutboundAction = el.TryGetProperty("DefaultOutboundAction", out var o) ? (o.ValueKind == JsonValueKind.String ? o.GetString() ?? string.Empty : o.ToString()) : string.Empty,
+                    };
+                    profiles.Add(profile);
+                }
+
+                if (profiles.Count > 0)
+                {
+                    data.Firewall.Profiles = profiles;
+                    // Recompute IsEnabled: only true when ALL profiles are enabled.
+                    var allEnabled = profiles.All(p => p.Enabled);
+                    var anyEnabled = profiles.Any(p => p.Enabled);
+                    data.Firewall.IsEnabled = allEnabled;
+                    data.Firewall.StatusDisplay = allEnabled
+                        ? "Enabled"
+                        : (anyEnabled ? "Partially Enabled" : "Disabled");
+                    _logger.LogInformation(
+                        "Firewall profiles collected: {Count}. Domain={Domain} Private={Private} Public={Public}",
+                        profiles.Count,
+                        profiles.FirstOrDefault(p => p.Name.Equals("Domain", StringComparison.OrdinalIgnoreCase))?.Enabled,
+                        profiles.FirstOrDefault(p => p.Name.Equals("Private", StringComparison.OrdinalIgnoreCase))?.Enabled,
+                        profiles.FirstOrDefault(p => p.Name.Equals("Public", StringComparison.OrdinalIgnoreCase))?.Enabled);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect per-profile firewall state via Get-NetFirewallProfile");
+            }
+        }
+
+        private static bool ParsePsBool(JsonElement parent, string name)
+        {
+            if (!parent.TryGetProperty(name, out var v)) return false;
+            // PowerShell enum properties serialize as integer or string ("True"/"False" or "0"/"1" or "Allow"/etc.)
+            switch (v.ValueKind)
+            {
+                case JsonValueKind.True: return true;
+                case JsonValueKind.False: return false;
+                case JsonValueKind.Number: return v.TryGetInt32(out var n) && n != 0;
+                case JsonValueKind.String:
+                    var s = v.GetString() ?? string.Empty;
+                    return s.Equals("True", StringComparison.OrdinalIgnoreCase) || s == "1";
+                default: return false;
+            }
+        }
+
         private void ProcessEncryptionInfo(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, SecurityData data)
         {
             // Process BitLocker information
@@ -426,6 +519,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                 if (string.IsNullOrWhiteSpace(result))
                 {
                     _logger.LogDebug("No UEFI {Store} data returned", storeName);
+                    data.SecureBoot.CollectionErrors.Add(new UefiCollectionError
+                    {
+                        Store = storeName,
+                        Stage = "no_output",
+                        Message = "Get-SecureBootUEFI returned empty (Secure Boot off, unsupported firmware, or access denied)"
+                    });
                     return;
                 }
 
@@ -434,15 +533,27 @@ namespace ReportMate.WindowsClient.Services.Modules
                 {
                     raw = Convert.FromBase64String(result.Trim());
                 }
-                catch
+                catch (Exception decodeEx)
                 {
-                    _logger.LogWarning("Failed to decode UEFI {Store} base64 data", storeName);
+                    _logger.LogWarning(decodeEx, "Failed to decode UEFI {Store} base64 data", storeName);
+                    data.SecureBoot.CollectionErrors.Add(new UefiCollectionError
+                    {
+                        Store = storeName,
+                        Stage = "base64_decode",
+                        Message = decodeEx.Message
+                    });
                     return;
                 }
 
                 if (raw.Length < 28)
                 {
                     _logger.LogDebug("UEFI {Store} data too small ({Length} bytes)", storeName, raw.Length);
+                    data.SecureBoot.CollectionErrors.Add(new UefiCollectionError
+                    {
+                        Store = storeName,
+                        Stage = "size_too_small",
+                        Message = $"Raw EFI_SIGNATURE_LIST blob was {raw.Length} bytes; minimum 28 required"
+                    });
                     return;
                 }
 
@@ -557,6 +668,12 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to collect UEFI {Store} certificates", storeName);
+                data.SecureBoot.CollectionErrors.Add(new UefiCollectionError
+                {
+                    Store = storeName,
+                    Stage = "list_parse",
+                    Message = ex.Message
+                });
             }
         }
 
@@ -1508,6 +1625,839 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// <summary>
         /// Compute display status fields for all security components
         /// </summary>
+        private static readonly Dictionary<string, string> AsrRuleNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Source: https://learn.microsoft.com/en-us/defender-endpoint/attack-surface-reduction-rules-reference
+            ["56a863a9-875e-4185-98a7-b882c64b5ce5"] = "Block abuse of exploited vulnerable signed drivers",
+            ["7674ba52-37eb-4a4f-a9a1-f0f9a1619a2c"] = "Block Adobe Reader from creating child processes",
+            ["d4f940ab-401b-4efc-aadc-ad5f3c50688a"] = "Block all Office applications from creating child processes",
+            ["9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2"] = "Block credential stealing from LSASS",
+            ["be9ba2d9-53ea-4cdc-84e5-9b1eeee46550"] = "Block executable content from email client and webmail",
+            ["01443614-cd74-433a-b99e-2ecdc07bfc25"] = "Block executable files unless they meet a prevalence, age, or trusted list criterion",
+            ["5beb7efe-fd9a-4556-801d-275e5ffc04cc"] = "Block execution of potentially obfuscated scripts",
+            ["d3e037e1-3eb8-44c8-a917-57927947596d"] = "Block JavaScript or VBScript from launching downloaded executable content",
+            ["3b576869-a4ec-4529-8536-b80a7769e899"] = "Block Office applications from creating executable content",
+            ["75668c1f-73b5-4cf0-bb93-3ecf5cb7cc84"] = "Block Office applications from injecting code into other processes",
+            ["26190899-1602-49e8-8b27-eb1d0a1ce869"] = "Block Office communication application from creating child processes",
+            ["e6db77e5-3df2-4cf1-b95a-636979351e5b"] = "Block persistence through WMI event subscription",
+            ["d1e49aac-8f56-4280-b9ba-993a6d77406c"] = "Block process creations originating from PSExec and WMI commands",
+            ["33ddedf1-c6e0-47cb-833e-de6133960387"] = "Block rebooting machine in Safe Mode (preview)",
+            ["b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4"] = "Block untrusted and unsigned processes that run from USB",
+            ["c0033c00-d16d-4114-a5a0-dc9b3a7d2ceb"] = "Block use of copied or impersonated system tools (preview)",
+            ["a8f5898e-1dc8-49a9-9878-85004b8a61e6"] = "Block Webshell creation for Servers",
+            ["92e97fa1-2edf-4476-bdd6-9dd0b4dddc7b"] = "Block Win32 API calls from Office macros",
+            ["c1db55ab-c21a-4637-bb3f-a12568109d35"] = "Use advanced protection against ransomware",
+        };
+
+        private async Task ProcessProtectionPostureAsync(SecurityData data)
+        {
+            try
+            {
+                _logger.LogDebug("Collecting protection posture (LSA, Tamper, UAC, reboot, ASR, Defender versions/exclusions)");
+
+                // Single PowerShell invocation returns one JSON blob with all signals.
+                // Keep this script defensive — every block wraps Try/Catch so one missing cmdlet doesn't drop everything.
+                const string script = @"
+$err = [ordered]@{}
+function Try-It([string]$name, [scriptblock]$block) { try { & $block } catch { $err[$name] = $_.Exception.Message; $null } }
+
+$lsa = Try-It 'lsa' {
+    $v = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name RunAsPPL -ErrorAction Stop).RunAsPPL
+    $iv = [int]$v
+    $mode = if ($iv -eq 1) { 'PPL' } elseif ($iv -eq 2) { 'PPLBoot' } else { 'Disabled' }
+    @{ runAsPpl = $iv; enabled = ($iv -in 1,2); mode = $mode }
+}
+
+$mpStatus = Try-It 'mpStatus' { Get-MpComputerStatus -ErrorAction Stop }
+$mpPref   = Try-It 'mpPref'   { Get-MpPreference   -ErrorAction Stop }
+
+$tamper = if ($mpStatus) { @{ isTamperProtected = [bool]$mpStatus.IsTamperProtected; source = 'Get-MpComputerStatus' } } else { @{ isTamperProtected = $null; source = '' } }
+
+$defenderVersions = if ($mpStatus) {
+    @{
+        amEngineVersion = [string]$mpStatus.AMEngineVersion
+        amProductVersion = [string]$mpStatus.AMProductVersion
+        amServiceVersion = [string]$mpStatus.AMServiceVersion
+        nisEngineVersion = [string]$mpStatus.NISEngineVersion
+        antivirusSignatureVersion = [string]$mpStatus.AntivirusSignatureVersion
+        antispywareSignatureVersion = [string]$mpStatus.AntispywareSignatureVersion
+    }
+} else { @{} }
+
+$asrRules = @()
+if ($mpPref -and $null -ne $mpPref.AttackSurfaceReductionRules_Ids) {
+    $ids = @($mpPref.AttackSurfaceReductionRules_Ids)
+    $actions = @($mpPref.AttackSurfaceReductionRules_Actions)
+    for ($i = 0; $i -lt $ids.Count; $i++) {
+        $action = if ($i -lt $actions.Count) { [int]$actions[$i] } else { 0 }
+        $state = switch ($action) { 0 {'Off'} 1 {'Block'} 2 {'Audit'} 6 {'Warn'} default { ""Unknown($action)"" } }
+        $asrRules += @{ id = [string]$ids[$i]; action = $action; state = $state }
+    }
+}
+
+$exclusions = if ($mpPref) {
+    $paths = @(); if ($null -ne $mpPref.ExclusionPath)      { $paths = @($mpPref.ExclusionPath      | Where-Object { $_ -is [string] -and $_.Length -gt 0 }) }
+    $exts  = @(); if ($null -ne $mpPref.ExclusionExtension) { $exts  = @($mpPref.ExclusionExtension | Where-Object { $_ -is [string] -and $_.Length -gt 0 }) }
+    $procs = @(); if ($null -ne $mpPref.ExclusionProcess)   { $procs = @($mpPref.ExclusionProcess   | Where-Object { $_ -is [string] -and $_.Length -gt 0 }) }
+    $ips   = @(); if ($null -ne $mpPref.ExclusionIpAddress) { $ips   = @($mpPref.ExclusionIpAddress | Where-Object { $_ -is [string] -and $_.Length -gt 0 }) }
+    @{
+        paths = $paths
+        extensions = $exts
+        processes = $procs
+        ipAddresses = $ips
+        totalCount = ($paths.Count + $exts.Count + $procs.Count + $ips.Count)
+    }
+} else { @{ paths=@(); extensions=@(); processes=@(); ipAddresses=@(); totalCount=0 } }
+
+$uac = Try-It 'uac' {
+    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction Stop
+    $lua = [int]$p.EnableLUA
+    $cpb = [int]$p.ConsentPromptBehaviorAdmin
+    $psd = [int]$p.PromptOnSecureDesktop
+    $level = if ($lua -eq 0) {'Disabled'} `
+             elseif ($cpb -eq 0) {'NeverNotify'} `
+             elseif ($cpb -eq 2 -and $psd -eq 1) {'AlwaysNotify'} `
+             elseif ($cpb -eq 5 -and $psd -eq 1) {'NotifyChangesSecure'} `
+             elseif ($cpb -eq 5 -and $psd -eq 0) {'NotifyChangesNoDim'} `
+             else {'Custom'}
+    @{ enableLua = $lua; consentPromptBehaviorAdmin = $cpb; promptOnSecureDesktop = $psd; level = $level }
+}
+
+$pendingReboot = Try-It 'pendingReboot' {
+    $cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    $rename = $false
+    try {
+        $r = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction Stop
+        if ($r -and $r.PendingFileRenameOperations) { $rename = ($r.PendingFileRenameOperations.Count -gt 0) }
+    } catch {}
+    @{ cbsServicing = [bool]$cbs; windowsUpdate = [bool]$wu; fileRename = [bool]$rename; required = ([bool]$cbs -or [bool]$wu -or [bool]$rename) }
+}
+
+@{
+    lsaProtection = $lsa
+    tamperProtection = $tamper
+    defenderVersions = $defenderVersions
+    asrRules = $asrRules
+    defenderExclusions = $exclusions
+    uac = $uac
+    pendingReboot = $pendingReboot
+    errors = $err
+} | ConvertTo-Json -Depth 6 -Compress
+";
+
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    _logger.LogWarning("Protection posture script returned no output");
+                    return;
+                }
+
+                using var doc = JsonDocument.Parse(result);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("lsaProtection", out var lsaEl) && lsaEl.ValueKind == JsonValueKind.Object)
+                {
+                    data.LsaProtection.RunAsPpl = lsaEl.TryGetProperty("runAsPpl", out var rp) && rp.TryGetInt32(out var rpi) ? rpi : (int?)null;
+                    data.LsaProtection.Enabled = lsaEl.TryGetProperty("enabled", out var en) ? ParseBoolOpt(en) : null;
+                    data.LsaProtection.Mode = lsaEl.TryGetProperty("mode", out var md) && md.ValueKind == JsonValueKind.String ? md.GetString() ?? "" : "";
+                }
+
+                if (root.TryGetProperty("tamperProtection", out var tpEl) && tpEl.ValueKind == JsonValueKind.Object)
+                {
+                    data.TamperProtection.IsTamperProtected = tpEl.TryGetProperty("isTamperProtected", out var tp) ? ParseBoolOpt(tp) : null;
+                    data.TamperProtection.Source = tpEl.TryGetProperty("source", out var src) && src.ValueKind == JsonValueKind.String ? src.GetString() ?? "" : "";
+                }
+
+                if (root.TryGetProperty("defenderVersions", out var dvEl) && dvEl.ValueKind == JsonValueKind.Object)
+                {
+                    data.DefenderVersions.AmEngineVersion = GetJsonString(dvEl, "amEngineVersion");
+                    data.DefenderVersions.AmProductVersion = GetJsonString(dvEl, "amProductVersion");
+                    data.DefenderVersions.AmServiceVersion = GetJsonString(dvEl, "amServiceVersion");
+                    data.DefenderVersions.NisEngineVersion = GetJsonString(dvEl, "nisEngineVersion");
+                    data.DefenderVersions.AntivirusSignatureVersion = GetJsonString(dvEl, "antivirusSignatureVersion");
+                    data.DefenderVersions.AntispywareSignatureVersion = GetJsonString(dvEl, "antispywareSignatureVersion");
+                }
+
+                if (root.TryGetProperty("asrRules", out var asrEl) && asrEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var rule in asrEl.EnumerateArray())
+                    {
+                        var id = GetJsonString(rule, "id");
+                        var rs = new AsrRuleState
+                        {
+                            Id = id,
+                            Name = AsrRuleNames.TryGetValue(id, out var n) ? n : "Unknown ASR rule",
+                            Action = rule.TryGetProperty("action", out var ac) && ac.TryGetInt32(out var aci) ? aci : 0,
+                            State = GetJsonString(rule, "state"),
+                        };
+                        data.AsrRules.Add(rs);
+                    }
+                }
+
+                if (root.TryGetProperty("defenderExclusions", out var exEl) && exEl.ValueKind == JsonValueKind.Object)
+                {
+                    data.DefenderExclusions.Paths = ReadStringArray(exEl, "paths");
+                    data.DefenderExclusions.Extensions = ReadStringArray(exEl, "extensions");
+                    data.DefenderExclusions.Processes = ReadStringArray(exEl, "processes");
+                    data.DefenderExclusions.IpAddresses = ReadStringArray(exEl, "ipAddresses");
+                    data.DefenderExclusions.TotalCount =
+                        data.DefenderExclusions.Paths.Count
+                        + data.DefenderExclusions.Extensions.Count
+                        + data.DefenderExclusions.Processes.Count
+                        + data.DefenderExclusions.IpAddresses.Count;
+                }
+
+                if (root.TryGetProperty("uac", out var uacEl) && uacEl.ValueKind == JsonValueKind.Object)
+                {
+                    data.Uac.EnableLua = uacEl.TryGetProperty("enableLua", out var lua) && lua.TryGetInt32(out var luai) ? luai != 0 : (bool?)null;
+                    data.Uac.ConsentPromptBehaviorAdmin = uacEl.TryGetProperty("consentPromptBehaviorAdmin", out var cpb) && cpb.TryGetInt32(out var cpbi) ? cpbi : (int?)null;
+                    data.Uac.PromptOnSecureDesktop = uacEl.TryGetProperty("promptOnSecureDesktop", out var psd) && psd.TryGetInt32(out var psdi) ? psdi : (int?)null;
+                    data.Uac.Level = GetJsonString(uacEl, "level");
+                }
+
+                if (root.TryGetProperty("pendingReboot", out var prEl) && prEl.ValueKind == JsonValueKind.Object)
+                {
+                    data.PendingReboot.CbsServicing = prEl.TryGetProperty("cbsServicing", out var cbs) && ParseBoolOpt(cbs) == true;
+                    data.PendingReboot.WindowsUpdate = prEl.TryGetProperty("windowsUpdate", out var wu) && ParseBoolOpt(wu) == true;
+                    data.PendingReboot.FileRename = prEl.TryGetProperty("fileRename", out var fr) && ParseBoolOpt(fr) == true;
+                    data.PendingReboot.Required = prEl.TryGetProperty("required", out var rq) && ParseBoolOpt(rq) == true;
+                }
+
+                _logger.LogInformation(
+                    "Protection posture: LSA={Lsa} Tamper={Tamper} UAC={Uac} PendingReboot={Reboot} ASR={Asr} Exclusions={Exc} EngineVer={Eng}",
+                    data.LsaProtection.Mode,
+                    data.TamperProtection.IsTamperProtected,
+                    data.Uac.Level,
+                    data.PendingReboot.Required,
+                    data.AsrRules.Count,
+                    data.DefenderExclusions.TotalCount,
+                    data.DefenderVersions.AmEngineVersion);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Protection posture collection failed");
+            }
+        }
+
+        // Known EDR/MDR product signatures: maps service name OR process name → (DisplayName, Vendor).
+        // Service-name match is checked first; if not found, the process scan provides a softer signal.
+        private static readonly Dictionary<string, (string Name, string Vendor)> EdrServiceSignatures =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CSFalconService"]      = ("CrowdStrike Falcon Sensor", "CrowdStrike"),
+                ["SentinelAgent"]        = ("SentinelOne Agent", "SentinelOne"),
+                ["SentinelStaticEngine"] = ("SentinelOne Agent", "SentinelOne"),
+                ["Sophos AutoUpdate Service"] = ("Sophos AutoUpdate", "Sophos"),
+                ["Sophos Endpoint Defense Service"] = ("Sophos Endpoint", "Sophos"),
+                ["SophosFS"]             = ("Sophos File Scanner", "Sophos"),
+                ["SAVService"]           = ("Sophos Anti-Virus", "Sophos"),
+                ["MDE.Windows"]          = ("Microsoft Defender for Endpoint", "Microsoft"),
+                ["Sense"]                = ("Microsoft Defender for Endpoint (Sense)", "Microsoft"),
+                ["WdNisSvc"]             = ("Windows Defender Network Inspection", "Microsoft"),
+                ["WinDefend"]            = ("Windows Defender Antivirus", "Microsoft"),
+                ["Carbon Black Cloud Sensor"] = ("Carbon Black Cloud Sensor", "VMware Carbon Black"),
+                ["CbDefense"]            = ("Carbon Black Defense", "VMware Carbon Black"),
+                ["cbsensor"]             = ("Carbon Black Sensor", "VMware Carbon Black"),
+                ["TrendMicroDeepSecurity"] = ("Trend Micro Deep Security", "Trend Micro"),
+                ["TmListen"]             = ("Trend Micro OfficeScan", "Trend Micro"),
+                ["McAfee.WebAdvisor"]    = ("McAfee WebAdvisor", "McAfee"),
+                ["McAfeeFramework"]      = ("McAfee Agent", "McAfee"),
+                ["mfemms"]               = ("McAfee Management Service", "McAfee"),
+                ["Cylance Smart Antivirus Service"] = ("Cylance Smart AV", "BlackBerry Cylance"),
+                ["CylanceSvc"]           = ("Cylance PROTECT", "BlackBerry Cylance"),
+                ["Cybereason ActiveProbe"] = ("Cybereason Sensor", "Cybereason"),
+                ["ArcticWolfAgent"]      = ("Arctic Wolf Agent", "Arctic Wolf"),
+                ["HMPAlertSvc"]          = ("HitmanPro.Alert", "Sophos"),
+                ["RTPSvc"]               = ("Webroot SecureAnywhere", "Webroot"),
+                ["WRSVC"]                = ("Webroot SecureAnywhere", "Webroot"),
+            };
+
+        private async Task ProcessComplianceInventoryAsync(SecurityData data)
+        {
+            await CollectLocalAdminsAsync(data);
+            await CollectLapsAsync(data);
+            await CollectAppLockerAndWdacAsync(data);
+            await CollectSmartScreenAsync(data);
+            await CollectAuditPolicyAsync(data);
+            await CollectEdrProductsAsync(data);
+            await CollectWindowsHelloAsync(data);
+            await CollectTpmOwnershipAsync(data);
+            await CollectPasswordPolicyAsync(data);
+            CollectAutoLoginPresence(data);
+        }
+
+        private async Task CollectLocalAdminsAsync(SecurityData data)
+        {
+            try
+            {
+                const string script =
+                    "Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop | " +
+                    "Select-Object @{n='Name';e={$_.Name}}, @{n='Sid';e={$_.SID.Value}}, @{n='PrincipalSource';e={[string]$_.PrincipalSource}}, @{n='ObjectClass';e={[string]$_.ObjectClass}} | " +
+                    "ConvertTo-Json -Compress";
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                var arr = result.Trim();
+                if (!arr.StartsWith("[")) arr = "[" + arr + "]";
+                using var doc = JsonDocument.Parse(arr);
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    data.LocalAdmins.Add(new LocalAdminMember
+                    {
+                        Name = GetJsonString(el, "Name"),
+                        Sid = GetJsonString(el, "Sid"),
+                        PrincipalSource = GetJsonString(el, "PrincipalSource"),
+                        ObjectClass = GetJsonString(el, "ObjectClass"),
+                    });
+                }
+                _logger.LogInformation("Local administrators: {Count}", data.LocalAdmins.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Local admin enumeration failed");
+            }
+        }
+
+        private async Task CollectLapsAsync(SecurityData data)
+        {
+            try
+            {
+                const string script = @"
+$winLaps = $false; $legacyLaps = $false; $backupDir = ''; $adminName = ''
+# Windows LAPS (built-in, Win11+ / Server 2022+)
+try {
+    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Policies\LAPS' -ErrorAction Stop
+    $winLaps = $true
+    switch ([int]$p.BackupDirectory) {
+        1 { $backupDir = 'Active Directory' }
+        2 { $backupDir = 'Azure AD' }
+        default { $backupDir = 'Configured' }
+    }
+    if ($p.AdministratorAccountName) { $adminName = [string]$p.AdministratorAccountName }
+} catch {}
+# Legacy LAPS (msi)
+try {
+    $p2 = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft Services\AdmPwd' -ErrorAction Stop
+    if ($p2) { $legacyLaps = $true }
+} catch {}
+@{ winLaps = [bool]$winLaps; legacyLaps = [bool]$legacyLaps; backupDir = $backupDir; adminName = $adminName } | ConvertTo-Json -Compress
+";
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var root = doc.RootElement;
+                data.Laps.WindowsLapsConfigured = ParseBoolOpt(root.GetProperty("winLaps")) == true;
+                data.Laps.LegacyLapsInstalled = ParseBoolOpt(root.GetProperty("legacyLaps")) == true;
+                data.Laps.BackupDirectory = GetJsonString(root, "backupDir");
+                data.Laps.AdminAccountName = GetJsonString(root, "adminName");
+                _logger.LogInformation("LAPS: Windows={Win} Legacy={Legacy} Backup={Backup}",
+                    data.Laps.WindowsLapsConfigured, data.Laps.LegacyLapsInstalled, data.Laps.BackupDirectory);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "LAPS detection failed");
+            }
+        }
+
+        private async Task CollectAppLockerAndWdacAsync(SecurityData data)
+        {
+            try
+            {
+                const string script = @"
+$svc = Get-Service AppIDSvc -ErrorAction SilentlyContinue
+$running = if ($svc) { $svc.Status -eq 'Running' } else { $false }
+$startType = if ($svc) { [string]$svc.StartType } else { '' }
+$policyConfigured = $false; $summary = ''
+try {
+    $pol = Get-AppLockerPolicy -Effective -Xml -ErrorAction Stop
+    if ($pol) {
+        $policyConfigured = ($pol -match '<RuleCollection')
+        # crude summary: count rule collections with EnforcementMode != NotConfigured
+        $modes = [regex]::Matches($pol, 'Type=""([^""]+)""\s+EnforcementMode=""([^""]+)""')
+        $parts = @()
+        foreach ($m in $modes) { $parts += ($m.Groups[1].Value + ':' + $m.Groups[2].Value) }
+        $summary = ($parts -join ';')
+    }
+} catch {}
+# WDAC / Code Integrity (Memory Integrity is separate; here we want policy enforce state)
+$wdacEnabled = $false; $wdacAudit = $false
+try {
+    $ci = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Config' -ErrorAction Stop
+    if ($ci) {
+        $wdacEnabled = ([int]$ci.VulnerableDriverBlocklistEnable -eq 1) -or ([int]$ci.ConfigCIPolicy -ne 0)
+    }
+} catch {}
+try {
+    $dg = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop
+    if ($dg) {
+        # CodeIntegrityPolicyEnforcementStatus: 0 off, 1 audit, 2 enforced
+        $cipes = [int]$dg.CodeIntegrityPolicyEnforcementStatus
+        if ($cipes -gt 0) { $wdacEnabled = $true }
+        if ($cipes -eq 1) { $wdacAudit = $true }
+    }
+} catch {}
+@{ running=$running; startType=$startType; policyConfigured=$policyConfigured; summary=$summary; wdacEnabled=$wdacEnabled; wdacAudit=$wdacAudit } | ConvertTo-Json -Compress
+";
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var r = doc.RootElement;
+                data.AppLocker.ServiceRunning = ParseBoolOpt(r.GetProperty("running")) == true;
+                data.AppLocker.ServiceStartType = GetJsonString(r, "startType");
+                data.AppLocker.PolicyConfigured = ParseBoolOpt(r.GetProperty("policyConfigured")) == true;
+                data.AppLocker.EffectivePolicySummary = GetJsonString(r, "summary");
+                data.AppLocker.WdacEnabled = ParseBoolOpt(r.GetProperty("wdacEnabled")) == true;
+                data.AppLocker.WdacAuditMode = ParseBoolOpt(r.GetProperty("wdacAudit")) == true;
+                _logger.LogInformation("AppLocker: running={Running} configured={Configured} WDAC={Wdac}",
+                    data.AppLocker.ServiceRunning, data.AppLocker.PolicyConfigured, data.AppLocker.WdacEnabled);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "AppLocker/WDAC collection failed");
+            }
+        }
+
+        private async Task CollectSmartScreenAsync(SecurityData data)
+        {
+            try
+            {
+                const string script = @"
+$winState = ''
+foreach ($path in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer','HKLM:\SOFTWARE\Policies\Microsoft\Windows\System')) {
+    try {
+        $p = Get-ItemProperty $path -ErrorAction Stop
+        if ($p.SmartScreenEnabled) { $winState = [string]$p.SmartScreenEnabled; break }
+        if ($null -ne $p.EnableSmartScreen) { $winState = if ([int]$p.EnableSmartScreen -ne 0) { 'On' } else { 'Off' }; break }
+    } catch {}
+}
+$edgeEnabled = $null; $edgePua = $null
+try { $e = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' -ErrorAction Stop
+      if ($null -ne $e.SmartScreenEnabled) { $edgeEnabled = ([int]$e.SmartScreenEnabled -ne 0) }
+      if ($null -ne $e.SmartScreenPuaEnabled) { $edgePua = ([int]$e.SmartScreenPuaEnabled -ne 0) }
+} catch {}
+@{ winState=$winState; edgeEnabled=$edgeEnabled; edgePua=$edgePua } | ConvertTo-Json -Compress
+";
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var r = doc.RootElement;
+                data.SmartScreen.WindowsState = GetJsonString(r, "winState");
+                data.SmartScreen.EdgeEnabled = r.TryGetProperty("edgeEnabled", out var ee) ? ParseBoolOpt(ee) : null;
+                data.SmartScreen.EdgePuaProtection = r.TryGetProperty("edgePua", out var ep) ? ParseBoolOpt(ep) : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "SmartScreen collection failed");
+            }
+        }
+
+        private async Task CollectAuditPolicyAsync(SecurityData data)
+        {
+            try
+            {
+                // auditpol.exe needs SeSecurityPrivilege. /r emits CSV; first line is header.
+                var result = await PowerShellRunner.ExecuteAsync("& auditpol.exe /get /category:* /r 2>&1 | Out-String", _logger);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    data.AuditPolicy.ErrorMessage = "auditpol returned empty (likely insufficient privilege)";
+                    return;
+                }
+                var lines = result.Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                if (lines.Length < 2) return;
+                // header columns: Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting
+                string? currentCategory = null;
+                for (int i = 1; i < lines.Length; i++)
+                {
+                    var fields = lines[i].Split(',');
+                    if (fields.Length < 5) continue;
+                    var subcategory = fields[2].Trim('"', ' ');
+                    var setting = fields[4].Trim('"', ' ');
+                    // auditpol prints category rows (subcategory is the category name and setting is empty) — we treat them as headers.
+                    if (string.IsNullOrEmpty(setting))
+                    {
+                        currentCategory = subcategory;
+                        continue;
+                    }
+                    data.AuditPolicy.Categories.Add(new AuditCategorySetting
+                    {
+                        Category = currentCategory ?? string.Empty,
+                        Subcategory = subcategory,
+                        Setting = setting,
+                    });
+                }
+                _logger.LogInformation("Audit policy: {Count} subcategories", data.AuditPolicy.Categories.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Audit policy collection failed");
+                data.AuditPolicy.ErrorMessage = ex.Message;
+            }
+        }
+
+        private async Task CollectEdrProductsAsync(SecurityData data)
+        {
+            try
+            {
+                // Collect three signals: (1) services we know about, (2) WMI SecurityCenter2 AntiVirusProduct
+                const string script = @"
+$services = Get-Service -ErrorAction SilentlyContinue | Select-Object Name, Status | ConvertTo-Json -Compress
+$wmi = $null
+try { $wmi = Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop |
+        Select-Object @{n='Name';e={$_.displayName}}, @{n='InstanceGuid';e={$_.instanceGuid}}, @{n='ProductState';e={$_.productState}} |
+        ConvertTo-Json -Compress } catch {}
+@{ services = $services; wmi = $wmi } | ConvertTo-Json -Compress -Depth 5
+";
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var root = doc.RootElement;
+
+                var matched = new Dictionary<string, EdrProductInfo>(StringComparer.OrdinalIgnoreCase);
+
+                if (root.TryGetProperty("services", out var svcEl) && svcEl.ValueKind == JsonValueKind.String)
+                {
+                    var inner = svcEl.GetString();
+                    if (!string.IsNullOrEmpty(inner))
+                    {
+                        var t = inner.Trim();
+                        if (!t.StartsWith("[")) t = "[" + t + "]";
+                        using var svcDoc = JsonDocument.Parse(t);
+                        foreach (var s in svcDoc.RootElement.EnumerateArray())
+                        {
+                            var name = GetJsonString(s, "Name");
+                            if (!EdrServiceSignatures.TryGetValue(name, out var sig)) continue;
+                            var status = GetJsonString(s, "Status"); // may serialize as enum string or number
+                            var running = status.Equals("Running", StringComparison.OrdinalIgnoreCase) || status == "4";
+                            matched[sig.Name] = new EdrProductInfo
+                            {
+                                Name = sig.Name,
+                                Vendor = sig.Vendor,
+                                Source = "Service:" + name,
+                                ServiceRunning = running,
+                            };
+                        }
+                    }
+                }
+
+                if (root.TryGetProperty("wmi", out var wmiEl) && wmiEl.ValueKind == JsonValueKind.String)
+                {
+                    var inner = wmiEl.GetString();
+                    if (!string.IsNullOrEmpty(inner))
+                    {
+                        var t = inner.Trim();
+                        if (!t.StartsWith("[")) t = "[" + t + "]";
+                        using var wmiDoc = JsonDocument.Parse(t);
+                        foreach (var w in wmiDoc.RootElement.EnumerateArray())
+                        {
+                            var name = GetJsonString(w, "Name");
+                            if (string.IsNullOrEmpty(name)) continue;
+                            if (!matched.ContainsKey(name))
+                            {
+                                matched[name] = new EdrProductInfo
+                                {
+                                    Name = name,
+                                    Vendor = name.Split(' ').FirstOrDefault() ?? string.Empty,
+                                    Source = "WMI:SecurityCenter2",
+                                    Sid = GetJsonString(w, "InstanceGuid"),
+                                };
+                            }
+                            else
+                            {
+                                matched[name].Sid = GetJsonString(w, "InstanceGuid");
+                                if (string.IsNullOrEmpty(matched[name].Source)) matched[name].Source = "WMI:SecurityCenter2";
+                            }
+                        }
+                    }
+                }
+
+                data.EdrProducts = matched.Values.ToList();
+                _logger.LogInformation("EDR products detected: {Count} ({Names})",
+                    data.EdrProducts.Count, string.Join(", ", data.EdrProducts.Select(p => p.Name)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "EDR product enumeration failed");
+            }
+        }
+
+        private async Task CollectWindowsHelloAsync(SecurityData data)
+        {
+            try
+            {
+                const string script = @"
+$face = $false; $fp = $false
+try {
+    $devs = Get-PnpDevice -Class Biometric -PresentOnly -ErrorAction Stop
+    foreach ($d in $devs) {
+        $n = ($d.FriendlyName + ' ' + $d.Description).ToLower()
+        if ($n -match 'face|camera|ir|infrared') { $face = $true }
+        if ($n -match 'fingerprint|finger') { $fp = $true }
+    }
+} catch {}
+$pin = $null; $pfw = $null
+try {
+    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\PassportForWork' -ErrorAction Stop
+    if ($null -ne $p.Enabled) { $pfw = ([int]$p.Enabled -ne 0) }
+} catch {}
+@{ face=[bool]$face; fp=[bool]$fp; pin=$pin; pfw=$pfw } | ConvertTo-Json -Compress
+";
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var r = doc.RootElement;
+                data.WindowsHello.FaceSensorPresent = ParseBoolOpt(r.GetProperty("face")) == true;
+                data.WindowsHello.FingerprintSensorPresent = ParseBoolOpt(r.GetProperty("fp")) == true;
+                data.WindowsHello.PinConfigured = r.TryGetProperty("pin", out var pinEl) ? ParseBoolOpt(pinEl) : null;
+                data.WindowsHello.PassportForWorkEnabled = r.TryGetProperty("pfw", out var pfwEl) ? ParseBoolOpt(pfwEl) : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Windows Hello collection failed");
+            }
+        }
+
+        private async Task CollectTpmOwnershipAsync(SecurityData data)
+        {
+            try
+            {
+                const string script =
+                    "$t = Get-Tpm -ErrorAction Stop; " +
+                    "@{ owned=[bool]$t.TpmOwned; ready=[bool]$t.TpmReady; autoProv=[bool]$t.AutoProvisioning; mfgIdTxt=[string]$t.ManufacturerIdTxt; managedAuth=[string]$t.ManagedAuthLevel } | ConvertTo-Json -Compress";
+                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var r = doc.RootElement;
+                data.TpmOwnership.IsOwned = r.TryGetProperty("owned", out var o) ? ParseBoolOpt(o) : null;
+                data.TpmOwnership.IsReady = r.TryGetProperty("ready", out var rd) ? ParseBoolOpt(rd) : null;
+                data.TpmOwnership.AutoProvisioning = r.TryGetProperty("autoProv", out var ap) ? ParseBoolOpt(ap) : null;
+                data.TpmOwnership.ManufacturerIdTxt = GetJsonString(r, "mfgIdTxt");
+                data.TpmOwnership.ManagedAuthLevel = GetJsonString(r, "managedAuth");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Get-Tpm collection failed");
+            }
+        }
+
+        private async Task CollectPasswordPolicyAsync(SecurityData data)
+        {
+            try
+            {
+                var result = await PowerShellRunner.ExecuteAsync("& net.exe accounts 2>&1 | Out-String", _logger);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    data.PasswordPolicy.ErrorMessage = "net accounts returned empty";
+                    return;
+                }
+                foreach (var rawLine in result.Replace("\r", "").Split('\n'))
+                {
+                    var line = rawLine.Trim();
+                    if (string.IsNullOrEmpty(line)) continue;
+                    // "Force user logoff how long after time expires?:  Never"
+                    // "Minimum password length:                          0"
+                    var idx = line.IndexOf(':');
+                    if (idx <= 0) continue;
+                    var key = line.Substring(0, idx).Trim().ToLowerInvariant();
+                    var val = line.Substring(idx + 1).Trim();
+                    if (key.StartsWith("minimum password length")) data.PasswordPolicy.MinPasswordLength = TryInt(val);
+                    else if (key.StartsWith("maximum password age")) data.PasswordPolicy.MaxPasswordAgeDays = TryInt(val);
+                    else if (key.StartsWith("minimum password age")) data.PasswordPolicy.MinPasswordAgeDays = TryInt(val);
+                    else if (key.StartsWith("length of password history")) data.PasswordPolicy.PasswordHistoryLength = TryInt(val);
+                    else if (key.StartsWith("lockout threshold")) data.PasswordPolicy.LockoutThreshold = TryInt(val);
+                    else if (key.StartsWith("lockout duration")) data.PasswordPolicy.LockoutDurationMinutes = TryInt(val);
+                }
+                _logger.LogInformation("Password policy: minLen={Min} maxAge={Age} lockout={Lock}",
+                    data.PasswordPolicy.MinPasswordLength, data.PasswordPolicy.MaxPasswordAgeDays, data.PasswordPolicy.LockoutThreshold);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Password policy collection failed");
+                data.PasswordPolicy.ErrorMessage = ex.Message;
+            }
+        }
+
+        private static int? TryInt(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            // strip trailing words ("0 days") and try parse
+            var token = s.Split(' ', '\t').FirstOrDefault() ?? string.Empty;
+            return int.TryParse(token, out var n) ? n : (int?)null;
+        }
+
+        private void CollectAutoLoginPresence(SecurityData data)
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", writable: false);
+                if (key == null) return;
+                var autoAdmin = key.GetValue("AutoAdminLogon") as string;
+                data.AutoLogin.AutoAdminLogon = autoAdmin == "1";
+                var defaultUser = key.GetValue("DefaultUserName") as string;
+                data.AutoLogin.HasDefaultUserName = !string.IsNullOrEmpty(defaultUser);
+                data.AutoLogin.DefaultUserName = defaultUser ?? string.Empty;
+                var defaultDomain = key.GetValue("DefaultDomainName") as string;
+                data.AutoLogin.HasDefaultDomainName = !string.IsNullOrEmpty(defaultDomain);
+                // PRESENCE ONLY — never read the value.
+                var allNames = key.GetValueNames();
+                data.AutoLogin.HasDefaultPassword = allNames.Any(n => string.Equals(n, "DefaultPassword", StringComparison.OrdinalIgnoreCase));
+                if (data.AutoLogin.HasDefaultPassword)
+                {
+                    _logger.LogWarning("Auto-login DefaultPassword value is present in registry (potential credential exposure)");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Auto-login registry inspection failed");
+            }
+        }
+
+        private async Task ProcessJoinStateAsync(SecurityData data)
+        {
+            try
+            {
+                var result = await PowerShellRunner.ExecuteAsync("& dsregcmd.exe /status 2>&1 | Out-String", _logger);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    data.JoinState.ErrorMessage = "dsregcmd returned no output";
+                    return;
+                }
+
+                // dsregcmd output is sectioned ("+----+ Section +----+") with "  Key : Value" lines.
+                var lines = result.Replace("\r", "").Split('\n');
+                foreach (var rawLine in lines)
+                {
+                    var line = rawLine.TrimEnd();
+                    var colonIdx = line.IndexOf(':');
+                    if (colonIdx <= 0) continue;
+                    var key = line.Substring(0, colonIdx).Trim();
+                    var value = colonIdx + 1 < line.Length ? line.Substring(colonIdx + 1).Trim() : string.Empty;
+                    if (string.IsNullOrEmpty(key) || key.StartsWith("+")) continue;
+                    // Multiple identical keys can appear under different sections — last wins; OK for our use.
+                    data.JoinState.Raw[key] = value;
+                }
+
+                bool? Parse(string k) => data.JoinState.Raw.TryGetValue(k, out var v)
+                    ? v.Equals("YES", StringComparison.OrdinalIgnoreCase)
+                    : (bool?)null;
+
+                data.JoinState.AzureAdJoined = Parse("AzureAdJoined");
+                data.JoinState.DomainJoined = Parse("DomainJoined");
+                data.JoinState.WorkplaceJoined = Parse("WorkplaceJoined");
+                data.JoinState.EnterpriseJoined = Parse("EnterpriseJoined");
+                data.JoinState.TenantName = data.JoinState.Raw.TryGetValue("TenantName", out var tn) ? tn : "";
+                data.JoinState.TenantId = data.JoinState.Raw.TryGetValue("TenantId", out var ti) ? ti : "";
+                data.JoinState.DeviceId = data.JoinState.Raw.TryGetValue("DeviceId", out var did) ? did : "";
+                data.JoinState.DomainName = data.JoinState.Raw.TryGetValue("DomainName", out var dn) ? dn : "";
+
+                _logger.LogInformation("Join state: Entra={Entra} AD={AD} Workplace={Wp} Tenant={Tenant}",
+                    data.JoinState.AzureAdJoined, data.JoinState.DomainJoined, data.JoinState.WorkplaceJoined, data.JoinState.TenantName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "dsregcmd parse failed");
+                data.JoinState.ErrorMessage = ex.Message;
+            }
+        }
+
+        private static bool? ParseBoolOpt(JsonElement v)
+        {
+            switch (v.ValueKind)
+            {
+                case JsonValueKind.True: return true;
+                case JsonValueKind.False: return false;
+                case JsonValueKind.Number: return v.TryGetInt32(out var n) ? n != 0 : (bool?)null;
+                case JsonValueKind.String:
+                    var s = v.GetString();
+                    if (string.IsNullOrEmpty(s)) return null;
+                    if (s.Equals("True", StringComparison.OrdinalIgnoreCase) || s == "1") return true;
+                    if (s.Equals("False", StringComparison.OrdinalIgnoreCase) || s == "0") return false;
+                    return null;
+                default: return null;
+            }
+        }
+
+        private static string GetJsonString(JsonElement parent, string name)
+        {
+            if (!parent.TryGetProperty(name, out var v)) return string.Empty;
+            return v.ValueKind switch
+            {
+                JsonValueKind.String => v.GetString() ?? string.Empty,
+                JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+                _ => v.ToString(),
+            };
+        }
+
+        private static List<string> ReadStringArray(JsonElement parent, string name)
+        {
+            var list = new List<string>();
+            if (!parent.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array) return list;
+            foreach (var el in v.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.String)
+                {
+                    var s = el.GetString();
+                    if (!string.IsNullOrEmpty(s)) list.Add(s);
+                }
+            }
+            return list;
+        }
+
+        private void DedupeDetections(SecurityData data)
+        {
+            if (data.Detections == null || data.Detections.Count < 2) return;
+
+            var beforeCount = data.Detections.Count;
+            var groups = new Dictionary<string, DetectionAlert>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var alert in data.Detections)
+            {
+                // Key intentionally excludes timestamps and event id (1116/1117 are pair events for the same detection).
+                var key = string.Join("|",
+                    alert.Source ?? string.Empty,
+                    alert.ThreatId ?? string.Empty,
+                    alert.ThreatName ?? string.Empty,
+                    alert.Category ?? string.Empty,
+                    alert.ProcessName ?? string.Empty,
+                    alert.FilePath ?? string.Empty,
+                    alert.User ?? string.Empty);
+
+                if (!groups.TryGetValue(key, out var existing))
+                {
+                    alert.Count = 1;
+                    alert.FirstSeenAt = alert.DetectedAt;
+                    alert.LastSeenAt = alert.DetectedAt;
+                    groups[key] = alert;
+                    continue;
+                }
+
+                existing.Count += 1;
+                if (alert.DetectedAt.HasValue)
+                {
+                    if (!existing.FirstSeenAt.HasValue || alert.DetectedAt.Value < existing.FirstSeenAt.Value)
+                        existing.FirstSeenAt = alert.DetectedAt;
+                    if (!existing.LastSeenAt.HasValue || alert.DetectedAt.Value > existing.LastSeenAt.Value)
+                        existing.LastSeenAt = alert.DetectedAt;
+                    if (!existing.DetectedAt.HasValue || alert.DetectedAt.Value > existing.DetectedAt.Value)
+                        existing.DetectedAt = alert.DetectedAt;
+                }
+                // Prefer the resolved-action variant (eventId 1117) when one exists.
+                if (alert.EventId == 1117 && existing.EventId != 1117)
+                {
+                    existing.Status = alert.Status;
+                    existing.ActionTaken = alert.ActionTaken;
+                    existing.ResolvedAt = alert.ResolvedAt ?? existing.ResolvedAt;
+                    existing.EventId = 1117;
+                }
+            }
+
+            data.Detections = groups.Values
+                .OrderByDescending(a => a.LastSeenAt ?? a.DetectedAt ?? DateTime.MinValue)
+                .ToList();
+
+            _logger.LogInformation("Detection dedup: {Before} → {After}", beforeCount, data.Detections.Count);
+        }
+
         private void ComputeStatusDisplays(SecurityData data)
         {
             // Antivirus status display
