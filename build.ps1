@@ -873,6 +873,20 @@ foreach ($file in $sharedFiles) {
     }
 }
 
+# Ship public PowerShell helpers (e.g. ReportMateCache.psm1) to
+# C:\Program Files\ReportMate\scripts\ so external consumers (Cimian pkginfos,
+# Intune scripts, manual ops) can opportunistically Import-Module them to read
+# the local module cache without re-implementing the schema.
+$scriptsSourceDir = Join-Path $sharedResourcesDir "scripts"
+if (Test-Path $scriptsSourceDir) {
+    $scriptsTargetDir = Join-Path $ProgramFilesPayloadDir "scripts"
+    if (-not (Test-Path $scriptsTargetDir)) {
+        New-Item -ItemType Directory -Path $scriptsTargetDir -Force | Out-Null
+    }
+    Copy-Item (Join-Path $scriptsSourceDir "*") $scriptsTargetDir -Recurse -Force
+    Write-Verbose "Copied public PowerShell helpers from build/resources/scripts/ to payload scripts/"
+}
+
 # Ensure Speedtest CLI binary is available, download if missing
 $speedtestSourceDir = Join-Path $sharedResourcesDir "speedtest"
 $speedtestExe = Join-Path $speedtestSourceDir "speedtest.exe"
