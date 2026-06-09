@@ -45,7 +45,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public SmartScreenInfo SmartScreen { get; set; } = new();
         public AuditPolicyInfo AuditPolicy { get; set; } = new();
         public List<EdrProductInfo> EdrProducts { get; set; } = new();
-        public WindowsHelloInfo WindowsHello { get; set; } = new();
+        public WindowsHelloPresenceInfo WindowsHello { get; set; } = new();
         public TpmOwnershipInfo TpmOwnership { get; set; } = new();
         public PasswordPolicyInfo PasswordPolicy { get; set; } = new();
         public AutoLoginInfo AutoLogin { get; set; } = new();
@@ -107,7 +107,11 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Sid { get; set; } = string.Empty;         // optional SecurityCenter2 product SID
     }
 
-    public class WindowsHelloInfo
+    // Hardware-presence + minimal config flags for Windows Hello collected from
+    // the security module. The richer profile (credential providers, policies,
+    // NGC key storage, etc.) lives in IdentityModels.WindowsHelloInfo — kept
+    // separate to avoid coupling identity collection with security collection.
+    public class WindowsHelloPresenceInfo
     {
         public bool FaceSensorPresent { get; set; }
         public bool FingerprintSensorPresent { get; set; }
