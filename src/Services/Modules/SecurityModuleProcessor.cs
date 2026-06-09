@@ -290,15 +290,19 @@ namespace ReportMate.WindowsClient.Services.Modules
 
                     // osquery's bitlocker_info on Win11 26100 returns protection_status=1 on some
                     // drives that manage-bde reports as "Protection Off, Method=None, Fully Decrypted",
-                    // producing false-positive BitLocker On status. Require a real encryption
-                    // method ("AES-128", "XTS-AES-256", etc.) AND a non-decrypted conversion state.
+                    // producing false-positive BitLocker On status. Require positive evidence:
+                    // a real encryption method ("AES-128", "XTS-AES-256", etc.) AND a known
+                    // encrypted conversion state. Empty/missing conversion_status is rejected.
+                    // osquery integer values: 1=FullyEncrypted, 2=EncryptionInProgress, 4=EncryptionPaused.
                     var hasRealMethod = !string.IsNullOrEmpty(encryptionMethod)
                         && !encryptionMethod.Equals("None", StringComparison.OrdinalIgnoreCase);
-                    var isFullyDecrypted = conversionStatus == "0"
-                        || conversionStatus.Equals("Fully Decrypted", StringComparison.OrdinalIgnoreCase);
-                    var isDecrypting = !string.IsNullOrEmpty(conversionStatus)
-                        && conversionStatus.Contains("Decrypt", StringComparison.OrdinalIgnoreCase);
-                    if (!hasRealMethod || isFullyDecrypted || isDecrypting) continue;
+                    var isEncryptedState = conversionStatus == "1"
+                        || conversionStatus == "2"
+                        || conversionStatus == "4"
+                        || conversionStatus.Equals("Fully Encrypted", StringComparison.OrdinalIgnoreCase)
+                        || conversionStatus.Equals("Encryption In Progress", StringComparison.OrdinalIgnoreCase)
+                        || conversionStatus.Equals("Encryption Paused", StringComparison.OrdinalIgnoreCase);
+                    if (!hasRealMethod || !isEncryptedState) continue;
 
                     data.Encryption.BitLocker.EncryptedDrives.Add(driveLetter);
 
