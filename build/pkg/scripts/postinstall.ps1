@@ -409,10 +409,42 @@ try {
         $intervalMinutes = $scheduleConfig.schedules.all.interval_minutes
         $intervalHours = [math]::Floor($intervalMinutes / 60)
         $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours $intervalHours)
-        
+
         Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits data from all available modules" -Force
     }
-    
+
+    # Per-user usagetracker companion. usagetracker.exe captures foreground
+    # and active-input time per executable, written to
+    # %ProgramData%\ManagedReports\usagetracker\{username}.json. It MUST run
+    # in the interactive user's session (not as SYSTEM in session 0) to see
+    # foreground window / GetLastInputInfo data. BUILTIN\Users + RunLevel
+    # Limited fires the task for whichever user is logging in, with their
+    # own token. The exe enforces single-instance per user via the
+    # Global\ReportMate.UsageTracker.{username} mutex, so MultipleInstances
+    # IgnoreNew is a belt-and-braces guard.
+    $utExe = Join-Path $InstallPath "usagetracker.exe"
+    if (Test-Path $utExe) {
+        Write-Host "Creating per-user usagetracker logon task..."
+        $utAction    = New-ScheduledTaskAction -Execute $utExe -WorkingDirectory $InstallPath
+        $utTrigger   = New-ScheduledTaskTrigger -AtLogOn
+        $utPrincipal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited
+        $utSettings  = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Hours 24) `
+            -MultipleInstances IgnoreNew `
+            -Hidden
+        Register-ScheduledTask `
+            -TaskName "ReportMate Usage Tracker" `
+            -Action $utAction -Trigger $utTrigger `
+            -Settings $utSettings -Principal $utPrincipal `
+            -Description "Per-user logon-triggered companion that records application foreground and active-input time. Writes %ProgramData%\ManagedReports\usagetracker\{username}.json for managedreportsrunner.exe to read during scheduled collections." `
+            -Force | Out-Null
+        Write-Host "Registered per-user logon task: ReportMate Usage Tracker"
+        Write-Host "  NOTE: Existing user sessions will start tracking on their next logon."
+    } else {
+        Write-Warning "usagetracker.exe not found at $utExe -- skipping logon task registration"
+    }
+
     Write-Host "Scheduled tasks installed successfully"
 
 } catch {
