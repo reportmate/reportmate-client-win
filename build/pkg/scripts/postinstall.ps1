@@ -413,36 +413,61 @@ try {
         Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits data from all available modules" -Force
     }
 
-    # Per-user usagetracker companion. usagetracker.exe captures foreground
-    # and active-input time per executable, written to
-    # %ProgramData%\ManagedReports\usagetracker\{username}.json. It MUST run
-    # in the interactive user's session (not as SYSTEM in session 0) to see
-    # foreground window / GetLastInputInfo data. BUILTIN\Users + RunLevel
-    # Limited fires the task for whichever user is logging in, with their
-    # own token. The exe enforces single-instance per user via the
-    # Global\ReportMate.UsageTracker.{username} mutex, so MultipleInstances
-    # IgnoreNew is a belt-and-braces guard.
-    $utExe = Join-Path $InstallPath "usagetracker.exe"
-    if (Test-Path $utExe) {
-        Write-Host "Creating per-user usagetracker logon task..."
-        $utAction    = New-ScheduledTaskAction -Execute $utExe -WorkingDirectory $InstallPath
-        $utTrigger   = New-ScheduledTaskTrigger -AtLogOn
-        $utPrincipal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited
-        $utSettings  = New-ScheduledTaskSettingsSet `
-            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-            -ExecutionTimeLimit (New-TimeSpan -Hours 24) `
-            -MultipleInstances IgnoreNew `
-            -Hidden
-        Register-ScheduledTask `
-            -TaskName "ReportMate Usage Tracker" `
-            -Action $utAction -Trigger $utTrigger `
-            -Settings $utSettings -Principal $utPrincipal `
-            -Description "Per-user logon-triggered companion that records application foreground and active-input time. Writes %ProgramData%\ManagedReports\usagetracker\{username}.json for managedreportsrunner.exe to read during scheduled collections." `
-            -Force | Out-Null
-        Write-Host "Registered per-user logon task: ReportMate Usage Tracker"
-        Write-Host "  NOTE: Existing user sessions will start tracking on their next logon."
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # USER SESSION TRACKER (per-user, runs at logon)
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # Mirrors build/resources/install-tasks.ps1 so MSI and NUPKG produce the same
+    # task definition. usagetracker.exe runs in the logged-in user's session and
+    # populates foreground/active time that managedreportsrunner.exe (SYSTEM,
+    # session 0) cannot observe directly. One scheduled task definition covers
+    # all users: the BUILTIN\Users group principal (via well-known SID
+    # S-1-5-32-545 so this works on non-English Windows installs) causes it to
+    # run as whichever user logged in. A daily re-trigger acts as a watchdog if
+    # the tracker process is terminated; the in-process named Mutex prevents
+    # duplicate instances for the same user. No -ExecutionTimeLimit because the
+    # tracker is a long-running poll loop -- a 72h or 24h cap would silently
+    # stop it on long-lived sessions.
+    $trackerExe = Join-Path $InstallPath "usagetracker.exe"
+    if (Test-Path $trackerExe) {
+        Write-Host "Creating user session tracker task..."
+        try {
+            $trackerAction = New-ScheduledTaskAction -Execute $trackerExe -WorkingDirectory $InstallPath
+            $trackerTriggers = @(
+                New-ScheduledTaskTrigger -AtLogOn
+                # Watchdog: at 09:00 daily, re-run. The Mutex inside usagetracker
+                # makes this a no-op if the tracker is already running for the
+                # user -- but recovers if it died for any reason.
+                New-ScheduledTaskTrigger -Daily -At "09:00"
+            )
+            $trackerSettings = New-ScheduledTaskSettingsSet `
+                -AllowStartIfOnBatteries `
+                -DontStopIfGoingOnBatteries `
+                -Hidden `
+                -MultipleInstances IgnoreNew `
+                -RestartCount 3 `
+                -RestartInterval (New-TimeSpan -Minutes 5) `
+                -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+            # BUILTIN\Users (well-known SID S-1-5-32-545): the task runs as
+            # whichever user logged in, with their own privileges (no admin
+            # needed). Using the SID rather than the name avoids registration
+            # failures on non-English Windows installs.
+            $trackerPrincipal = New-ScheduledTaskPrincipal -GroupId "S-1-5-32-545" -RunLevel Limited
+            Register-ScheduledTask `
+                -TaskName "ReportMate User Session Tracker" `
+                -Action $trackerAction `
+                -Trigger $trackerTriggers `
+                -Settings $trackerSettings `
+                -Principal $trackerPrincipal `
+                -Description "Tracks per-user foreground + active application time so utilization reports reflect actual use rather than process lifetime." `
+                -Force | Out-Null
+            Write-Host "User session tracker task registered"
+            Write-Host "  NOTE: Existing user sessions will start tracking on their next logon."
+        } catch {
+            Write-Warning "Failed to register user session tracker task: $_"
+            Write-Warning "Idle/active time tracking will be unavailable until this is fixed."
+        }
     } else {
-        Write-Warning "usagetracker.exe not found at $utExe -- skipping logon task registration"
+        Write-Warning "usagetracker.exe not found at $trackerExe; skipping tracker task registration"
     }
 
     Write-Host "Scheduled tasks installed successfully"
