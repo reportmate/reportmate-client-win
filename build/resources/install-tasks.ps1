@@ -168,10 +168,11 @@ try {
                 -Hidden `
                 -MultipleInstances IgnoreNew `
                 -RestartCount 3 `
-                -RestartInterval (New-TimeSpan -Minutes 5)
+                -RestartInterval (New-TimeSpan -Minutes 5) `
+                -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
             # BUILTIN\Users (S-1-5-32-545): the task runs as whichever user
             # logged in, with their own privileges (no admin needed).
-            $trackerPrincipal = New-ScheduledTaskPrincipal -GroupId "S-1-5-32-545" -RunLevel LimitedUser
+            $trackerPrincipal = New-ScheduledTaskPrincipal -GroupId "S-1-5-32-545" -RunLevel Limited
             Register-ScheduledTask `
                 -TaskName "ReportMate User Session Tracker" `
                 -Action $trackerAction `
