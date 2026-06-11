@@ -1,7 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe (Windows subsystem) so the OS does NOT allocate a console
+         when Task Scheduler launches usagetracker.exe in the user's interactive
+         session. With OutputType=Exe (console subsystem) a black console window
+         flashes/persists at logon. Console.* calls in Program.cs become no-ops
+         (writes to a null stream) under WinExe, which is the intended behaviour
+         for a background companion process; it has no operator UI. -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>false</UseWindowsForms>
     <PublishSingleFile>true</PublishSingleFile>
