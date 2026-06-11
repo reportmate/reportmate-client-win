@@ -1214,6 +1214,16 @@ if (-not $SkipMSI) {
         Write-Verbose "Copied Speedtest CLI to payload"
     }
 
+    # Copy usagetracker.exe to MSI payload. The per-user companion was built
+    # earlier (~line 776) into $usageTrackerExe and copied to the NUPKG payload
+    # at $ProgramFilesPayloadDir, but the MSI assembles its own payload under
+    # $PkgPayloadDir and was missing this copy -- the resulting MSI shipped
+    # without usagetracker.exe even though postinstall verification expected it.
+    if ($usageTrackerExe -and (Test-Path $usageTrackerExe)) {
+        Copy-Item $usageTrackerExe (Join-Path $PkgPayloadDir "usagetracker.exe") -Force
+        Write-Verbose "Copied usagetracker.exe to MSI payload"
+    }
+
     # Copy shared resources
     $sharedResourcesDir = Join-Path $BuildDir "resources"
     $sharedFiles = @(
