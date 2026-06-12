@@ -975,9 +975,13 @@ $installTasksPath = Join-Path $BuildDir "resources\install-tasks.ps1"
 if (Test-Path $installTasksPath) {
     $installTasksContent = Get-Content $installTasksPath -Raw
     
-    # Extract the core task installation logic from install-tasks.ps1
-    # Get everything between the first try block and the last catch block
-    if ($installTasksContent -match '(?s)(\s*# First, remove any existing ReportMate tasks.*?)catch \{[^}]*\}') {
+    # Extract the core task installation logic from install-tasks.ps1:
+    # everything from the task-removal comment up to the script's FINAL
+    # catch (anchored on its unique Write-Error text). The previous lazy
+    # `.*?catch \{[^}]*\}` stopped at the first inner catch -- once the
+    # tracker task added its own try/catch, that truncated the capture
+    # mid-`try` and the generated postinstall no longer parsed.
+    if ($installTasksContent -match '(?s)(\s*# First, remove any existing ReportMate tasks.*)\}\s*catch\s*\{\s*Write-Error "Failed to create scheduled tasks') {
         $coreTaskLogic = $matches[1].Trim()
         
         # Build the comprehensive scheduled tasks installation content
