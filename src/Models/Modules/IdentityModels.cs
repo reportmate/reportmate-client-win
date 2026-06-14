@@ -19,8 +19,79 @@ namespace ReportMate.WindowsClient.Models.Modules
         public SsoState SsoState { get; set; } = new();
         public DomainTrust DomainTrust { get; set; } = new();
         public WindowsHelloInfo WindowsHello { get; set; } = new();
+        // Sign-in / access posture. These were previously collected by the Security
+        // module; consolidated here so all identity signals live in one place.
+        public UacInfo Uac { get; set; } = new();
+        public LapsInfo Laps { get; set; } = new();
+        public PasswordPolicyInfo PasswordPolicy { get; set; } = new();
+        public TpmOwnershipInfo TpmOwnership { get; set; } = new();
+        public AutoLoginInfo AutoLogin { get; set; } = new();
         public IdentitySummary Summary { get; set; } = new();
         public SessionSummary SessionSummary { get; set; } = new();
+    }
+
+    /// <summary>
+    /// User Account Control configuration (HKLM Policies\System).
+    /// </summary>
+    public class UacInfo
+    {
+        public bool? EnableLua { get; set; }
+        public int? ConsentPromptBehaviorAdmin { get; set; }
+        public int? PromptOnSecureDesktop { get; set; }
+        // Computed level: "AlwaysNotify" / "NotifyChangesSecure" / "NotifyChangesNoDim" / "NeverNotify" / "Disabled" / "Custom"
+        public string Level { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Local Administrator Password Solution (Windows LAPS or legacy LAPS).
+    /// </summary>
+    public class LapsInfo
+    {
+        public bool WindowsLapsConfigured { get; set; } // Windows LAPS (built-in, Win11+)
+        public bool LegacyLapsInstalled { get; set; }   // Legacy Microsoft LAPS msi
+        public string BackupDirectory { get; set; } = string.Empty; // "Active Directory" / "Azure AD" / ""
+        public string AdminAccountName { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Local account password / lockout policy (net accounts).
+    /// </summary>
+    public class PasswordPolicyInfo
+    {
+        public int? MinPasswordLength { get; set; }
+        public int? MaxPasswordAgeDays { get; set; }
+        public int? MinPasswordAgeDays { get; set; }
+        public int? PasswordHistoryLength { get; set; }
+        public int? LockoutThreshold { get; set; }
+        public int? LockoutDurationMinutes { get; set; }
+        public bool? ComplexityRequired { get; set; }
+        public string ErrorMessage { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// TPM ownership / readiness (Get-Tpm). Distinct from the hardware TPM
+    /// presence collected by the Security module's TpmInfo.
+    /// </summary>
+    public class TpmOwnershipInfo
+    {
+        public bool? IsOwned { get; set; }
+        public bool? IsReady { get; set; }
+        public bool? AutoProvisioning { get; set; }
+        public string ManufacturerIdTxt { get; set; } = string.Empty;
+        public string ManagedAuthLevel { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Automatic logon presence (Winlogon). The DefaultPassword value is NEVER
+    /// read or transmitted — only its presence is reported.
+    /// </summary>
+    public class AutoLoginInfo
+    {
+        public bool AutoAdminLogon { get; set; }   // value "1" present
+        public bool HasDefaultUserName { get; set; }
+        public bool HasDefaultPassword { get; set; } // PRESENCE ONLY — never the value
+        public bool HasDefaultDomainName { get; set; }
+        public string DefaultUserName { get; set; } = string.Empty; // safe to surface; password never is
     }
 
     /// <summary>
