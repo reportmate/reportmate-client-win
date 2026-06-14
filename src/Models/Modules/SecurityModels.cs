@@ -28,43 +28,23 @@ namespace ReportMate.WindowsClient.Models.Modules
         public CertificateSummary CertificateSummary { get; set; } = new();
         public DateTime? LastSecurityScan { get; set; }
 
-        // Phase 2 additions — protection posture and configuration auditing
+        // Phase 2 additions — protection posture and configuration auditing.
+        // NOTE: identity-domain signals (UAC, join state, local admins, LAPS,
+        // Windows Hello, TPM ownership, password policy, auto-login) are owned by
+        // the Identity module, not here — collecting them in two places was a
+        // duplication. See IdentityModels / IdentityModuleProcessor.
         public LsaProtectionInfo LsaProtection { get; set; } = new();
         public TamperProtectionInfo TamperProtection { get; set; } = new();
-        public UacInfo Uac { get; set; } = new();
         public PendingRebootInfo PendingReboot { get; set; } = new();
         public List<AsrRuleState> AsrRules { get; set; } = new();
         public DefenderVersionsInfo DefenderVersions { get; set; } = new();
         public DefenderExclusionsInfo DefenderExclusions { get; set; } = new();
-        public JoinStateInfo JoinState { get; set; } = new();
 
         // Phase 3 — compliance & inventory
-        public List<LocalAdminMember> LocalAdmins { get; set; } = new();
-        public LapsInfo Laps { get; set; } = new();
         public AppLockerInfo AppLocker { get; set; } = new();
         public SmartScreenInfo SmartScreen { get; set; } = new();
         public AuditPolicyInfo AuditPolicy { get; set; } = new();
         public List<EdrProductInfo> EdrProducts { get; set; } = new();
-        public WindowsHelloPresenceInfo WindowsHello { get; set; } = new();
-        public TpmOwnershipInfo TpmOwnership { get; set; } = new();
-        public PasswordPolicyInfo PasswordPolicy { get; set; } = new();
-        public AutoLoginInfo AutoLogin { get; set; } = new();
-    }
-
-    public class LocalAdminMember
-    {
-        public string Name { get; set; } = string.Empty;
-        public string Sid { get; set; } = string.Empty;
-        public string PrincipalSource { get; set; } = string.Empty; // Local / ActiveDirectory / AzureAD
-        public string ObjectClass { get; set; } = string.Empty;     // User / Group
-    }
-
-    public class LapsInfo
-    {
-        public bool WindowsLapsConfigured { get; set; } // Windows LAPS (built-in, Win11+)
-        public bool LegacyLapsInstalled { get; set; }   // Legacy Microsoft LAPS msi
-        public string BackupDirectory { get; set; } = string.Empty; // "Active Directory" / "Azure AD" / ""
-        public string AdminAccountName { get; set; } = string.Empty;
     }
 
     public class AppLockerInfo
@@ -107,48 +87,6 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Sid { get; set; } = string.Empty;         // optional SecurityCenter2 product SID
     }
 
-    // Hardware-presence + minimal config flags for Windows Hello collected from
-    // the security module. The richer profile (credential providers, policies,
-    // NGC key storage, etc.) lives in IdentityModels.WindowsHelloInfo — kept
-    // separate to avoid coupling identity collection with security collection.
-    public class WindowsHelloPresenceInfo
-    {
-        public bool FaceSensorPresent { get; set; }
-        public bool FingerprintSensorPresent { get; set; }
-        public bool? PinConfigured { get; set; }
-        public bool? PassportForWorkEnabled { get; set; } // Windows Hello for Business
-    }
-
-    public class TpmOwnershipInfo
-    {
-        public bool? IsOwned { get; set; }
-        public bool? IsReady { get; set; }
-        public bool? AutoProvisioning { get; set; }
-        public string ManufacturerIdTxt { get; set; } = string.Empty;
-        public string ManagedAuthLevel { get; set; } = string.Empty;
-    }
-
-    public class PasswordPolicyInfo
-    {
-        public int? MinPasswordLength { get; set; }
-        public int? MaxPasswordAgeDays { get; set; }
-        public int? MinPasswordAgeDays { get; set; }
-        public int? PasswordHistoryLength { get; set; }
-        public int? LockoutThreshold { get; set; }
-        public int? LockoutDurationMinutes { get; set; }
-        public bool? ComplexityRequired { get; set; }
-        public string ErrorMessage { get; set; } = string.Empty;
-    }
-
-    public class AutoLoginInfo
-    {
-        public bool AutoAdminLogon { get; set; }   // value "1" present
-        public bool HasDefaultUserName { get; set; }
-        public bool HasDefaultPassword { get; set; } // PRESENCE ONLY — never the value
-        public bool HasDefaultDomainName { get; set; }
-        public string DefaultUserName { get; set; } = string.Empty; // safe to surface; password never is
-    }
-
     public class LsaProtectionInfo
     {
         public bool? Enabled { get; set; } // null = unknown / not configured
@@ -160,15 +98,6 @@ namespace ReportMate.WindowsClient.Models.Modules
     {
         public bool? IsTamperProtected { get; set; }
         public string Source { get; set; } = string.Empty; // "Get-MpComputerStatus" / "registry"
-    }
-
-    public class UacInfo
-    {
-        public bool? EnableLua { get; set; }
-        public int? ConsentPromptBehaviorAdmin { get; set; }
-        public int? PromptOnSecureDesktop { get; set; }
-        // Computed level: "AlwaysNotify" / "NotifyChangesSecure" / "NotifyChangesNoDim" / "NeverNotify" / "Disabled" / "Custom"
-        public string Level { get; set; } = string.Empty;
     }
 
     public class PendingRebootInfo
@@ -204,21 +133,6 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<string> Processes { get; set; } = new();
         public List<string> IpAddresses { get; set; } = new();
         public int TotalCount { get; set; } // sum of all four; useful for fleet aggregation
-    }
-
-    public class JoinStateInfo
-    {
-        public bool? AzureAdJoined { get; set; }
-        public bool? DomainJoined { get; set; }
-        public bool? WorkplaceJoined { get; set; }
-        public bool? EnterpriseJoined { get; set; }
-        public string TenantName { get; set; } = string.Empty;
-        public string TenantId { get; set; } = string.Empty;
-        public string DeviceId { get; set; } = string.Empty;
-        public string DomainName { get; set; } = string.Empty;
-        // From dsregcmd "Internet Details": NTP sync, MDM enrollment etc. captured as raw key/value bag.
-        public Dictionary<string, string> Raw { get; set; } = new();
-        public string ErrorMessage { get; set; } = string.Empty;
     }
 
     /// <summary>

@@ -93,13 +93,10 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process certificates
             ProcessCertificates(osqueryResults, data);
 
-            // Collect protection posture: LSA, Tamper, UAC, pending reboot, ASR rules, Defender versions/exclusions
+            // Collect protection posture: LSA, Tamper, pending reboot, ASR rules, Defender versions/exclusions
             await ProcessProtectionPostureAsync(data);
 
-            // Collect device join state (Entra / AD / Workplace) via dsregcmd
-            await ProcessJoinStateAsync(data);
-
-            // Collect compliance / inventory snapshot (LAPS, AppLocker, SmartScreen, EDR, Hello, audit, etc.)
+            // Collect compliance / inventory snapshot (AppLocker, SmartScreen, audit policy, EDR products)
             await ProcessComplianceInventoryAsync(data);
 
             // Collapse duplicate detection alerts (same threat / process / source) into one entry with Count
@@ -1715,20 +1712,6 @@ $exclusions = if ($mpPref) {
     }
 } else { @{ paths=@(); extensions=@(); processes=@(); ipAddresses=@(); totalCount=0 } }
 
-$uac = Try-It 'uac' {
-    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction Stop
-    $lua = [int]$p.EnableLUA
-    $cpb = [int]$p.ConsentPromptBehaviorAdmin
-    $psd = [int]$p.PromptOnSecureDesktop
-    $level = if ($lua -eq 0) {'Disabled'} `
-             elseif ($cpb -eq 0) {'NeverNotify'} `
-             elseif ($cpb -eq 2 -and $psd -eq 1) {'AlwaysNotify'} `
-             elseif ($cpb -eq 5 -and $psd -eq 1) {'NotifyChangesSecure'} `
-             elseif ($cpb -eq 5 -and $psd -eq 0) {'NotifyChangesNoDim'} `
-             else {'Custom'}
-    @{ enableLua = $lua; consentPromptBehaviorAdmin = $cpb; promptOnSecureDesktop = $psd; level = $level }
-}
-
 $pendingReboot = Try-It 'pendingReboot' {
     $cbs = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
     $wu  = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
@@ -1746,7 +1729,6 @@ $pendingReboot = Try-It 'pendingReboot' {
     defenderVersions = $defenderVersions
     asrRules = $asrRules
     defenderExclusions = $exclusions
-    uac = $uac
     pendingReboot = $pendingReboot
     errors = $err
 } | ConvertTo-Json -Depth 6 -Compress
@@ -1814,14 +1796,6 @@ $pendingReboot = Try-It 'pendingReboot' {
                         + data.DefenderExclusions.IpAddresses.Count;
                 }
 
-                if (root.TryGetProperty("uac", out var uacEl) && uacEl.ValueKind == JsonValueKind.Object)
-                {
-                    data.Uac.EnableLua = uacEl.TryGetProperty("enableLua", out var lua) && lua.TryGetInt32(out var luai) ? luai != 0 : (bool?)null;
-                    data.Uac.ConsentPromptBehaviorAdmin = uacEl.TryGetProperty("consentPromptBehaviorAdmin", out var cpb) && cpb.TryGetInt32(out var cpbi) ? cpbi : (int?)null;
-                    data.Uac.PromptOnSecureDesktop = uacEl.TryGetProperty("promptOnSecureDesktop", out var psd) && psd.TryGetInt32(out var psdi) ? psdi : (int?)null;
-                    data.Uac.Level = GetJsonString(uacEl, "level");
-                }
-
                 if (root.TryGetProperty("pendingReboot", out var prEl) && prEl.ValueKind == JsonValueKind.Object)
                 {
                     data.PendingReboot.CbsServicing = prEl.TryGetProperty("cbsServicing", out var cbs) && ParseBoolOpt(cbs) == true;
@@ -1831,10 +1805,9 @@ $pendingReboot = Try-It 'pendingReboot' {
                 }
 
                 _logger.LogInformation(
-                    "Protection posture: LSA={Lsa} Tamper={Tamper} UAC={Uac} PendingReboot={Reboot} ASR={Asr} Exclusions={Exc} EngineVer={Eng}",
+                    "Protection posture: LSA={Lsa} Tamper={Tamper} PendingReboot={Reboot} ASR={Asr} Exclusions={Exc} EngineVer={Eng}",
                     data.LsaProtection.Mode,
                     data.TamperProtection.IsTamperProtected,
-                    data.Uac.Level,
                     data.PendingReboot.Required,
                     data.AsrRules.Count,
                     data.DefenderExclusions.TotalCount,
@@ -1881,88 +1854,10 @@ $pendingReboot = Try-It 'pendingReboot' {
 
         private async Task ProcessComplianceInventoryAsync(SecurityData data)
         {
-            await CollectLocalAdminsAsync(data);
-            await CollectLapsAsync(data);
             await CollectAppLockerAndWdacAsync(data);
             await CollectSmartScreenAsync(data);
             await CollectAuditPolicyAsync(data);
             await CollectEdrProductsAsync(data);
-            await CollectWindowsHelloAsync(data);
-            await CollectTpmOwnershipAsync(data);
-            await CollectPasswordPolicyAsync(data);
-            CollectAutoLoginPresence(data);
-        }
-
-        private async Task CollectLocalAdminsAsync(SecurityData data)
-        {
-            try
-            {
-                const string script =
-                    "Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop | " +
-                    "Select-Object @{n='Name';e={$_.Name}}, @{n='Sid';e={$_.SID.Value}}, @{n='PrincipalSource';e={[string]$_.PrincipalSource}}, @{n='ObjectClass';e={[string]$_.ObjectClass}} | " +
-                    "ConvertTo-Json -Compress";
-                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
-                if (string.IsNullOrWhiteSpace(result)) return;
-                var arr = result.Trim();
-                if (!arr.StartsWith("[")) arr = "[" + arr + "]";
-                using var doc = JsonDocument.Parse(arr);
-                foreach (var el in doc.RootElement.EnumerateArray())
-                {
-                    data.LocalAdmins.Add(new LocalAdminMember
-                    {
-                        Name = GetJsonString(el, "Name"),
-                        Sid = GetJsonString(el, "Sid"),
-                        PrincipalSource = GetJsonString(el, "PrincipalSource"),
-                        ObjectClass = GetJsonString(el, "ObjectClass"),
-                    });
-                }
-                _logger.LogInformation("Local administrators: {Count}", data.LocalAdmins.Count);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Local admin enumeration failed");
-            }
-        }
-
-        private async Task CollectLapsAsync(SecurityData data)
-        {
-            try
-            {
-                const string script = @"
-$winLaps = $false; $legacyLaps = $false; $backupDir = ''; $adminName = ''
-# Windows LAPS (built-in, Win11+ / Server 2022+)
-try {
-    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Policies\LAPS' -ErrorAction Stop
-    $winLaps = $true
-    switch ([int]$p.BackupDirectory) {
-        1 { $backupDir = 'Active Directory' }
-        2 { $backupDir = 'Azure AD' }
-        default { $backupDir = 'Configured' }
-    }
-    if ($p.AdministratorAccountName) { $adminName = [string]$p.AdministratorAccountName }
-} catch {}
-# Legacy LAPS (msi)
-try {
-    $p2 = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft Services\AdmPwd' -ErrorAction Stop
-    if ($p2) { $legacyLaps = $true }
-} catch {}
-@{ winLaps = [bool]$winLaps; legacyLaps = [bool]$legacyLaps; backupDir = $backupDir; adminName = $adminName } | ConvertTo-Json -Compress
-";
-                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
-                if (string.IsNullOrWhiteSpace(result)) return;
-                using var doc = JsonDocument.Parse(result);
-                var root = doc.RootElement;
-                data.Laps.WindowsLapsConfigured = ParseBoolOpt(root.GetProperty("winLaps")) == true;
-                data.Laps.LegacyLapsInstalled = ParseBoolOpt(root.GetProperty("legacyLaps")) == true;
-                data.Laps.BackupDirectory = GetJsonString(root, "backupDir");
-                data.Laps.AdminAccountName = GetJsonString(root, "adminName");
-                _logger.LogInformation("LAPS: Windows={Win} Legacy={Legacy} Backup={Backup}",
-                    data.Laps.WindowsLapsConfigured, data.Laps.LegacyLapsInstalled, data.Laps.BackupDirectory);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "LAPS detection failed");
-            }
         }
 
         private async Task CollectAppLockerAndWdacAsync(SecurityData data)
@@ -2183,186 +2078,6 @@ try { $wmi = Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiViru
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "EDR product enumeration failed");
-            }
-        }
-
-        private async Task CollectWindowsHelloAsync(SecurityData data)
-        {
-            try
-            {
-                const string script = @"
-$face = $false; $fp = $false
-try {
-    $devs = Get-PnpDevice -Class Biometric -PresentOnly -ErrorAction Stop
-    foreach ($d in $devs) {
-        $n = ($d.FriendlyName + ' ' + $d.Description).ToLower()
-        if ($n -match 'face|camera|ir|infrared') { $face = $true }
-        if ($n -match 'fingerprint|finger') { $fp = $true }
-    }
-} catch {}
-$pin = $null; $pfw = $null
-try {
-    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\PassportForWork' -ErrorAction Stop
-    if ($null -ne $p.Enabled) { $pfw = ([int]$p.Enabled -ne 0) }
-} catch {}
-@{ face=[bool]$face; fp=[bool]$fp; pin=$pin; pfw=$pfw } | ConvertTo-Json -Compress
-";
-                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
-                if (string.IsNullOrWhiteSpace(result)) return;
-                using var doc = JsonDocument.Parse(result);
-                var r = doc.RootElement;
-                data.WindowsHello.FaceSensorPresent = ParseBoolOpt(r.GetProperty("face")) == true;
-                data.WindowsHello.FingerprintSensorPresent = ParseBoolOpt(r.GetProperty("fp")) == true;
-                data.WindowsHello.PinConfigured = r.TryGetProperty("pin", out var pinEl) ? ParseBoolOpt(pinEl) : null;
-                data.WindowsHello.PassportForWorkEnabled = r.TryGetProperty("pfw", out var pfwEl) ? ParseBoolOpt(pfwEl) : null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Windows Hello collection failed");
-            }
-        }
-
-        private async Task CollectTpmOwnershipAsync(SecurityData data)
-        {
-            try
-            {
-                const string script =
-                    "$t = Get-Tpm -ErrorAction Stop; " +
-                    "@{ owned=[bool]$t.TpmOwned; ready=[bool]$t.TpmReady; autoProv=[bool]$t.AutoProvisioning; mfgIdTxt=[string]$t.ManufacturerIdTxt; managedAuth=[string]$t.ManagedAuthLevel } | ConvertTo-Json -Compress";
-                var result = await PowerShellRunner.ExecuteAsync(script, _logger);
-                if (string.IsNullOrWhiteSpace(result)) return;
-                using var doc = JsonDocument.Parse(result);
-                var r = doc.RootElement;
-                data.TpmOwnership.IsOwned = r.TryGetProperty("owned", out var o) ? ParseBoolOpt(o) : null;
-                data.TpmOwnership.IsReady = r.TryGetProperty("ready", out var rd) ? ParseBoolOpt(rd) : null;
-                data.TpmOwnership.AutoProvisioning = r.TryGetProperty("autoProv", out var ap) ? ParseBoolOpt(ap) : null;
-                data.TpmOwnership.ManufacturerIdTxt = GetJsonString(r, "mfgIdTxt");
-                data.TpmOwnership.ManagedAuthLevel = GetJsonString(r, "managedAuth");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Get-Tpm collection failed");
-            }
-        }
-
-        private async Task CollectPasswordPolicyAsync(SecurityData data)
-        {
-            try
-            {
-                var result = await PowerShellRunner.ExecuteAsync("& net.exe accounts 2>&1 | Out-String", _logger);
-                if (string.IsNullOrWhiteSpace(result))
-                {
-                    data.PasswordPolicy.ErrorMessage = "net accounts returned empty";
-                    return;
-                }
-                foreach (var rawLine in result.Replace("\r", "").Split('\n'))
-                {
-                    var line = rawLine.Trim();
-                    if (string.IsNullOrEmpty(line)) continue;
-                    // "Force user logoff how long after time expires?:  Never"
-                    // "Minimum password length:                          0"
-                    var idx = line.IndexOf(':');
-                    if (idx <= 0) continue;
-                    var key = line.Substring(0, idx).Trim().ToLowerInvariant();
-                    var val = line.Substring(idx + 1).Trim();
-                    if (key.StartsWith("minimum password length")) data.PasswordPolicy.MinPasswordLength = TryInt(val);
-                    else if (key.StartsWith("maximum password age")) data.PasswordPolicy.MaxPasswordAgeDays = TryInt(val);
-                    else if (key.StartsWith("minimum password age")) data.PasswordPolicy.MinPasswordAgeDays = TryInt(val);
-                    else if (key.StartsWith("length of password history")) data.PasswordPolicy.PasswordHistoryLength = TryInt(val);
-                    else if (key.StartsWith("lockout threshold")) data.PasswordPolicy.LockoutThreshold = TryInt(val);
-                    else if (key.StartsWith("lockout duration")) data.PasswordPolicy.LockoutDurationMinutes = TryInt(val);
-                }
-                _logger.LogInformation("Password policy: minLen={Min} maxAge={Age} lockout={Lock}",
-                    data.PasswordPolicy.MinPasswordLength, data.PasswordPolicy.MaxPasswordAgeDays, data.PasswordPolicy.LockoutThreshold);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Password policy collection failed");
-                data.PasswordPolicy.ErrorMessage = ex.Message;
-            }
-        }
-
-        private static int? TryInt(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return null;
-            // strip trailing words ("0 days") and try parse
-            var token = s.Split(' ', '\t').FirstOrDefault() ?? string.Empty;
-            return int.TryParse(token, out var n) ? n : (int?)null;
-        }
-
-        private void CollectAutoLoginPresence(SecurityData data)
-        {
-            try
-            {
-                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", writable: false);
-                if (key == null) return;
-                var autoAdmin = key.GetValue("AutoAdminLogon") as string;
-                data.AutoLogin.AutoAdminLogon = autoAdmin == "1";
-                var defaultUser = key.GetValue("DefaultUserName") as string;
-                data.AutoLogin.HasDefaultUserName = !string.IsNullOrEmpty(defaultUser);
-                data.AutoLogin.DefaultUserName = defaultUser ?? string.Empty;
-                var defaultDomain = key.GetValue("DefaultDomainName") as string;
-                data.AutoLogin.HasDefaultDomainName = !string.IsNullOrEmpty(defaultDomain);
-                // PRESENCE ONLY — never read the value.
-                var allNames = key.GetValueNames();
-                data.AutoLogin.HasDefaultPassword = allNames.Any(n => string.Equals(n, "DefaultPassword", StringComparison.OrdinalIgnoreCase));
-                if (data.AutoLogin.HasDefaultPassword)
-                {
-                    _logger.LogWarning("Auto-login DefaultPassword value is present in registry (potential credential exposure)");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Auto-login registry inspection failed");
-            }
-        }
-
-        private async Task ProcessJoinStateAsync(SecurityData data)
-        {
-            try
-            {
-                var result = await PowerShellRunner.ExecuteAsync("& dsregcmd.exe /status 2>&1 | Out-String", _logger);
-                if (string.IsNullOrWhiteSpace(result))
-                {
-                    data.JoinState.ErrorMessage = "dsregcmd returned no output";
-                    return;
-                }
-
-                // dsregcmd output is sectioned ("+----+ Section +----+") with "  Key : Value" lines.
-                var lines = result.Replace("\r", "").Split('\n');
-                foreach (var rawLine in lines)
-                {
-                    var line = rawLine.TrimEnd();
-                    var colonIdx = line.IndexOf(':');
-                    if (colonIdx <= 0) continue;
-                    var key = line.Substring(0, colonIdx).Trim();
-                    var value = colonIdx + 1 < line.Length ? line.Substring(colonIdx + 1).Trim() : string.Empty;
-                    if (string.IsNullOrEmpty(key) || key.StartsWith("+")) continue;
-                    // Multiple identical keys can appear under different sections — last wins; OK for our use.
-                    data.JoinState.Raw[key] = value;
-                }
-
-                bool? Parse(string k) => data.JoinState.Raw.TryGetValue(k, out var v)
-                    ? v.Equals("YES", StringComparison.OrdinalIgnoreCase)
-                    : (bool?)null;
-
-                data.JoinState.AzureAdJoined = Parse("AzureAdJoined");
-                data.JoinState.DomainJoined = Parse("DomainJoined");
-                data.JoinState.WorkplaceJoined = Parse("WorkplaceJoined");
-                data.JoinState.EnterpriseJoined = Parse("EnterpriseJoined");
-                data.JoinState.TenantName = data.JoinState.Raw.TryGetValue("TenantName", out var tn) ? tn : "";
-                data.JoinState.TenantId = data.JoinState.Raw.TryGetValue("TenantId", out var ti) ? ti : "";
-                data.JoinState.DeviceId = data.JoinState.Raw.TryGetValue("DeviceId", out var did) ? did : "";
-                data.JoinState.DomainName = data.JoinState.Raw.TryGetValue("DomainName", out var dn) ? dn : "";
-
-                _logger.LogInformation("Join state: Entra={Entra} AD={AD} Workplace={Wp} Tenant={Tenant}",
-                    data.JoinState.AzureAdJoined, data.JoinState.DomainJoined, data.JoinState.WorkplaceJoined, data.JoinState.TenantName);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "dsregcmd parse failed");
-                data.JoinState.ErrorMessage = ex.Message;
             }
         }
 
