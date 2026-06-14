@@ -1783,17 +1783,24 @@ try {
         {
             try
             {
+                // Always emit a JSON object (with null fields on failure) so parsing
+                // stays reliable even when the policy key is missing or unreadable.
                 const string script = @"
-$p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction Stop
-$lua = [int]$p.EnableLUA
-$cpb = [int]$p.ConsentPromptBehaviorAdmin
-$psd = [int]$p.PromptOnSecureDesktop
-$level = if ($lua -eq 0) {'Disabled'} `
-         elseif ($cpb -eq 0) {'NeverNotify'} `
-         elseif ($cpb -eq 2 -and $psd -eq 1) {'AlwaysNotify'} `
-         elseif ($cpb -eq 5 -and $psd -eq 1) {'NotifyChangesSecure'} `
-         elseif ($cpb -eq 5 -and $psd -eq 0) {'NotifyChangesNoDim'} `
-         else {'Custom'}
+$lua = $null; $cpb = $null; $psd = $null; $level = $null
+try {
+    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction Stop
+    if ($null -ne $p.EnableLUA) { $lua = [int]$p.EnableLUA }
+    if ($null -ne $p.ConsentPromptBehaviorAdmin) { $cpb = [int]$p.ConsentPromptBehaviorAdmin }
+    if ($null -ne $p.PromptOnSecureDesktop) { $psd = [int]$p.PromptOnSecureDesktop }
+} catch {}
+if ($null -ne $lua) {
+    $level = if ($lua -eq 0) {'Disabled'} `
+             elseif ($cpb -eq 0) {'NeverNotify'} `
+             elseif ($cpb -eq 2 -and $psd -eq 1) {'AlwaysNotify'} `
+             elseif ($cpb -eq 5 -and $psd -eq 1) {'NotifyChangesSecure'} `
+             elseif ($cpb -eq 5 -and $psd -eq 0) {'NotifyChangesNoDim'} `
+             else {'Custom'}
+}
 @{ enableLua = $lua; consentPromptBehaviorAdmin = $cpb; promptOnSecureDesktop = $psd; level = $level } | ConvertTo-Json -Compress
 ";
                 var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
@@ -1959,9 +1966,17 @@ try {
                 JsonValueKind.True => true,
                 JsonValueKind.False => false,
                 JsonValueKind.Number => v.TryGetInt32(out var n) ? n != 0 : (bool?)null,
-                JsonValueKind.String => bool.TryParse(v.GetString(), out var b) ? b : (v.GetString() == "1" ? true : v.GetString() == "0" ? false : (bool?)null),
+                JsonValueKind.String => ParseBoolToken(v.GetString()),
                 _ => null,
             };
+        }
+
+        private static bool? ParseBoolToken(string? s)
+        {
+            if (bool.TryParse(s, out var b)) return b;
+            if (s == "1") return true;
+            if (s == "0") return false;
+            return null;
         }
 
         private static int? ParseNullableInt(JsonElement parent, string name)
