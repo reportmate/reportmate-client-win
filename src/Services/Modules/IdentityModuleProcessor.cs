@@ -68,6 +68,13 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Windows Hello info
             await ProcessWindowsHelloInfo(osqueryResults, data);
 
+            // Sign-in / access posture (consolidated from the Security module)
+            await ProcessUacSettings(data);
+            await ProcessLapsState(data);
+            await ProcessPasswordPolicy(data);
+            await ProcessTpmOwnership(data);
+            ProcessAutoLoginPresence(data);
+
             // Build summary
             BuildSummary(data);
 
@@ -1765,6 +1772,207 @@ try {
                 if (int.TryParse(value?.ToString(), out var parsed)) return parsed;
             }
             return 0;
+        }
+
+        // ====== Sign-in / access posture (moved from the Security module) ======
+
+        /// <summary>
+        /// User Account Control configuration and computed prompt level.
+        /// </summary>
+        private async Task ProcessUacSettings(IdentityData data)
+        {
+            try
+            {
+                const string script = @"
+$p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction Stop
+$lua = [int]$p.EnableLUA
+$cpb = [int]$p.ConsentPromptBehaviorAdmin
+$psd = [int]$p.PromptOnSecureDesktop
+$level = if ($lua -eq 0) {'Disabled'} `
+         elseif ($cpb -eq 0) {'NeverNotify'} `
+         elseif ($cpb -eq 2 -and $psd -eq 1) {'AlwaysNotify'} `
+         elseif ($cpb -eq 5 -and $psd -eq 1) {'NotifyChangesSecure'} `
+         elseif ($cpb -eq 5 -and $psd -eq 0) {'NotifyChangesNoDim'} `
+         else {'Custom'}
+@{ enableLua = $lua; consentPromptBehaviorAdmin = $cpb; promptOnSecureDesktop = $psd; level = $level } | ConvertTo-Json -Compress
+";
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var r = doc.RootElement;
+                data.Uac.EnableLua = r.TryGetProperty("enableLua", out var lua) && lua.TryGetInt32(out var luai) ? luai != 0 : (bool?)null;
+                data.Uac.ConsentPromptBehaviorAdmin = ParseNullableInt(r, "consentPromptBehaviorAdmin");
+                data.Uac.PromptOnSecureDesktop = ParseNullableInt(r, "promptOnSecureDesktop");
+                data.Uac.Level = GetJsonStringValue(r, "level");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "UAC settings collection failed");
+            }
+        }
+
+        /// <summary>
+        /// Windows LAPS / legacy LAPS configuration state.
+        /// </summary>
+        private async Task ProcessLapsState(IdentityData data)
+        {
+            try
+            {
+                const string script = @"
+$winLaps = $false; $legacyLaps = $false; $backupDir = ''; $adminName = ''
+# Windows LAPS (built-in, Win11+ / Server 2022+)
+try {
+    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Policies\LAPS' -ErrorAction Stop
+    $winLaps = $true
+    switch ([int]$p.BackupDirectory) {
+        1 { $backupDir = 'Active Directory' }
+        2 { $backupDir = 'Azure AD' }
+        default { $backupDir = 'Configured' }
+    }
+    if ($p.AdministratorAccountName) { $adminName = [string]$p.AdministratorAccountName }
+} catch {}
+# Legacy LAPS (msi)
+try {
+    $p2 = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft Services\AdmPwd' -ErrorAction Stop
+    if ($p2) { $legacyLaps = $true }
+} catch {}
+@{ winLaps = [bool]$winLaps; legacyLaps = [bool]$legacyLaps; backupDir = $backupDir; adminName = $adminName } | ConvertTo-Json -Compress
+";
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var root = doc.RootElement;
+                data.Laps.WindowsLapsConfigured = ParseNullableBool(root, "winLaps") == true;
+                data.Laps.LegacyLapsInstalled = ParseNullableBool(root, "legacyLaps") == true;
+                data.Laps.BackupDirectory = GetJsonStringValue(root, "backupDir");
+                data.Laps.AdminAccountName = GetJsonStringValue(root, "adminName");
+                _logger.LogInformation("LAPS: Windows={Win} Legacy={Legacy} Backup={Backup}",
+                    data.Laps.WindowsLapsConfigured, data.Laps.LegacyLapsInstalled, data.Laps.BackupDirectory);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "LAPS detection failed");
+            }
+        }
+
+        /// <summary>
+        /// Local account password / lockout policy via "net accounts".
+        /// </summary>
+        private async Task ProcessPasswordPolicy(IdentityData data)
+        {
+            try
+            {
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync("& net.exe accounts 2>&1 | Out-String");
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    data.PasswordPolicy.ErrorMessage = "net accounts returned empty";
+                    return;
+                }
+                foreach (var rawLine in result.Replace("\r", "").Split('\n'))
+                {
+                    var line = rawLine.Trim();
+                    if (string.IsNullOrEmpty(line)) continue;
+                    // "Minimum password length:                          0"
+                    var idx = line.IndexOf(':');
+                    if (idx <= 0) continue;
+                    var key = line.Substring(0, idx).Trim().ToLowerInvariant();
+                    var val = line.Substring(idx + 1).Trim();
+                    if (key.StartsWith("minimum password length")) data.PasswordPolicy.MinPasswordLength = TryParsePolicyInt(val);
+                    else if (key.StartsWith("maximum password age")) data.PasswordPolicy.MaxPasswordAgeDays = TryParsePolicyInt(val);
+                    else if (key.StartsWith("minimum password age")) data.PasswordPolicy.MinPasswordAgeDays = TryParsePolicyInt(val);
+                    else if (key.StartsWith("length of password history")) data.PasswordPolicy.PasswordHistoryLength = TryParsePolicyInt(val);
+                    else if (key.StartsWith("lockout threshold")) data.PasswordPolicy.LockoutThreshold = TryParsePolicyInt(val);
+                    else if (key.StartsWith("lockout duration")) data.PasswordPolicy.LockoutDurationMinutes = TryParsePolicyInt(val);
+                }
+                _logger.LogInformation("Password policy: minLen={Min} maxAge={Age} lockout={Lock}",
+                    data.PasswordPolicy.MinPasswordLength, data.PasswordPolicy.MaxPasswordAgeDays, data.PasswordPolicy.LockoutThreshold);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Password policy collection failed");
+                data.PasswordPolicy.ErrorMessage = ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// TPM ownership / readiness via Get-Tpm.
+        /// </summary>
+        private async Task ProcessTpmOwnership(IdentityData data)
+        {
+            try
+            {
+                const string script =
+                    "$t = Get-Tpm -ErrorAction Stop; " +
+                    "@{ owned=[bool]$t.TpmOwned; ready=[bool]$t.TpmReady; autoProv=[bool]$t.AutoProvisioning; mfgIdTxt=[string]$t.ManufacturerIdTxt; managedAuth=[string]$t.ManagedAuthLevel } | ConvertTo-Json -Compress";
+                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                if (string.IsNullOrWhiteSpace(result)) return;
+                using var doc = JsonDocument.Parse(result);
+                var r = doc.RootElement;
+                data.TpmOwnership.IsOwned = ParseNullableBool(r, "owned");
+                data.TpmOwnership.IsReady = ParseNullableBool(r, "ready");
+                data.TpmOwnership.AutoProvisioning = ParseNullableBool(r, "autoProv");
+                data.TpmOwnership.ManufacturerIdTxt = GetJsonStringValue(r, "mfgIdTxt");
+                data.TpmOwnership.ManagedAuthLevel = GetJsonStringValue(r, "managedAuth");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Get-Tpm collection failed");
+            }
+        }
+
+        /// <summary>
+        /// Automatic logon presence (Winlogon). The DefaultPassword value is never read.
+        /// </summary>
+        private void ProcessAutoLoginPresence(IdentityData data)
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                    @"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", writable: false);
+                if (key == null) return;
+                var autoAdmin = key.GetValue("AutoAdminLogon") as string;
+                data.AutoLogin.AutoAdminLogon = autoAdmin == "1";
+                var defaultUser = key.GetValue("DefaultUserName") as string;
+                data.AutoLogin.HasDefaultUserName = !string.IsNullOrEmpty(defaultUser);
+                data.AutoLogin.DefaultUserName = defaultUser ?? string.Empty;
+                var defaultDomain = key.GetValue("DefaultDomainName") as string;
+                data.AutoLogin.HasDefaultDomainName = !string.IsNullOrEmpty(defaultDomain);
+                // PRESENCE ONLY — never read the value.
+                var allNames = key.GetValueNames();
+                data.AutoLogin.HasDefaultPassword = allNames.Any(n => string.Equals(n, "DefaultPassword", StringComparison.OrdinalIgnoreCase));
+                if (data.AutoLogin.HasDefaultPassword)
+                {
+                    _logger.LogWarning("Auto-login DefaultPassword value is present in registry (potential credential exposure)");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Auto-login registry inspection failed");
+            }
+        }
+
+        private static bool? ParseNullableBool(JsonElement parent, string name)
+        {
+            if (!parent.TryGetProperty(name, out var v)) return null;
+            return v.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Number => v.TryGetInt32(out var n) ? n != 0 : (bool?)null,
+                JsonValueKind.String => bool.TryParse(v.GetString(), out var b) ? b : (v.GetString() == "1" ? true : v.GetString() == "0" ? false : (bool?)null),
+                _ => null,
+            };
+        }
+
+        private static int? ParseNullableInt(JsonElement parent, string name)
+            => parent.TryGetProperty(name, out var v) && v.TryGetInt32(out var n) ? n : (int?)null;
+
+        private static int? TryParsePolicyInt(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            // strip trailing words ("0 days") and try parse
+            var token = s.Split(' ', '\t').FirstOrDefault() ?? string.Empty;
+            return int.TryParse(token, out var n) ? n : (int?)null;
         }
 
         private string GetJsonStringValue(JsonElement element, string propertyName)
