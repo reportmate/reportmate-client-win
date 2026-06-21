@@ -616,6 +616,25 @@ Write-Host "3. Run data collection: & 'C:\Program Files\ReportMate\managedreport
 }
 catch {
     Write-Host "ReportMate postinstall failed: $_" -ForegroundColor Red
+
+    # preinstall.ps1 disabled every ReportMate scheduled task before the
+    # payload copy, counting on this script to re-register them. If we bail
+    # out before the task-registration section runs, the device is left with
+    # the previous tasks permanently disabled and data collection silently
+    # dead (the 2026.06.10.0032 fleet regression). Re-enable whatever tasks
+    # still exist so the worst case after a failed install is the previous
+    # task set running against whichever binary is on disk.
+    try {
+        Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+            $_.TaskName -like '*ReportMate*' -and -not $_.Settings.Enabled
+        } | ForEach-Object {
+            Enable-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue | Out-Null
+            Write-Host "Re-enabled task after failed install: $($_.TaskName)"
+        }
+    } catch {
+        Write-Warning "Could not re-enable scheduled tasks after failure: $_"
+    }
+
     exit 1
 }
 
