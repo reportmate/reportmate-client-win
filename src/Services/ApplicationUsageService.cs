@@ -7,7 +7,8 @@ using System.Linq;
 using System.Security.Principal;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Services
@@ -1122,7 +1123,7 @@ namespace ReportMate.WindowsClient.Services
                     try
                     {
                         var json = File.ReadAllText(path);
-                        var state = JsonConvert.DeserializeObject<TrackerStateMirror>(json);
+                        var state = JsonSerializer.Deserialize(json, TrackerStateJsonContext.Default.TrackerStateMirror);
                         if (state?.ByAppByDate == null) continue;
 
                         foreach (var (exePath, byDate) in state.ByAppByDate)
@@ -1157,7 +1158,7 @@ namespace ReportMate.WindowsClient.Services
                     try
                     {
                         var lastJson = File.ReadAllText(lastPath);
-                        last = JsonConvert.DeserializeObject<Dictionary<string, AppDayCountersMirror>>(lastJson)
+                        last = JsonSerializer.Deserialize(lastJson, TrackerStateJsonContext.Default.LastTransmittedMap)
                                ?? last;
                     }
                     catch (Exception ex)
@@ -1194,7 +1195,7 @@ namespace ReportMate.WindowsClient.Services
                 try
                 {
                     var tmp = lastPath + ".tmp";
-                    File.WriteAllText(tmp, JsonConvert.SerializeObject(nextLast));
+                    File.WriteAllText(tmp, JsonSerializer.Serialize(nextLast, TrackerStateJsonContext.Default.LastTransmittedMap));
                     if (File.Exists(lastPath))
                         File.Replace(tmp, lastPath, destinationBackupFileName: null);
                     else
@@ -1312,17 +1313,17 @@ namespace ReportMate.WindowsClient.Services
             catch { return string.Empty; }
         }
 
-        private sealed class TrackerStateMirror
+        internal sealed class TrackerStateMirror
         {
-            [JsonProperty("byAppByDate")]
+            [JsonPropertyName("ByAppByDate")]
             public Dictionary<string, Dictionary<string, AppDayCountersMirror>>? ByAppByDate { get; set; }
         }
 
-        private sealed class AppDayCountersMirror
+        internal sealed class AppDayCountersMirror
         {
-            [JsonProperty("foregroundSeconds")]
+            [JsonPropertyName("ForegroundSeconds")]
             public double ForegroundSeconds { get; set; }
-            [JsonProperty("activeSeconds")]
+            [JsonPropertyName("ActiveSeconds")]
             public double ActiveSeconds { get; set; }
         }
 
@@ -1403,5 +1404,21 @@ namespace ReportMate.WindowsClient.Services
             public string Username { get; set; } = string.Empty;
             public int SessionId { get; set; }
         }
+    }
+
+    /// <summary>
+    /// Source-generated JSON context for the usagetracker state mirror types.
+    /// Reflection-based deserialization (Newtonsoft) is stripped by PublishTrimmed,
+    /// which silently dropped every tracker file and zeroed foreground/active
+    /// fleet-wide. Source generation is trim-safe. Case-insensitive matching reads
+    /// both the tracker's PascalCase output and any legacy camelCase
+    /// _last_transmitted.json written before this change.
+    /// </summary>
+    [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true, WriteIndented = false)]
+    [JsonSerializable(typeof(ApplicationUsageService.TrackerStateMirror))]
+    [JsonSerializable(typeof(Dictionary<string, ApplicationUsageService.AppDayCountersMirror>),
+        TypeInfoPropertyName = "LastTransmittedMap")]
+    internal partial class TrackerStateJsonContext : JsonSerializerContext
+    {
     }
 }
