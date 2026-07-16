@@ -1,49 +1,179 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Serialization;
 
 namespace ReportMate.WindowsClient.Models.Modules
 {
     /// <summary>
     /// Base class for all peripheral module data - Full parity with macOS Swift implementation
-    /// Categories: USB, Input (keyboards/mice/trackpads/tablets), Audio, Bluetooth, Cameras, 
+    /// Categories: USB, Input (keyboards/mice/trackpads/tablets), Audio, Bluetooth, Cameras,
     /// Thunderbolt, Printers, Scanners, External Storage, Serial Ports
+    ///
+    /// SERIALIZATION SHAPE: The emitted JSON uses FLAT arrays per category
+    /// (usbDevices: [...], printers: [...], cameras: [...], ...) to match the macOS
+    /// client, the API bulk /devices/peripherals endpoint, and the frontend
+    /// extractPeripherals reader. The nested wrapper objects below are internal
+    /// working state populated by PeripheralsModuleProcessor and are [JsonIgnore]d;
+    /// the flat *Flat properties are what actually serialize.
     /// </summary>
     public class PeripheralsModuleData : BaseModuleData
     {
-        [JsonPropertyName("displays")]
+        // ---- Internal working state (populated by the processor, NOT serialized) ----
+
+        [JsonIgnore]
         public DisplayInfo? Displays { get; set; }
 
-        [JsonPropertyName("printers")]
+        [JsonIgnore]
         public PeripheralPrinterInfo? Printers { get; set; }
 
-        [JsonPropertyName("usbDevices")]
+        [JsonIgnore]
         public PeripheralUsbDeviceInfo? UsbDevices { get; set; }
 
-        [JsonPropertyName("inputDevices")]
+        [JsonIgnore]
         public InputDeviceInfo? InputDevices { get; set; }
 
-        [JsonPropertyName("audioDevices")]
+        [JsonIgnore]
         public AudioDeviceInfo? AudioDevices { get; set; }
 
-        [JsonPropertyName("bluetoothDevices")]
+        [JsonIgnore]
         public BluetoothDeviceInfo? BluetoothDevices { get; set; }
 
-        [JsonPropertyName("cameraDevices")]
+        [JsonIgnore]
         public CameraDeviceInfo? CameraDevices { get; set; }
 
-        [JsonPropertyName("storageDevices")]
+        [JsonIgnore]
         public StorageDeviceInfo? StorageDevices { get; set; }
 
-        [JsonPropertyName("thunderboltDevices")]
+        [JsonIgnore]
         public ThunderboltDeviceInfo? ThunderboltDevices { get; set; }
 
-        [JsonPropertyName("scanners")]
+        [JsonIgnore]
         public ScannerDeviceInfo? Scanners { get; set; }
 
-        [JsonPropertyName("serialPorts")]
+        [JsonIgnore]
         public SerialPortInfo? SerialPorts { get; set; }
+
+        // ---- Flat serialized arrays (macOS / API / frontend parity) ----
+        //
+        // These are the ONLY peripheral properties that serialize. Each getter
+        // flattens the nested working state (collection path); each setter rebuilds
+        // the nested working state from an incoming flat array so the collect ->
+        // cache -> deserialize -> transmit round-trip preserves data. Serialization
+        // (cache + payload writes) uses the source-generated context and invokes the
+        // getters; the transmit-time cache reload deserializes with a reflection
+        // resolver and invokes the setters.
+
+        [JsonPropertyName("usbDevices")]
+        public List<PeripheralUsbDevice> UsbDevicesFlat
+        {
+            get => UsbDevices?.ConnectedDevices ?? new List<PeripheralUsbDevice>();
+            set => (UsbDevices ??= new PeripheralUsbDeviceInfo()).ConnectedDevices = value;
+        }
+
+        [JsonPropertyName("bluetoothDevices")]
+        public List<BluetoothDevice> BluetoothDevicesFlat
+        {
+            get => BluetoothDevices?.PairedDevices ?? new List<BluetoothDevice>();
+            set => (BluetoothDevices ??= new BluetoothDeviceInfo()).PairedDevices = value;
+        }
+
+        [JsonPropertyName("printers")]
+        public List<PeripheralInstalledPrinter> PrintersFlat
+        {
+            get => Printers?.InstalledPrinters ?? new List<PeripheralInstalledPrinter>();
+            set => (Printers ??= new PeripheralPrinterInfo()).InstalledPrinters = value;
+        }
+
+        [JsonPropertyName("cameras")]
+        public List<CameraDevice> CamerasFlat
+        {
+            get => CameraDevices?.Cameras ?? new List<CameraDevice>();
+            set => (CameraDevices ??= new CameraDeviceInfo()).Cameras = value;
+        }
+
+        [JsonPropertyName("audioDevices")]
+        public List<AudioDevice> AudioDevicesFlat
+        {
+            get => AudioDevices?.Devices ?? new List<AudioDevice>();
+            set => (AudioDevices ??= new AudioDeviceInfo()).Devices = value;
+        }
+
+        [JsonPropertyName("displayDevices")]
+        public List<ExternalMonitor> DisplayDevicesFlat
+        {
+            get => Displays?.ExternalMonitors ?? new List<ExternalMonitor>();
+            set => (Displays ??= new DisplayInfo()).ExternalMonitors = value;
+        }
+
+        [JsonPropertyName("inputDevices")]
+        public List<InputDevice> InputDevicesFlat
+        {
+            get
+            {
+                var list = new List<InputDevice>();
+                if (InputDevices == null) return list;
+                if (InputDevices.Keyboards != null) list.AddRange(InputDevices.Keyboards);
+                if (InputDevices.Mice != null) list.AddRange(InputDevices.Mice);
+                if (InputDevices.Trackpads != null) list.AddRange(InputDevices.Trackpads);
+                if (InputDevices.OtherInput != null) list.AddRange(InputDevices.OtherInput);
+                if (InputDevices.Tablets != null)
+                {
+                    // Fold graphics tablets into the flat input list so they are not lost
+                    list.AddRange(InputDevices.Tablets.Select(t => new InputDevice
+                    {
+                        Name = t.Name,
+                        Description = t.Name,
+                        Vendor = t.Vendor,
+                        VendorId = t.VendorId,
+                        DeviceType = t.DeviceType ?? "Graphics Tablet",
+                        ConnectionType = t.ConnectionType,
+                        IsBuiltIn = false
+                    }));
+                }
+                return list;
+            }
+            set
+            {
+                // Round-trip: the flat input array is already merged, so restore it
+                // wholesale into OtherInput (the getter re-emits it unchanged).
+                InputDevices ??= new InputDeviceInfo();
+                InputDevices.Keyboards = null;
+                InputDevices.Mice = null;
+                InputDevices.Trackpads = null;
+                InputDevices.Tablets = null;
+                InputDevices.OtherInput = value;
+            }
+        }
+
+        [JsonPropertyName("storageDevices")]
+        public List<ExternalDrive> StorageDevicesFlat
+        {
+            get => StorageDevices?.ExternalDrives ?? new List<ExternalDrive>();
+            set => (StorageDevices ??= new StorageDeviceInfo()).ExternalDrives = value;
+        }
+
+        [JsonPropertyName("thunderboltDevices")]
+        public List<ThunderboltDevice> ThunderboltDevicesFlat
+        {
+            get => ThunderboltDevices?.Devices ?? new List<ThunderboltDevice>();
+            set => (ThunderboltDevices ??= new ThunderboltDeviceInfo()).Devices = value;
+        }
+
+        [JsonPropertyName("scanners")]
+        public List<ScannerDevice> ScannersFlat
+        {
+            get => Scanners?.Devices ?? new List<ScannerDevice>();
+            set => (Scanners ??= new ScannerDeviceInfo()).Devices = value;
+        }
+
+        [JsonPropertyName("serialPorts")]
+        public List<SerialPort> SerialPortsFlat
+        {
+            get => SerialPorts?.Ports ?? new List<SerialPort>();
+            set => (SerialPorts ??= new SerialPortInfo()).Ports = value;
+        }
     }
 
     /// <summary>
