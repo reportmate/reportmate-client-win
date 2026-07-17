@@ -975,9 +975,13 @@ $installTasksPath = Join-Path $BuildDir "resources\install-tasks.ps1"
 if (Test-Path $installTasksPath) {
     $installTasksContent = Get-Content $installTasksPath -Raw
     
-    # Extract the core task installation logic from install-tasks.ps1
-    # Get everything between the first try block and the last catch block
-    if ($installTasksContent -match '(?s)(\s*# First, remove any existing ReportMate tasks.*?)catch \{[^}]*\}') {
+    # Extract the core task installation logic from install-tasks.ps1:
+    # everything from the task-removal comment up to the script's FINAL
+    # catch (anchored on its unique Write-Error text). The previous lazy
+    # `.*?catch \{[^}]*\}` stopped at the first inner catch -- once the
+    # tracker task added its own try/catch, that truncated the capture
+    # mid-`try` and the generated postinstall no longer parsed.
+    if ($installTasksContent -match '(?s)(\s*# First, remove any existing ReportMate tasks.*)\}\s*catch\s*\{\s*Write-Error "Failed to create scheduled tasks') {
         $coreTaskLogic = $matches[1].Trim()
         
         # Build the comprehensive scheduled tasks installation content
@@ -1373,6 +1377,53 @@ Commit: $env:GITHUB_SHA
     if (-not (Test-Path $expectedMsi)) {
         throw "MSI creation completed without an exception but $expectedMsi is missing"
     }
+
+    # Verify the MSI File table contains every file postinstall.ps1 hard-requires.
+    # The expected list is parsed from postinstall.ps1 itself so the two can't
+    # drift: postinstall throws at install time on any missing payload file, and
+    # because its preinstall counterpart has already disabled the scheduled
+    # tasks by that point, a payload gap bricks data collection on every device
+    # the MSI reaches (this is exactly how the 2026.06.10.0032 release shipped
+    # without usagetracker.exe and disabled collection fleet-wide).
+    Write-Step "Verifying MSI payload against postinstall expectations..."
+    $postinstallSource = Get-Content (Join-Path $PkgDir "scripts\postinstall.ps1") -Raw
+    if ($postinstallSource -notmatch '(?s)\$expectedPayload\s*=\s*@\((.*?)\)') {
+        throw "Could not parse `$expectedPayload from build/pkg/scripts/postinstall.ps1 - update this check if the variable was renamed"
+    }
+    $requiredFiles = [regex]::Matches($matches[1], "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }
+    if ($requiredFiles.Count -eq 0) {
+        throw "Parsed an empty `$expectedPayload list from postinstall.ps1"
+    }
+
+    $installer = $null; $db = $null; $view = $null
+    $msiFileNames = [System.Collections.Generic.List[string]]::new()
+    try {
+        # Direct member access (not InvokeMember) - pwsh 7's COM marshaler
+        # throws DISP_E_TYPEMISMATCH on the late-bound OpenDatabase pattern.
+        $installer = New-Object -ComObject WindowsInstaller.Installer
+        $db = $installer.OpenDatabase($expectedMsi, 0)
+        $view = $db.OpenView("SELECT FileName FROM File")
+        $view.Execute($null)
+        while ($true) {
+            $record = $view.Fetch()
+            if (-not $record) { break }
+            # MSI FileName column is 'SHORTNAME|LONGNAME'; compare the long name.
+            $rawName = $record.StringData(1)
+            $msiFileNames.Add($(if ($rawName -match '\|') { ($rawName -split '\|', 2)[1] } else { $rawName }))
+        }
+        $view.Close()
+    } finally {
+        foreach ($com in @($view, $db, $installer)) {
+            if ($com) { try { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($com) | Out-Null } catch {} }
+        }
+        [GC]::Collect(); [GC]::WaitForPendingFinalizers()
+    }
+
+    $missingFromMsi = @($requiredFiles | Where-Object { $msiFileNames -notcontains $_ })
+    if ($missingFromMsi.Count -gt 0) {
+        throw "MSI payload is missing file(s) postinstall.ps1 requires: $($missingFromMsi -join ', '). Installing this MSI would disable scheduled tasks fleet-wide."
+    }
+    Write-Success "MSI payload verified: all $($requiredFiles.Count) postinstall-required files present"
 } else {
     Write-Info "Skipping MSI creation"
 }

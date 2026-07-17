@@ -447,3 +447,4 @@ osquery-temp/
 *.msi
 *.msm
 *.msp
+.worktrees/
