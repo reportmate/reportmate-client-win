@@ -343,7 +343,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         #region Input Devices
 
-        private Task ProcessInputDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
+        private async Task ProcessInputDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
         {
             _logger.LogDebug("Processing input device information");
             data.InputDevices = new InputDeviceInfo
@@ -457,13 +457,91 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            // WMI/PnP fallback: the osquery registry queries above return 0 rows under
+            // the SYSTEM service context the client runs in (verified in the field), so
+            // keyboards/mice/trackpads are otherwise always empty. Supplement from
+            // Win32_PnPEntity by PNPClass -- the same fallback pattern USB/audio/camera use.
+            if (data.InputDevices.Keyboards.Count == 0 &&
+                data.InputDevices.Mice.Count == 0 &&
+                data.InputDevices.Trackpads.Count == 0)
+            {
+                try
+                {
+                    List<Dictionary<string, object>>? pnp = null;
+                    if (await _wmiHelperService.IsWmiAvailableAsync())
+                    {
+                        var rows = await _wmiHelperService.QueryWmiMultipleAsync(
+                            "SELECT Name, DeviceID, Manufacturer, PNPClass, Status FROM Win32_PnPEntity WHERE PNPClass = 'Keyboard' OR PNPClass = 'Mouse'");
+                        pnp = rows?.Select(r => r.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? (object)"")).ToList();
+                    }
+                    else
+                    {
+                        var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
+                            "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Keyboard' -or $_.PNPClass -eq 'Mouse' } | Select-Object Name, DeviceID, Manufacturer, PNPClass, Status | ConvertTo-Json -Compress");
+                        if (!string.IsNullOrWhiteSpace(psResult))
+                        {
+                            var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr
+                                : json != null ? new Newtonsoft.Json.Linq.JArray(json)
+                                : new Newtonsoft.Json.Linq.JArray();
+                            pnp = items.OfType<Newtonsoft.Json.Linq.JObject>()
+                                .Select(o => o.Properties().ToDictionary(p => p.Name, p => (object)((string?)p.Value ?? "")))
+                                .ToList();
+                        }
+                    }
+
+                    foreach (var row in pnp ?? new List<Dictionary<string, object>>())
+                    {
+                        var name = GetStringValue(row, "Name");
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        var pnpClass = GetStringValue(row, "PNPClass");
+                        var deviceId = GetStringValue(row, "DeviceID");
+                        var lower = name.ToLowerInvariant();
+                        var isBuiltIn = lower.Contains("ps/2") || lower.Contains("built-in") || lower.Contains("internal");
+                        var connectionType =
+                            (deviceId.StartsWith("BTHENUM", StringComparison.OrdinalIgnoreCase) || lower.Contains("bluetooth")) ? "Bluetooth" :
+                            (deviceId.StartsWith("USB", StringComparison.OrdinalIgnoreCase) || deviceId.StartsWith("HID", StringComparison.OrdinalIgnoreCase)) ? "USB" :
+                            isBuiltIn ? "Built-in" : "Unknown";
+                        var dev = new InputDevice
+                        {
+                            Name = name,
+                            Description = name,
+                            Vendor = GetStringValue(row, "Manufacturer"),
+                            HidDeviceId = deviceId,
+                            IsBuiltIn = isBuiltIn,
+                            ConnectionType = connectionType
+                        };
+                        var isMouse = string.Equals(pnpClass, "Mouse", StringComparison.OrdinalIgnoreCase);
+                        var isTrackpad = isMouse && (lower.Contains("touchpad") || lower.Contains("trackpad") || lower.Contains("precision"));
+                        if (isTrackpad)
+                        {
+                            dev.DeviceType = "Trackpad";
+                            if (data.InputDevices.Trackpads.All(d => d.Name != name)) data.InputDevices.Trackpads.Add(dev);
+                        }
+                        else if (isMouse)
+                        {
+                            dev.DeviceType = "Mouse";
+                            if (data.InputDevices.Mice.All(d => d.Name != name)) data.InputDevices.Mice.Add(dev);
+                        }
+                        else
+                        {
+                            dev.DeviceType = "Keyboard";
+                            if (data.InputDevices.Keyboards.All(d => d.Name != name)) data.InputDevices.Keyboards.Add(dev);
+                        }
+                    }
+
+                    if ((pnp?.Count ?? 0) > 0)
+                        _logger.LogInformation("WMI/PnP fallback collected input devices - Keyboards: {K}, Mice: {M}, Trackpads: {T}",
+                            data.InputDevices.Keyboards.Count, data.InputDevices.Mice.Count, data.InputDevices.Trackpads.Count);
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "WMI/PowerShell input-device fallback failed"); }
+            }
+
             _logger.LogInformation("Processed input devices - Keyboards: {Keyboards}, Mice: {Mice}, Trackpads: {Trackpads}, Tablets: {Tablets}",
                 data.InputDevices.Keyboards.Count,
                 data.InputDevices.Mice.Count,
                 data.InputDevices.Trackpads.Count,
                 data.InputDevices.Tablets.Count);
-
-            return Task.CompletedTask;
         }
 
         #endregion
