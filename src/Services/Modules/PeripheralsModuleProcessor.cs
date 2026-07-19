@@ -672,7 +672,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         #region Bluetooth Devices
 
-        private Task ProcessBluetoothDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
+        private async Task ProcessBluetoothDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
         {
             _logger.LogDebug("Processing Bluetooth device information");
             data.BluetoothDevices = new BluetoothDeviceInfo { PairedDevices = new List<BluetoothDevice>() };
@@ -716,8 +716,33 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            // Fallback: osquery's BTHPORT registry query returns nothing under the SYSTEM
+            // service context. Read paired-device names straight from the registry via
+            // PowerShell -- the Name value is REG_BINARY (UTF-8, sometimes NUL-terminated).
+            // PNPClass='Bluetooth' via WMI would return radios/services, not paired peers.
+            if (data.BluetoothDevices.PairedDevices.Count == 0)
+            {
+                const string ps = "Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\BTHPORT\\Parameters\\Devices' -ErrorAction SilentlyContinue | ForEach-Object { $b = (Get-ItemProperty -LiteralPath $_.PSPath -Name Name -ErrorAction SilentlyContinue).Name; if ($b) { [pscustomobject]@{ Address = $_.PSChildName; Name = ([System.Text.Encoding]::UTF8.GetString($b)).Trim([char]0) } } } | ConvertTo-Json -Compress";
+                foreach (var o in await RunPowerShellJsonAsync(ps))
+                {
+                    var name = (string?)o["Name"];
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    var address = (string?)o["Address"];
+                    if (data.BluetoothDevices.PairedDevices.Any(d => !string.IsNullOrEmpty(address) && string.Equals(d.Address, address, StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    data.BluetoothDevices.PairedDevices.Add(new BluetoothDevice
+                    {
+                        Name = name,
+                        Address = address,
+                        IsPaired = true,
+                        DeviceCategory = DetermineBluetoothCategory(name, "")
+                    });
+                }
+                if (data.BluetoothDevices.PairedDevices.Count > 0)
+                    _logger.LogInformation("BTHPORT registry fallback collected {Count} paired Bluetooth device(s)", data.BluetoothDevices.PairedDevices.Count);
+            }
+
             _logger.LogInformation("Processed Bluetooth devices - Total: {Count}", data.BluetoothDevices.PairedDevices.Count);
-            return Task.CompletedTask;
         }
 
         #endregion
@@ -808,7 +833,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         #region Thunderbolt Devices
 
-        private Task ProcessThunderboltDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
+        private async Task ProcessThunderboltDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
         {
             _logger.LogDebug("Processing Thunderbolt device information");
             data.ThunderboltDevices = new ThunderboltDeviceInfo { Devices = new List<ThunderboltDevice>() };
@@ -830,8 +855,30 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            // Fallback: osquery PCI-enum query returns nothing under the SYSTEM service
+            // context. Enumerate Thunderbolt/USB4 controllers/devices via WMI PnP.
+            if (data.ThunderboltDevices.Devices.Count == 0)
+            {
+                const string ps = "Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'Thunderbolt|USB4' } | Select-Object Name, DeviceID, Manufacturer | ConvertTo-Json -Compress";
+                foreach (var o in await RunPowerShellJsonAsync(ps))
+                {
+                    var name = (string?)o["Name"];
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    if (data.ThunderboltDevices.Devices.Any(d => d.Name == name)) continue;
+                    data.ThunderboltDevices.Devices.Add(new ThunderboltDevice
+                    {
+                        Name = name,
+                        DeviceId = (string?)o["DeviceID"],
+                        Vendor = (string?)o["Manufacturer"],
+                        DeviceType = DetermineThunderboltDeviceType(name),
+                        ConnectionType = "Thunderbolt"
+                    });
+                }
+                if (data.ThunderboltDevices.Devices.Count > 0)
+                    _logger.LogInformation("WMI/PnP fallback collected {Count} Thunderbolt/USB4 device(s)", data.ThunderboltDevices.Devices.Count);
+            }
+
             _logger.LogInformation("Processed Thunderbolt devices - Total: {Count}", data.ThunderboltDevices.Devices.Count);
-            return Task.CompletedTask;
         }
 
         #endregion
@@ -1077,7 +1124,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         #region Scanner Devices
 
-        private Task ProcessScannerDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
+        private async Task ProcessScannerDevicesAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
         {
             _logger.LogDebug("Processing scanner device information");
             data.Scanners = new ScannerDeviceInfo { Devices = new List<ScannerDevice>() };
@@ -1099,8 +1146,33 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            // Fallback: osquery USB-enum query returns nothing under the SYSTEM service
+            // context. Match scanners/MFPs by name via WMI PnP (name-based to avoid the
+            // camera/webcam false positives that a bare PNPClass='Image' filter would add).
+            if (data.Scanners.Devices.Count == 0)
+            {
+                const string ps = "Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'scanner|mfp|multifunction' } | Select-Object Name, DeviceID, Manufacturer, Status | ConvertTo-Json -Compress";
+                foreach (var o in await RunPowerShellJsonAsync(ps))
+                {
+                    var name = (string?)o["Name"];
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    if (data.Scanners.Devices.Any(d => d.Name == name)) continue;
+                    var deviceId = (string?)o["DeviceID"] ?? "";
+                    data.Scanners.Devices.Add(new ScannerDevice
+                    {
+                        Name = name,
+                        Manufacturer = (string?)o["Manufacturer"],
+                        Status = (string?)o["Status"],
+                        ConnectionType = deviceId.StartsWith("USB", StringComparison.OrdinalIgnoreCase) ? "USB" : "Unknown",
+                        ScannerType = (name.Contains("MFP", StringComparison.OrdinalIgnoreCase) || name.Contains("multifunction", StringComparison.OrdinalIgnoreCase)) ? "Multifunction" : "Scanner",
+                        DeviceType = "Scanner"
+                    });
+                }
+                if (data.Scanners.Devices.Count > 0)
+                    _logger.LogInformation("WMI/PnP fallback collected {Count} scanner(s)", data.Scanners.Devices.Count);
+            }
+
             _logger.LogInformation("Processed scanners - Total: {Count}", data.Scanners.Devices.Count);
-            return Task.CompletedTask;
         }
 
         #endregion
@@ -1181,7 +1253,7 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         #region Serial Ports
 
-        private Task ProcessSerialPortsAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
+        private async Task ProcessSerialPortsAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, PeripheralsModuleData data)
         {
             _logger.LogDebug("Processing serial port information");
             data.SerialPorts = new SerialPortInfo { Ports = new List<SerialPort>() };
@@ -1210,13 +1282,60 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            // Fallback: osquery SERIALCOMM query returns nothing under the SYSTEM service
+            // context. Win32_SerialPort enumerates COM ports directly.
+            if (data.SerialPorts.Ports.Count == 0)
+            {
+                const string ps = "Get-CimInstance Win32_SerialPort -ErrorAction SilentlyContinue | Select-Object DeviceID, Name, Description | ConvertTo-Json -Compress";
+                foreach (var o in await RunPowerShellJsonAsync(ps))
+                {
+                    var portName = (string?)o["DeviceID"];   // e.g. COM3
+                    if (string.IsNullOrWhiteSpace(portName)) continue;
+                    if (data.SerialPorts.Ports.Any(p => p.Name == portName)) continue;
+                    var desc = (string?)o["Name"] ?? (string?)o["Description"];
+                    var isUsb = (desc ?? "").Contains("USB", StringComparison.OrdinalIgnoreCase);
+                    var isBt = (desc ?? "").Contains("Bluetooth", StringComparison.OrdinalIgnoreCase);
+                    data.SerialPorts.Ports.Add(new SerialPort
+                    {
+                        Name = portName,
+                        Device = desc,
+                        PortType = isUsb ? "USB Serial" : isBt ? "Bluetooth" : "Serial Port",
+                        ConnectionType = isUsb ? "USB" : isBt ? "Bluetooth" : "Serial",
+                        DeviceType = "Serial Port"
+                    });
+                }
+                if (data.SerialPorts.Ports.Count > 0)
+                    _logger.LogInformation("Win32_SerialPort fallback collected {Count} serial port(s)", data.SerialPorts.Ports.Count);
+            }
+
             _logger.LogInformation("Processed serial ports - Total: {Count}", data.SerialPorts.Ports.Count);
-            return Task.CompletedTask;
         }
 
         #endregion
 
         #region Helper Methods
+
+        /// <summary>
+        /// Run a PowerShell command that emits JSON and return the parsed objects.
+        /// This is the SYSTEM-context fallback for peripheral categories whose osquery
+        /// registry queries return no rows when the client runs as a service.
+        /// </summary>
+        private async Task<List<Newtonsoft.Json.Linq.JObject>> RunPowerShellJsonAsync(string command)
+        {
+            var results = new List<Newtonsoft.Json.Linq.JObject>();
+            try
+            {
+                var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(command);
+                if (string.IsNullOrWhiteSpace(psResult)) return results;
+                var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
+                var arr = json is Newtonsoft.Json.Linq.JArray a ? a
+                    : json != null ? new Newtonsoft.Json.Linq.JArray(json)
+                    : new Newtonsoft.Json.Linq.JArray();
+                results.AddRange(arr.OfType<Newtonsoft.Json.Linq.JObject>());
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "PowerShell JSON fallback failed"); }
+            return results;
+        }
 
         /// <summary>
         /// Extract USB vendor/product IDs from device paths
