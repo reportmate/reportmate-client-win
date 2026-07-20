@@ -623,7 +623,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 Status = GetStringValue(wmiAudio, "Status"),
                                 Type = "Output",
                                 IsOutput = true,
-                                ConnectionType = "WMI",
+                                ConnectionType = MapConnectionTypeFromDeviceId(GetStringValue(wmiAudio, "DeviceID")),
                                 DeviceType = "Audio Device"
                             });
                         }
@@ -655,7 +655,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 Manufacturer = (string?)item["Manufacturer"] ?? "",
                                 Status = (string?)item["Status"] ?? "",
                                 Type = "Output", IsOutput = true,
-                                ConnectionType = "PowerShell",
+                                ConnectionType = MapConnectionTypeFromDeviceId((string?)item["DeviceID"]),
                                 DeviceType = "Audio Device"
                             });
                         }
@@ -793,7 +793,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                             {
                                 Name = name, Manufacturer = GetStringValue(wmiCam, "Manufacturer"),
                                 ModelId = GetStringValue(wmiCam, "DeviceID"), Status = GetStringValue(wmiCam, "Status"),
-                                ConnectionType = "WMI", DeviceType = "Camera"
+                                ConnectionType = MapConnectionTypeFromDeviceId(GetStringValue(wmiCam, "DeviceID")), DeviceType = "Camera"
                             });
                         }
                     }
@@ -818,7 +818,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                             {
                                 Name = name, Manufacturer = (string?)item["Manufacturer"] ?? "",
                                 ModelId = (string?)item["DeviceID"] ?? "", Status = (string?)item["Status"] ?? "",
-                                ConnectionType = "PowerShell", DeviceType = "Camera"
+                                ConnectionType = MapConnectionTypeFromDeviceId((string?)item["DeviceID"]), DeviceType = "Camera"
                             });
                         }
                     }
@@ -1118,6 +1118,25 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (port.Contains("COM")) return "Serial";
             if (port.Contains("NUL") || port.Contains("FILE")) return "Virtual";
             return "Network";
+        }
+
+        /// <summary>
+        /// Map a PnP instance path (Win32 DeviceID, e.g. "USB\VID_...", "HDAUDIO\FUNC_01&...",
+        /// "BTHENUM\...") to the real physical connection type. Returns an empty string when the
+        /// bus can't be determined so the frontend omits the field rather than showing a
+        /// collection-method placeholder.
+        /// </summary>
+        private static string MapConnectionTypeFromDeviceId(string? deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId)) return "";
+
+            var id = deviceId.ToUpperInvariant();
+            if (id.StartsWith("USB\\") || id.StartsWith("USBAUDIO")) return "USB";
+            if (id.StartsWith("BTH")) return "Bluetooth"; // BTHENUM, BTHHFENUM, BTHLE, BTHA2DP
+            if (id.StartsWith("HDAUDIO") || id.StartsWith("INTELAUDIO")) return "Built-in";
+            if (id.StartsWith("PCI\\") || id.StartsWith("ACPI\\")) return "Built-in";
+            if (id.StartsWith("SWD\\") || id.StartsWith("ROOT\\") || id.StartsWith("MMDEVAPI")) return "Virtual";
+            return "";
         }
 
         #endregion
