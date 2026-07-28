@@ -168,6 +168,9 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(List<Modules.DirectoryInformation>))]
 [JsonSerializable(typeof(List<Modules.FileInformation>))]
 [JsonSerializable(typeof(Modules.DirectoryCategory))]
+// Attached displays for hardware module
+[JsonSerializable(typeof(Modules.ConnectedDisplay))]
+[JsonSerializable(typeof(List<Modules.ConnectedDisplay>))]
 // Anonymous types used in data transmission
 [JsonSerializable(typeof(Dictionary<string, object>))]
 [JsonSerializable(typeof(object))]

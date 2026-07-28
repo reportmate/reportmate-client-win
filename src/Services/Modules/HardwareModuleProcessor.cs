@@ -1127,11 +1127,14 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Bluetooth adapter information
             await ProcessBluetoothInformation(osqueryResults, data);
 
+            // Process attached displays (EDID identity for asset inventory)
+            await ProcessDisplaysAsync(data);
+
             // Process hierarchical directory storage analysis (respects StorageMode: quick/deep/auto)
             await ProcessStorageAnalysisWithMode(osqueryResults, data);
 
-            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}, Wireless: {Wireless}, Bluetooth: {Bluetooth}", 
-                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None", data.Wireless?.Name ?? "Not Present", data.Bluetooth?.Name ?? "Not Present");
+            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}, Wireless: {Wireless}, Bluetooth: {Bluetooth}, Displays: {DisplayCount}",
+                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None", data.Wireless?.Name ?? "Not Present", data.Bluetooth?.Name ?? "Not Present", data.Displays.Count);
 
             return data;
         }
@@ -4011,6 +4014,198 @@ try {
         /// <summary>
         /// Execute a PowerShell script and return the result
         /// </summary>
+        #region Displays
+
+        /// <summary>
+        /// Collect attached displays and their EDID identity.
+        ///
+        /// Everything comes from the root\wmi monitor classes, which are fed by the display driver
+        /// and so still answer when the client runs as SYSTEM with no interactive session. The
+        /// Win32 display APIs (EnumDisplayDevices and friends) return nothing useful from session 0,
+        /// which is why they are not used here even though they expose more.
+        ///
+        /// The emitted shape matches the macOS client's hardware.displays[] entries so inventory
+        /// reads one set of keys across both platforms.
+        /// </summary>
+        private async Task ProcessDisplaysAsync(HardwareData data)
+        {
+            try
+            {
+                // Decode(): the monitor classes return their strings as null-padded UInt16 arrays.
+                // MaxHorizontalImageSize/MaxVerticalImageSize are centimetres, hence the /2.54.
+                var script = @"
+$ErrorActionPreference = 'SilentlyContinue'
+function Decode($arr) {
+    if ($null -eq $arr) { return '' }
+    (($arr | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ }) -join '').Trim()
+}
+$ids = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID)
+if ($ids.Count -eq 0) { 'NONE'; exit }
+$size = @{}
+foreach ($p in @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams)) { $size[$p.InstanceName] = $p }
+$conn = @{}
+foreach ($c in @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams)) { $conn[$c.InstanceName] = $c.VideoOutputTechnology }
+$mode = @{}
+foreach ($m in @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes)) {
+    $pref = $m.MonitorSourceModes[$m.PreferredMonitorSourceModeIndex]
+    if ($pref) { $mode[$m.InstanceName] = [string]$pref.HorizontalActivePixels + ' x ' + [string]$pref.VerticalActivePixels }
+}
+foreach ($id in $ids) {
+    $i = $id.InstanceName
+    $diag = ''
+    if ($size.ContainsKey($i)) {
+        $h = $size[$i].MaxHorizontalImageSize; $v = $size[$i].MaxVerticalImageSize
+        if ($h -gt 0 -and $v -gt 0) { $diag = [string][math]::Round([math]::Sqrt(($h * $h) + ($v * $v)) / 2.54, 1) }
+    }
+    $vot = -2
+    if ($conn.ContainsKey($i)) { $vot = $conn[$i] }
+    $res = ''
+    if ($mode.ContainsKey($i)) { $res = $mode[$i] }
+    $act = 0
+    if ($id.Active) { $act = 1 }
+    $fields = @(
+        (Decode $id.UserFriendlyName), (Decode $id.SerialNumberID), (Decode $id.ManufacturerName),
+        (Decode $id.ProductCodeID), [string]$id.YearOfManufacture, [string]$id.WeekOfManufacture,
+        [string]$vot, $res, $diag, [string]$act
+    ) | ForEach-Object { ([string]$_).Replace('|', ' ') }
+    $fields -join '|'
+}";
+
+                var result = await ExecutePowerShellScriptAsync(script);
+
+                if (string.IsNullOrWhiteSpace(result) || result == "NONE")
+                {
+                    _logger.LogDebug("No displays reported by root\\wmi monitor classes");
+                    return;
+                }
+
+                foreach (var line in result.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var parts = line.Trim().Split('|');
+                    if (parts.Length < 10) continue;
+
+                    var friendlyName = parts[0].Trim();
+                    var serial = parts[1].Trim();
+                    var pnpCode = parts[2].Trim();
+                    var productCode = parts[3].Trim();
+                    var manufacturer = ResolvePnpVendor(pnpCode);
+                    var videoOutput = int.TryParse(parts[6], out var vot) ? vot : -2;
+                    var isInternal = IsInternalVideoOutput(videoOutput);
+
+                    var display = new ConnectedDisplay
+                    {
+                        // Some panels leave the friendly-name descriptor empty; fall back to the
+                        // vendor and product code so the entry is still identifiable.
+                        Name = !string.IsNullOrEmpty(friendlyName)
+                            ? friendlyName
+                            : string.Join(" ", new[] { manufacturer, productCode }.Where(s => !string.IsNullOrEmpty(s))),
+                        SerialNumber = string.IsNullOrEmpty(serial) ? null : serial,
+                        Manufacturer = manufacturer,
+                        Model = friendlyName,
+                        Type = isInternal ? "internal" : "external",
+                        Resolution = parts[7].Trim(),
+                        VendorId = EncodePnpVendorId(pnpCode),
+                        ProductId = string.IsNullOrEmpty(productCode) ? null : productCode.ToLowerInvariant(),
+                        ConnectionType = MapVideoOutputTechnology(videoOutput),
+                        Online = parts[9].Trim() == "1"
+                    };
+
+                    if (int.TryParse(parts[4], out var year) && year > 1990) display.ManufactureYear = year;
+                    if (int.TryParse(parts[5], out var week) && week is > 0 and <= 53) display.ManufactureWeek = week;
+                    if (double.TryParse(parts[8], out var diag) && diag > 0) display.DiagonalSizeInches = diag;
+
+                    data.Displays.Add(display);
+                }
+
+                var external = data.Displays.Count(d => d.Type == "external");
+                var withSerial = data.Displays.Count(d => d.Type == "external" && !string.IsNullOrEmpty(d.SerialNumber));
+                _logger.LogDebug("Displays collected - Total: {Total}, External: {External}, External with serial: {WithSerial}",
+                    data.Displays.Count, external, withSerial);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Display collection failed: {Error}", ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// D3DKMDT_VIDEO_OUTPUT_TECHNOLOGY values that mean the panel is built into the chassis -
+        /// laptop screens and all-in-one displays. These must never become inventory assets.
+        /// </summary>
+        private static bool IsInternalVideoOutput(int videoOutputTechnology) =>
+            videoOutputTechnology is 6      // LVDS
+                or 11                       // DisplayPort embedded
+                or 13                       // UDI embedded
+                or unchecked((int)0x80000000);
+
+        private static string? MapVideoOutputTechnology(int videoOutputTechnology) => videoOutputTechnology switch
+        {
+            0 => "VGA",
+            1 => "S-Video",
+            2 => "Composite",
+            3 => "Component",
+            4 => "DVI",
+            5 => "HDMI",
+            6 => "Internal",
+            9 => "SDI",
+            10 => "DisplayPort",
+            11 => "Internal",
+            12 => "UDI",
+            13 => "Internal",
+            15 => "Miracast",
+            16 => "Indirect Wired",
+            unchecked((int)0x80000000) => "Internal",
+            _ => null
+        };
+
+        /// <summary>
+        /// Re-pack a three-letter PNP vendor code into the 16-bit EDID manufacturer id, rendered as
+        /// lowercase hex. EDID stores each letter as five bits offset from 'A'-1, so Dell's "DEL"
+        /// becomes 0x10ac and Apple's "APP" becomes 0x610 - the same values the macOS client reports,
+        /// which is what lets both platforms key on vendor_id.
+        /// </summary>
+        private static string? EncodePnpVendorId(string pnpCode)
+        {
+            if (string.IsNullOrEmpty(pnpCode) || pnpCode.Length != 3) return null;
+
+            var packed = 0;
+            foreach (var c in pnpCode.ToUpperInvariant())
+            {
+                if (c is < 'A' or > 'Z') return null;
+                packed = (packed << 5) | (c - 'A' + 1);
+            }
+            return packed.ToString("x");
+        }
+
+        private static string ResolvePnpVendor(string pnpCode) => pnpCode.ToUpperInvariant() switch
+        {
+            "DEL" => "Dell",
+            "APP" => "Apple",
+            "AUS" or "ACI" => "ASUS",
+            "ACR" => "Acer",
+            "AOC" => "AOC",
+            "BNQ" => "BenQ",
+            "CMN" or "CMO" => "Chi Mei",
+            "ENC" or "EIZ" => "EIZO",
+            "GSM" or "GBT" => "LG",
+            "HPN" or "HWP" => "HP",
+            "HSD" or "HEC" => "Hisense",
+            "IVM" => "Iiyama",
+            "LEN" => "Lenovo",
+            "LGD" => "LG Display",
+            "MSI" => "MSI",
+            "NEC" => "NEC",
+            "PHL" => "Philips",
+            "SAM" or "SEC" => "Samsung",
+            "SHP" => "Sharp",
+            "SNY" => "Sony",
+            "VSC" => "ViewSonic",
+            "WAC" => "Wacom",
+            _ => pnpCode
+        };
+
+        #endregion
+
         private async Task<string> ExecutePowerShellScriptAsync(string script)
         {
             try

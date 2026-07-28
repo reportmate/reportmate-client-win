@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Models.Modules
@@ -17,12 +18,79 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<StorageDevice> Storage { get; set; } = new();
         public GraphicsInfo Graphics { get; set; } = new();
         public List<UsbDevice> UsbDevices { get; set; } = new();
+        public List<ConnectedDisplay> Displays { get; set; } = new();
         public BatteryInfo? Battery { get; set; }
         public ThermalInfo? Thermal { get; set; }
         public NpuInfo? Npu { get; set; }
         public WirelessInfo? Wireless { get; set; }
         public BluetoothInfo? Bluetooth { get; set; }
         public PowerPlanInfo? PowerPlan { get; set; }
+    }
+
+    /// <summary>
+    /// A display attached to this machine, identified from its EDID.
+    ///
+    /// Property names are pinned to the snake_case keys the macOS client already emits so both
+    /// platforms land one shape in the hardware payload. Inventory consumers read a single set of
+    /// keys, and the frontend Displays card renders Windows devices with no change.
+    /// </summary>
+    public class ConnectedDisplay
+    {
+        /// <summary>Friendly name from EDID, e.g. "DELL U2422HE".</summary>
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>
+        /// EDID serial string - the serial printed on the monitor, and the key inventory matches on.
+        /// Null when the panel's EDID carries no serial descriptor.
+        /// </summary>
+        [JsonPropertyName("serial_number")]
+        public string? SerialNumber { get; set; }
+
+        /// <summary>Manufacturer resolved from the three-letter PNP vendor code.</summary>
+        [JsonPropertyName("manufacturer")]
+        public string Manufacturer { get; set; } = string.Empty;
+
+        [JsonPropertyName("model")]
+        public string Model { get; set; } = string.Empty;
+
+        /// <summary>"internal" for laptop and all-in-one panels, "external" for attached monitors.</summary>
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = string.Empty;
+
+        /// <summary>Native resolution, e.g. "2560 x 1440".</summary>
+        [JsonPropertyName("resolution")]
+        public string Resolution { get; set; } = string.Empty;
+
+        [JsonPropertyName("display_type")]
+        public string? DisplayType { get; set; }
+
+        /// <summary>Hex PNP vendor id, e.g. "10ac" for Dell. Matches the macOS field.</summary>
+        [JsonPropertyName("vendor_id")]
+        public string? VendorId { get; set; }
+
+        /// <summary>Hex EDID product code.</summary>
+        [JsonPropertyName("product_id")]
+        public string? ProductId { get; set; }
+
+        [JsonPropertyName("manufacture_year")]
+        public int? ManufactureYear { get; set; }
+
+        [JsonPropertyName("manufacture_week")]
+        public int? ManufactureWeek { get; set; }
+
+        [JsonPropertyName("is_main_display")]
+        public bool IsMainDisplay { get; set; }
+
+        [JsonPropertyName("online")]
+        public bool Online { get; set; } = true;
+
+        /// <summary>Video output technology, e.g. "HDMI", "DisplayPort", "Internal".</summary>
+        [JsonPropertyName("connection_type")]
+        public string? ConnectionType { get; set; }
+
+        [JsonPropertyName("diagonal_size_inches")]
+        public double? DiagonalSizeInches { get; set; }
     }
 
     public class ProcessorInfo
