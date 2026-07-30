@@ -2,11 +2,11 @@
 
 ## Context
 
-You're working in **`C:\Users\rchristiansen\Developer\AzDevOps\Devices\Cimian\packages\CimianTools`** (the `windowsadmins/cimian` repo, mirrored to Azure DevOps).
+You're working in **`<cimian-repo>\packages\CimianTools`** (the `windowsadmins/cimian` repo, mirrored to Azure DevOps).
 
-Cimian's `reports/items.json` is meant to be a per-run authoritative report of what just happened on a Windows endpoint — Munki's `ManagedInstallReport.plist` parity. Today it is not. Every item ships with `last_seen_in_session=""`, `install_count=0`, `failure_count=0`, and `current_status` derived from the *pre-install plan*, not the actual outcome. Downstream tooling (the ReportMate dashboard at `C:\Users\rchristiansen\Developer\AzDevOps\Devices\ReportMate`) cannot tell which items the latest session actually acted on.
+Cimian's `reports/items.json` is meant to be a per-run authoritative report of what just happened on a Windows endpoint — Munki's `ManagedInstallReport.plist` parity. Today it is not. Every item ships with `last_seen_in_session=""`, `install_count=0`, `failure_count=0`, and `current_status` derived from the *pre-install plan*, not the actual outcome. Downstream tooling (the ReportMate dashboard at `C:\Users\<user>\Developer\AzDevOps\Devices\ReportMate`) cannot tell which items the latest session actually acted on.
 
-A full RFC for this fix already exists: **`C:\Users\rchristiansen\Developer\AzDevOps\Devices\ReportMate\clients\windows\docs\CIMIAN_ITEMS_JSON_FINALIZATION.md`**. Read it first — your job is to implement it. This prompt is the implementation brief; the RFC is the spec.
+A full RFC for this fix already exists: **`C:\Users\<user>\Developer\AzDevOps\Devices\ReportMate\clients\windows\docs\CIMIAN_ITEMS_JSON_FINALIZATION.md`**. Read it first — your job is to implement it. This prompt is the implementation brief; the RFC is the spec.
 
 ### Symptom that motivates this work
 
