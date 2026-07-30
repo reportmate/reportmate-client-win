@@ -66,7 +66,7 @@ Best for Group Policy or Intune deployment.
 
 **Silent installation:**
 ```powershell
-msiexec /i "ReportMate-{version}.msi" /qn APIURL="https://reportmate.ecuad.ca"
+msiexec /i "ReportMate-{version}.msi" /qn APIURL="https://reportmate.example.edu"
 ```
 
 **Group Policy deployment:**
@@ -110,7 +110,7 @@ The primary configuration file is `C:\ProgramData\ManagedReports\appsettings.yam
 
 ```yaml
 ReportMate:
-  ApiUrl: "https://reportmate.ecuad.ca"
+  ApiUrl: "https://reportmate.example.edu"
   Passphrase: ""                    # Optional authentication
   CollectionIntervalSeconds: 3600   # 1 hour
   MaxRetryAttempts: 3
@@ -133,7 +133,7 @@ For Intune or other MDM solutions, use OMA-URI settings:
 ```
 ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl
 Type: String
-Value: https://reportmate.ecuad.ca
+Value: https://reportmate.example.edu
 
 ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase
 Type: String
@@ -145,7 +145,7 @@ Value: your-passphrase
 Configuration can be set via environment variables:
 
 ```powershell
-$env:REPORTMATE_API_URL = "https://reportmate.ecuad.ca"
+$env:REPORTMATE_API_URL = "https://reportmate.example.edu"
 $env:REPORTMATE_PASSPHRASE = "your-passphrase"
 ```
 
@@ -213,8 +213,8 @@ Get-Content "C:\ProgramData\ManagedReports\logs\reportmate-*.log" -Tail 100
 ### Test Connectivity
 
 ```powershell
-Test-NetConnection reportmate.ecuad.ca -Port 443
-Invoke-RestMethod "https://reportmate.ecuad.ca/api/health"
+Test-NetConnection reportmate.example.edu -Port 443
+Invoke-RestMethod "https://reportmate.example.edu/api/health"
 ```
 
 ### Common Issues

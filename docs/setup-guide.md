@@ -6,7 +6,7 @@ This guide walks through setting up a Windows machine to report to the ReportMat
 
 - Windows 10/11 or Windows Server 2016+
 - Administrator privileges
-- Network connectivity to the ReportMate API endpoint (`https://reportmate.ecuad.ca`)
+- Network connectivity to the ReportMate API endpoint (`https://reportmate.example.edu`)
 - Optional: osquery installed for enhanced data collection
 
 ## Quick Start
@@ -53,14 +53,14 @@ Edit the configuration file at `C:\ProgramData\ManagedReports\appsettings.yaml`:
 
 ```yaml
 ReportMate:
-  ApiUrl: "https://reportmate.ecuad.ca"
+  ApiUrl: "https://reportmate.example.edu"
   Passphrase: "your-passphrase"  # Optional, for authenticated access
 ```
 
 Or use the install command:
 
 ```powershell
-& 'C:\Program Files\ReportMate\managedreportsrunner.exe' install --api-url "https://reportmate.ecuad.ca"
+& 'C:\Program Files\ReportMate\managedreportsrunner.exe' install --api-url "https://reportmate.example.edu"
 ```
 
 ### 4. Test the Installation
@@ -109,7 +109,7 @@ managedreportsrunner.exe transmit
 managedreportsrunner.exe info
 
 # Install and configure the client
-managedreportsrunner.exe install --api-url "https://reportmate.ecuad.ca"
+managedreportsrunner.exe install --api-url "https://reportmate.example.edu"
 
 # Display version information
 managedreportsrunner.exe version
@@ -180,7 +180,7 @@ The `appsettings.yaml` file supports these options:
 ```yaml
 ReportMate:
   # Required
-  ApiUrl: "https://reportmate.ecuad.ca"
+  ApiUrl: "https://reportmate.example.edu"
   
   # Optional
   DeviceId: ""                      # Auto-generated if empty
@@ -205,7 +205,7 @@ ReportMate:
 Configuration can also be set via environment variables with the `REPORTMATE_` prefix:
 
 ```powershell
-$env:REPORTMATE_API_URL = "https://reportmate.ecuad.ca"
+$env:REPORTMATE_API_URL = "https://reportmate.example.edu"
 $env:REPORTMATE_PASSPHRASE = "your-passphrase"
 ```
 
@@ -236,8 +236,8 @@ sudo pwsh -c "& 'C:\Program Files\ReportMate\managedreportsrunner.exe' -vv --col
 Test connectivity to the API:
 
 ```powershell
-Test-NetConnection reportmate.ecuad.ca -Port 443
-curl https://reportmate.ecuad.ca/api/health
+Test-NetConnection reportmate.example.edu -Port 443
+curl https://reportmate.example.edu/api/health
 ```
 
 ### View Logs
