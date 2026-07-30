@@ -41,7 +41,7 @@ Set the passphrase in `C:\ProgramData\ManagedReports\appsettings.yaml`:
 
 ```yaml
 ReportMate:
-  ApiUrl: "https://reportmate.ecuad.ca"
+  ApiUrl: "https://reportmate.example.edu"
   Passphrase: "your-secure-passphrase"
 ```
 
