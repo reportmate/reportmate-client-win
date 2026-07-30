@@ -7,7 +7,8 @@
 #Requires -RunAsAdministrator
 
 param(
-    [string]$ApiUrl = "https://reportmate.example.edu",
+    [Parameter(Mandatory = $true)]
+    [string]$ApiUrl,
     [string]$SourcePath = ".\release",
     [switch]$SkipOsquery
 )
