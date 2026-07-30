@@ -406,11 +406,19 @@ try {
     if ($scheduleConfig.schedules.all) {
         Write-Host "Creating all modules collection task..."
         $action = New-ScheduledTaskAction -Execute $runnerExe -WorkingDirectory $InstallPath
-        $intervalMinutes = $scheduleConfig.schedules.all.interval_minutes
-        $intervalHours = [math]::Floor($intervalMinutes / 60)
-        $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours $intervalHours)
+        # Full collection is expensive, so it runs once daily inside an overnight
+        # maintenance window rather than on a rolling interval that drifts into
+        # working hours. RandomDelay spreads the fleet across the window so the
+        # API does not see every device arrive at the same minute.
+        $calendarHour = if ($null -ne $scheduleConfig.schedules.all.calendar_hour) { [int]$scheduleConfig.schedules.all.calendar_hour } else { 4 }
+        $calendarMinute = if ($null -ne $scheduleConfig.schedules.all.calendar_minute) { [int]$scheduleConfig.schedules.all.calendar_minute } else { 0 }
+        $randomDelayMinutes = if ($null -ne $scheduleConfig.schedules.all.random_delay_minutes) { [int]$scheduleConfig.schedules.all.random_delay_minutes } else { 120 }
 
-        Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits data from all available modules" -Force
+        $startAt = (Get-Date -Hour $calendarHour -Minute $calendarMinute -Second 0)
+        $trigger = New-ScheduledTaskTrigger -Daily -At $startAt -RandomDelay (New-TimeSpan -Minutes $randomDelayMinutes)
+
+        $windowEnd = $startAt.AddMinutes($randomDelayMinutes)
+        Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits data from all available modules, once daily between $($startAt.ToString('HH:mm')) and $($windowEnd.ToString('HH:mm'))" -Force
     }
 
     # ═══════════════════════════════════════════════════════════════════════════════
