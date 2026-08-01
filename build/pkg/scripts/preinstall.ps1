@@ -50,12 +50,13 @@ foreach ($task in $reportMateTasks) {
 #    user's session, not session 0) and kills child processes such as
 #    osqueryi.exe spawned by the runner.
 # ----------------------------------------------------------------------------
-$processNames = @('managedreportsrunner', 'usagetracker', 'runner')
+$processNames = @('managedreportsrunner', 'usagetracker', 'runner', 'Managed Reports Runner')
 $exeNames     = @(
     'managedreportsrunner.exe'
     'usagetracker.exe'
     'runner.exe'
     'osqueryi.exe'
+    'Managed Reports Runner.exe'
 )
 
 foreach ($name in $processNames) {

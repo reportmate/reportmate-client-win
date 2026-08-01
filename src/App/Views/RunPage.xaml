@@ -27,7 +27,7 @@
             <Button x:Name="RunButton" Grid.Column="0" Click="RunButton_Click" VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <FontIcon x:Name="RunIcon" Glyph="&#xE768;" FontSize="16" />
-                    <TextBlock x:Name="RunText" Text="Run ReportMate" />
+                    <TextBlock x:Name="RunText" Text="Run Managed Reports Runner" />
                 </StackPanel>
             </Button>
 
