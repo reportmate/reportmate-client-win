@@ -37,6 +37,16 @@ internal static partial class Program
     private const double MaxTickElapsedSeconds = 90;    // clamp for sleep/wake gaps
     private const int RetentionDays = 14;               // drop entries older than this on each save
 
+    // Lock-screen / logon pseudo-apps. Time while these hold focus is idle
+    // time, not application usage, so ticks are dropped rather than attributed.
+    // Keep in sync with the matching sets in
+    // src/Services/ApplicationUsageService.cs (LockScreenExecutables).
+    private static readonly HashSet<string> LockScreenExecutables = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "LockApp.exe",
+        "LogonUI.exe",
+    };
+
     [JsonSourceGenerationOptions(WriteIndented = false)]
     [JsonSerializable(typeof(TrackerState))]
     private partial class StateContext : JsonSerializerContext { }
@@ -109,6 +119,9 @@ internal static partial class Program
                 var elapsed = Math.Min(elapsedRaw, MaxTickElapsedSeconds);
 
                 if (!TryGetForegroundProcess(out var exePath, out _) || string.IsNullOrEmpty(exePath))
+                    continue;
+
+                if (LockScreenExecutables.Contains(Path.GetFileName(exePath)))
                     continue;
 
                 var idleMs = GetSystemIdleMilliseconds();
