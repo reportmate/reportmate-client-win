@@ -143,11 +143,20 @@ try {
         $calendarMinute = if ($null -ne $scheduleConfig.schedules.all.calendar_minute) { [int]$scheduleConfig.schedules.all.calendar_minute } else { 0 }
         $randomDelayMinutes = if ($null -ne $scheduleConfig.schedules.all.random_delay_minutes) { [int]$scheduleConfig.schedules.all.random_delay_minutes } else { 120 }
 
-        $startAt = (Get-Date -Hour $calendarHour -Minute $calendarMinute -Second 0)
+        $startAt = (Get-Date -Hour $calendarHour -Minute $calendarMinute -Second 0 -Millisecond 0)
         $trigger = New-ScheduledTaskTrigger -Daily -At $startAt -RandomDelay (New-TimeSpan -Minutes $randomDelayMinutes)
 
+        # A once-daily overnight trigger has no second chance: the shared $settings
+        # object stops the task on battery and never catches up a missed occurrence,
+        # which was harmless under a repeating trigger but means a portable device
+        # asleep or unplugged through the window would never run a full collection.
+        # StartWhenAvailable runs it after the fact; DontStopIfGoingOnBatteries keeps
+        # an in-flight run alive. Deliberately scoped to this task -- the hourly and
+        # 4-hourly tasks repeat often enough that a skipped occurrence is fine.
+        $allModulesSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+
         $windowEnd = $startAt.AddMinutes($randomDelayMinutes)
-        Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits data from all available modules, once daily between $($startAt.ToString('HH:mm')) and $($windowEnd.ToString('HH:mm'))" -Force
+        Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $allModulesSettings -Principal $principal -Description "Collects and transmits data from all available modules, once daily between $($startAt.ToString('HH:mm')) and $($windowEnd.ToString('HH:mm'))" -Force
     }
     
     # ═══════════════════════════════════════════════════════════════════════════════
