@@ -628,7 +628,8 @@ namespace ReportMate.WindowsClient.Services
                 "securityhealthservice.exe", "securityhealthsystray.exe", "spoolsv.exe",
                 "audiodg.exe", "conhost.exe", "ctfmon.exe", "dllhost.exe", "msiexec.exe",
                 "wuauclt.exe", "trustedinstaller.exe", "tiworker.exe", "wmiprvse.exe",
-                "microsoftedgeupdate.exe", "googleupdate.exe"  // Skip browser UPDATE processes only
+                "microsoftedgeupdate.exe", "googleupdate.exe",  // Skip browser UPDATE processes only
+                "lockapp.exe", "logonui.exe"  // Lock screen / logon UI: idle time, not usage
             };
             
             var processName = System.IO.Path.GetFileName(lowerPath);
@@ -1098,6 +1099,27 @@ namespace ReportMate.WindowsClient.Services
         private const string TrackerStateDir = @"C:\ProgramData\ManagedReports\usagetracker";
         private const string TrackerLastTransmittedFile = "_last_transmitted.json";
 
+        // Lock-screen / logon pseudo-apps. Time while these hold focus is idle
+        // time, not application usage. The tracker itself no longer attributes
+        // ticks to them (see usagetracker/Program.cs, LockScreenExecutables),
+        // but state files written by older trackers still carry accumulated
+        // counters, so they are filtered again here at merge time — by exe
+        // filename before delta computation, and by resolved app name (the
+        // Appx inventory maps LockApp.exe to "Microsoft.LockApp") before
+        // summaries are emitted. Keep the two sets in sync.
+        private static readonly HashSet<string> LockScreenExecutables = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "LockApp.exe",
+            "LogonUI.exe",
+        };
+
+        private static readonly HashSet<string> LockScreenAppNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "LockApp",
+            "Microsoft.LockApp",
+            "LogonUI",
+        };
+
         public List<DailyUsageSummary> MergeUserSessionTrackerData(
             List<DailyUsageSummary> summaries,
             List<InstalledApplication> installedApps)
@@ -1128,6 +1150,9 @@ namespace ReportMate.WindowsClient.Services
 
                         foreach (var (exePath, byDate) in state.ByAppByDate)
                         {
+                            if (LockScreenExecutables.Contains(Path.GetFileName(exePath)))
+                                continue;
+
                             foreach (var (dateKey, counters) in byDate)
                             {
                                 var key = (exePath, dateKey);
@@ -1222,6 +1247,7 @@ namespace ReportMate.WindowsClient.Services
                 {
                     var appName = MatchExeToAppName(exePath, installedApps);
                     if (string.IsNullOrEmpty(appName)) continue;
+                    if (LockScreenAppNames.Contains(appName)) continue;
 
                     var key = (date, appName);
                     byDateApp.TryGetValue(key, out var existing);
