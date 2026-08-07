@@ -20,8 +20,10 @@
     "all": {
       "modules": ["security", "network", "applications", "inventory", "system", "hardware", "management", "peripherals", "identity"],
       "args": "--storage-mode deep",
-      "interval_minutes": 720,
-      "description": "Run all available modules (except installs) for comprehensive data collection"
+      "calendar_hour": 4,
+      "calendar_minute": 0,
+      "random_delay_minutes": 120,
+      "description": "Run all available modules (except installs) once daily, spread randomly across the 04:00-06:00 maintenance window"
     }
   },
   "task_settings": {
