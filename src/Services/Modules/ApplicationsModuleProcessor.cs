@@ -161,8 +161,11 @@ namespace ReportMate.WindowsClient.Services.Modules
             data.TotalApplications = data.InstalledApplications.Count;
             data.LastInventoryUpdate = DateTime.UtcNow;
 
-            // Collect application usage data from kernel process telemetry
-            // This runs every 4 hours (matching the applications module schedule)
+            // Collect application usage data from kernel process telemetry.
+            // The window runs from the end of the last collected window up to now, so
+            // it stays disjoint no matter which scheduled task invokes this module --
+            // both the 4-hourly task and the daily all-modules task call it. The 4h
+            // argument is only the cap on how far a single pass will read back.
             _logger.LogDebug("Collecting application usage data from kernel process telemetry...");
             try
             {
