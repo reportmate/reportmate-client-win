@@ -637,7 +637,6 @@ Write-Step "Generating per-module versions from git history..."
 
 $moduleFileMap = @{
     "applications" = @("src/Services/Modules/ApplicationsModuleProcessor.cs", "src/Models/Modules/ApplicationsModels.cs", "build/resources/osquery/modules/applications.json")
-    "displays"     = @("src/Services/Modules/DisplayModuleProcessor.cs", "src/Models/Modules/DisplayModels.cs", "build/resources/osquery/modules/displays.json")
     "hardware"     = @("src/Services/Modules/HardwareModuleProcessor.cs", "src/Models/Modules/HardwareModels.cs", "build/resources/osquery/modules/hardware.json")
     "identity"     = @("src/Services/Modules/IdentityModuleProcessor.cs", "src/Models/Modules/IdentityModels.cs", "build/resources/osquery/modules/identity.json")
     "installs"     = @("src/Services/Modules/InstallsModuleProcessor.cs", "src/Models/Modules/InstallsModels.cs", "build/resources/osquery/modules/installs.json")
