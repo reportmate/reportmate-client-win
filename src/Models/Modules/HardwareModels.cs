@@ -16,6 +16,7 @@ namespace ReportMate.WindowsClient.Models.Modules
         public MemoryInfo Memory { get; set; } = new();
         public List<StorageDevice> Storage { get; set; } = new();
         public GraphicsInfo Graphics { get; set; } = new();
+        public List<DisplayDeviceInfo> Displays { get; set; } = new();
         public List<UsbDevice> UsbDevices { get; set; } = new();
         public BatteryInfo? Battery { get; set; }
         public ThermalInfo? Thermal { get; set; }
@@ -120,6 +121,38 @@ namespace ReportMate.WindowsClient.Models.Modules
         public long MemorySize { get; set; } // bytes
         public string DriverVersion { get; set; } = string.Empty;
         public DateTime? DriverDate { get; set; }
+    }
+
+    /// <summary>
+    /// A monitor attached to this machine, identified from its EDID.
+    /// Property names serialize to the same camelCase keys the macOS client emits,
+    /// so the API stores one display shape for both platforms.
+    /// </summary>
+    public class DisplayDeviceInfo
+    {
+        public string Name { get; set; } = string.Empty;
+        public string SerialNumber { get; set; } = string.Empty;
+        public string Manufacturer { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty; // internal | external
+
+        /// <summary>
+        /// EDID manufacturer id as lowercase hex - the three-letter PNP code packed
+        /// five bits per letter ("DEL" -> 10ac). Asset inventory keys on this rather
+        /// than the manufacturer string, which differs between the two clients.
+        /// </summary>
+        public string VendorId { get; set; } = string.Empty;
+        public string ProductId { get; set; } = string.Empty;
+
+        /// <summary>Year and week pair from the EDID; week alone is meaningless and
+        /// year alone collapses every panel to 1 January, so both or neither.</summary>
+        public int? ManufactureYear { get; set; }
+        public int? ManufactureWeek { get; set; }
+
+        public string Resolution { get; set; } = string.Empty;
+        public string ConnectionType { get; set; } = string.Empty;
+        public bool IsMainDisplay { get; set; }
+        public bool Online { get; set; } = true;
     }
 
     public class UsbDevice
