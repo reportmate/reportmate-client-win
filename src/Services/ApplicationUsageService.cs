@@ -248,10 +248,16 @@ namespace ReportMate.WindowsClient.Services
                 if (!File.Exists(UsageWindowWatermarkFile)) return null;
 
                 var raw = File.ReadAllText(UsageWindowWatermarkFile).Trim();
+
+                // AdjustToUniversal normalises whatever offset the file carries;
+                // AssumeUniversal covers a value written without one. RoundtripKind
+                // must not be combined with either -- TryParse throws ArgumentException
+                // on that pairing rather than returning false, which silently sent every
+                // read down the catch below and made the watermark write-only.
                 if (DateTime.TryParse(
                         raw,
                         CultureInfo.InvariantCulture,
-                        DateTimeStyles.RoundtripKind | DateTimeStyles.AdjustToUniversal,
+                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
                         out var parsed))
                 {
                     return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
