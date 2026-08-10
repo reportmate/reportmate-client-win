@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Eventing.Reader;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Principal;
@@ -41,7 +42,24 @@ namespace ReportMate.WindowsClient.Services
         
         // Session tracking
         private const int MaxSessionHours = 24; // Mark sessions as interrupted if no stop event within 24h
-        private const int DefaultLookbackHours = 4; // Match the applications module schedule (every 4 hours)
+
+        // Upper bound on how far back a single collection will read the event log.
+        // This is a cap, not the window itself -- the window normally starts at the
+        // watermark left by the previous collection (see ResolveWindowStart). The cap
+        // stops a device that has been offline for days from trying to parse an
+        // enormous Security Log span in one pass.
+        private const int DefaultLookbackHours = 4;
+
+        // Watermark marking the end of the last successfully collected usage window.
+        // Sessions are attributed by process-creation time, and the server accumulates
+        // whatever it receives (ON CONFLICT ... total_seconds = total_seconds + EXCLUDED),
+        // so any window that overlaps a previous one is counted twice. A fixed
+        // now-minus-4h lookback only produced disjoint windows when this module was
+        // called on exactly the 4-hourly schedule; the all-modules task calls it too,
+        // and re-collected the overlap every run. Anchoring the window to the previous
+        // window's end makes collections disjoint at any cadence and from any caller.
+        private static readonly string UsageWindowWatermarkFile =
+            Path.Combine(TrackerStateDir, "_last_window_end.txt");
         
         // Cache for SID to username resolution
         private readonly Dictionary<string, string> _sidCache = new();
@@ -60,17 +78,20 @@ namespace ReportMate.WindowsClient.Services
         /// Collect application usage data from process events.
         /// </summary>
         /// <param name="installedApps">List of installed applications for matching executables</param>
-        /// <param name="lookbackHours">Hours to look back for events (default: 4 to match schedule)</param>
+        /// <param name="lookbackHours">Maximum hours to look back; the window normally starts at the previous window's end</param>
         /// <returns>Usage snapshot with per-application and per-user statistics</returns>
         public async Task<ApplicationUsageSnapshot> CollectUsageDataAsync(
-            List<InstalledApplication> installedApps, 
+            List<InstalledApplication> installedApps,
             int lookbackHours = DefaultLookbackHours)
         {
+            var windowEnd = DateTime.UtcNow;
+            var windowStart = ResolveWindowStart(windowEnd, lookbackHours);
+
             var snapshot = new ApplicationUsageSnapshot
             {
-                GeneratedAt = DateTime.UtcNow,
-                WindowStart = DateTime.UtcNow.AddHours(-lookbackHours),
-                WindowEnd = DateTime.UtcNow
+                GeneratedAt = windowEnd,
+                WindowStart = windowStart,
+                WindowEnd = windowEnd
             };
 
             try
@@ -91,15 +112,18 @@ namespace ReportMate.WindowsClient.Services
                 _logger.LogInformation("Using event source: {Source}", _activeEventSource);
 
                 // Get system shutdown events to mark interrupted sessions
-                var shutdownTimes = await GetShutdownEventsAsync(lookbackHours);
-                
+                var shutdownTimes = await GetShutdownEventsAsync(windowStart);
+
                 // Collect process start and stop events from the available source
-                var processEvents = await CollectProcessEventsAsync(lookbackHours);
-                
+                var processEvents = await CollectProcessEventsAsync(windowStart);
+
                 if (processEvents.Count == 0)
                 {
                     snapshot.Status = "no_data";
-                    snapshot.Warnings.Add($"No process events found in the last {lookbackHours} hours");
+                    snapshot.Warnings.Add($"No process events found between {windowStart:o} and {windowEnd:o}");
+                    // An empty window is still a collected window -- advance the
+                    // watermark so the next run does not re-scan this span.
+                    SaveWindowWatermark(windowEnd);
                     return snapshot;
                 }
 
@@ -151,10 +175,21 @@ namespace ReportMate.WindowsClient.Services
                 }
 
                 _logger.LogInformation(
-                    "Usage collection complete: {SessionCount} sessions, {ActiveCount} active, {TotalHours:F1}h total usage",
+                    "Usage collection complete: {SessionCount} sessions, {ActiveCount} active, {TotalHours:F1}h total usage, window {Start:o} to {End:o}",
                     sessions.Count,
                     snapshot.ActiveSessions.Count,
-                    snapshot.TotalUsageSeconds / 3600);
+                    snapshot.TotalUsageSeconds / 3600,
+                    windowStart,
+                    windowEnd);
+
+                // Advance the watermark only once the window has been collected
+                // successfully. Persisting at collection time rather than after
+                // transmission matches what the usagetracker delta path already does
+                // (see MergeUserSessionTrackerData): a failed transmission loses this
+                // window rather than replaying it. Given the server accumulates
+                // unconditionally, losing a window is far cheaper than double-counting
+                // one, and the API-side fix for that is tracked as AB#4255.
+                SaveWindowWatermark(windowEnd);
 
                 return snapshot;
             }
@@ -165,6 +200,96 @@ namespace ReportMate.WindowsClient.Services
                 snapshot.IsCaptureEnabled = false;
                 snapshot.Warnings.Add($"Error collecting usage data: {ex.Message}");
                 return snapshot;
+            }
+        }
+
+        /// <summary>
+        /// Resolve the start of this collection's window: the end of the previously
+        /// collected window, clamped so a single pass never reads more than
+        /// <paramref name="maxLookbackHours"/> of event log.
+        /// </summary>
+        private DateTime ResolveWindowStart(DateTime windowEnd, int maxLookbackHours)
+        {
+            var earliest = windowEnd.AddHours(-maxLookbackHours);
+            var watermark = LoadWindowWatermark();
+
+            if (watermark is null)
+            {
+                _logger.LogDebug("No usage window watermark; starting at the {Hours}h cap", maxLookbackHours);
+                return earliest;
+            }
+
+            // A watermark ahead of now means the clock moved backwards (time sync,
+            // VM restore). Fall back to the cap rather than producing an empty or
+            // inverted window.
+            if (watermark.Value > windowEnd)
+            {
+                _logger.LogWarning(
+                    "Usage window watermark {Watermark:o} is in the future relative to {Now:o}; ignoring it",
+                    watermark.Value, windowEnd);
+                return earliest;
+            }
+
+            if (watermark.Value < earliest)
+            {
+                _logger.LogInformation(
+                    "Usage window watermark {Watermark:o} is older than the {Hours}h cap; collecting from {Start:o} and accepting the gap",
+                    watermark.Value, maxLookbackHours, earliest);
+                return earliest;
+            }
+
+            return watermark.Value;
+        }
+
+        private DateTime? LoadWindowWatermark()
+        {
+            try
+            {
+                if (!File.Exists(UsageWindowWatermarkFile)) return null;
+
+                var raw = File.ReadAllText(UsageWindowWatermarkFile).Trim();
+
+                // AdjustToUniversal normalises whatever offset the file carries;
+                // AssumeUniversal covers a value written without one. RoundtripKind
+                // must not be combined with either -- TryParse throws ArgumentException
+                // on that pairing rather than returning false, which silently sent every
+                // read down the catch below and made the watermark write-only.
+                if (DateTime.TryParse(
+                        raw,
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                        out var parsed))
+                {
+                    return DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+                }
+
+                _logger.LogWarning("Unparseable usage window watermark '{Raw}'; treating as absent", raw);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Failed to read usage window watermark ({Message}); treating as absent", ex.Message);
+                return null;
+            }
+        }
+
+        private void SaveWindowWatermark(DateTime windowEnd)
+        {
+            try
+            {
+                Directory.CreateDirectory(TrackerStateDir);
+                var tmp = UsageWindowWatermarkFile + ".tmp";
+                File.WriteAllText(tmp, windowEnd.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture));
+                if (File.Exists(UsageWindowWatermarkFile))
+                    File.Replace(tmp, UsageWindowWatermarkFile, destinationBackupFileName: null);
+                else
+                    File.Move(tmp, UsageWindowWatermarkFile);
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: the next collection falls back to the lookback cap, which
+                // overlaps this window. That is the old behaviour, not a regression.
+                _logger.LogWarning("Failed to persist usage window watermark: {Message}", ex.Message);
             }
         }
 
@@ -239,12 +364,11 @@ namespace ReportMate.WindowsClient.Services
         /// <summary>
         /// Get system shutdown events to detect interrupted sessions.
         /// </summary>
-        private Task<List<DateTime>> GetShutdownEventsAsync(int lookbackHours)
+        private Task<List<DateTime>> GetShutdownEventsAsync(DateTime startTime)
         {
             return Task.Run(() =>
             {
                 var shutdownTimes = new List<DateTime>();
-                var startTime = DateTime.UtcNow.AddHours(-lookbackHours);
 
                 try
                 {
@@ -279,12 +403,12 @@ namespace ReportMate.WindowsClient.Services
         /// <summary>
         /// Collect process start and stop events from the active event source.
         /// </summary>
-        private Task<List<ProcessEventRecord>> CollectProcessEventsAsync(int lookbackHours)
+        private Task<List<ProcessEventRecord>> CollectProcessEventsAsync(DateTime startTime)
         {
             return _activeEventSource switch
             {
-                EventSource.SecurityLog => CollectSecurityLogEventsAsync(lookbackHours),
-                EventSource.KernelLog => CollectKernelLogEventsAsync(lookbackHours),
+                EventSource.SecurityLog => CollectSecurityLogEventsAsync(startTime),
+                EventSource.KernelLog => CollectKernelLogEventsAsync(startTime),
                 _ => Task.FromResult(new List<ProcessEventRecord>())
             };
         }
@@ -292,14 +416,13 @@ namespace ReportMate.WindowsClient.Services
         /// <summary>
         /// Collect process events from Security Log (Event 4688/4689).
         /// </summary>
-        private Task<List<ProcessEventRecord>> CollectSecurityLogEventsAsync(int lookbackHours)
+        private Task<List<ProcessEventRecord>> CollectSecurityLogEventsAsync(DateTime startTime)
         {
             return Task.Run(() =>
             {
                 var events = new List<ProcessEventRecord>();
-                var startTime = DateTime.Now.AddHours(-lookbackHours);  // Use local time for query
-                
-                _logger.LogDebug("Security log query: Looking for events since {StartTime:o} (local)", startTime);
+
+                _logger.LogDebug("Security log query: Looking for events since {StartTime:o} (UTC)", startTime);
 
                 try
                 {
@@ -351,12 +474,11 @@ namespace ReportMate.WindowsClient.Services
         /// <summary>
         /// Collect process events from Kernel-Process/Operational log.
         /// </summary>
-        private Task<List<ProcessEventRecord>> CollectKernelLogEventsAsync(int lookbackHours)
+        private Task<List<ProcessEventRecord>> CollectKernelLogEventsAsync(DateTime startTime)
         {
             return Task.Run(() =>
             {
                 var events = new List<ProcessEventRecord>();
-                var startTime = DateTime.UtcNow.AddHours(-lookbackHours);
 
                 try
                 {
