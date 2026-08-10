@@ -1127,11 +1127,14 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process Bluetooth adapter information
             await ProcessBluetoothInformation(osqueryResults, data);
 
+            // Process attached display EDID identity
+            await ProcessDisplayInformation(data);
+
             // Process hierarchical directory storage analysis (respects StorageMode: quick/deep/auto)
             await ProcessStorageAnalysisWithMode(osqueryResults, data);
 
-            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}, Wireless: {Wireless}, Bluetooth: {Bluetooth}", 
-                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None", data.Wireless?.Name ?? "Not Present", data.Bluetooth?.Name ?? "Not Present");
+            _logger.LogInformation("Hardware processed - Manufacturer: {Manufacturer}, Model: {Model}, CPU: {CPU}, Memory: {Memory}MB, Storage devices: {StorageCount}, Graphics: {Graphics}, NPU: {NPU}, Wireless: {Wireless}, Bluetooth: {Bluetooth}, Displays: {Displays}",
+                data.Manufacturer, data.Model, data.Processor.Name, data.Memory.TotalPhysical / (1024 * 1024), data.Storage.Count, data.Graphics.Name, data.Npu?.Name ?? "None", data.Wireless?.Name ?? "Not Present", data.Bluetooth?.Name ?? "Not Present", data.Displays.Count);
 
             return data;
         }
@@ -3463,6 +3466,317 @@ try {
                     return !cacheValid;
             }
         }
+
+        #region Displays
+
+        // EDID identity for attached monitors. osquery cannot supply this: the display
+        // data lives under HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY, and osquery's
+        // registry table returns zero rows for that subtree when running as SYSTEM,
+        // which is how this module ran for 390 devices without ever reporting a monitor.
+        // root\wmi answers correctly as SYSTEM and carries the decoded EDID directly.
+
+        private const uint VideoOutputTechnologyInternal = 0x80000000;
+
+        private static readonly Dictionary<long, string> VideoOutputTechnologyNames = new()
+        {
+            [0] = "VGA",
+            [1] = "S-Video",
+            [2] = "Composite",
+            [3] = "Component",
+            [4] = "DVI",
+            [5] = "HDMI",
+            [6] = "LVDS",
+            [8] = "D-Jpn",
+            [9] = "SDI",
+            [10] = "DisplayPort",
+            [11] = "DisplayPort (Embedded)",
+            [12] = "UDI",
+            [13] = "UDI (Embedded)",
+            [14] = "SDTV Dongle",
+            [15] = "Miracast",
+            [VideoOutputTechnologyInternal] = "Internal",
+        };
+
+        // The three-letter PNP codes we can name. Anything outside this set still gets a
+        // vendor id and is reported; it is simply left with the raw code as its
+        // manufacturer rather than being invented a name.
+        private static readonly Dictionary<string, string> PnpVendorNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ACR"] = "Acer", ["AOC"] = "AOC", ["APP"] = "Apple", ["AUS"] = "ASUS",
+            ["BNQ"] = "BenQ", ["DEL"] = "Dell", ["ENC"] = "EIZO", ["GSM"] = "LG",
+            ["HPN"] = "HP", ["HWP"] = "HP", ["IVM"] = "Iiyama", ["LEN"] = "Lenovo",
+            ["LGD"] = "LG Display", ["MSI"] = "MSI", ["NEC"] = "NEC", ["PHL"] = "Philips",
+            ["SAM"] = "Samsung", ["SEC"] = "Samsung", ["SHP"] = "Sharp",
+            ["VSC"] = "ViewSonic", ["WAC"] = "Wacom",
+        };
+
+        /// <summary>
+        /// One monitor's EDID, independent of which reader produced it.
+        /// </summary>
+        private sealed record MonitorEdid(
+            string InstanceName,
+            string Name,
+            string Serial,
+            string PnpCode,
+            string ProductCode,
+            int? Year,
+            int? Week,
+            bool Active,
+            long? VideoOutputTechnology,
+            string Resolution,
+            double? DiagonalInches);
+
+        private async Task ProcessDisplayInformation(HardwareData data)
+        {
+            _logger.LogDebug("Processing display EDID information");
+
+            try
+            {
+                var monitors = await GetMonitorEdidViaPowerShellAsync();
+
+                if (monitors.Count == 0)
+                {
+                    _logger.LogInformation("No monitors reported - no attached displays, or the display driver does not publish EDID");
+                    return;
+                }
+
+                foreach (var monitor in monitors)
+                {
+                    var display = new DisplayDeviceInfo
+                    {
+                        Name = monitor.Name,
+                        SerialNumber = monitor.Serial,
+                        ProductId = monitor.ProductCode.ToLowerInvariant(),
+                        Online = monitor.Active,
+                        Resolution = monitor.Resolution,
+                        DiagonalInches = monitor.DiagonalInches,
+                        // The agent runs as SYSTEM in session 0, where the desktop APIs that
+                        // name the primary monitor see nothing. A single attached panel is
+                        // unambiguously the main one; beyond that we cannot tell, and say so
+                        // by leaving it false rather than picking one.
+                        IsMainDisplay = monitors.Count == 1,
+                    };
+
+                    var pnpCode = monitor.PnpCode;
+                    if (!string.IsNullOrEmpty(pnpCode))
+                    {
+                        display.VendorId = PackEdidVendorId(pnpCode);
+                        // Resolve to a real name when we know the code, so the dashboard
+                        // shows "Dell" rather than "DEL"; the reconciliation resolves
+                        // either form, and prefers the vendor id over both.
+                        display.Manufacturer = PnpVendorNames.TryGetValue(pnpCode, out var vendorName)
+                            ? vendorName
+                            : pnpCode;
+                    }
+
+                    // The friendly name is the panel's own model string ("U2421E"); EDID
+                    // carries no separate model field, so mirror it rather than leave a
+                    // hole the frontend has to special-case.
+                    display.Model = display.Name;
+
+                    var year = monitor.Year;
+                    var week = monitor.Week;
+                    if (year is >= 1990 && year <= DateTime.UtcNow.Year)
+                    {
+                        display.ManufactureYear = year;
+                        if (week is >= 1 and <= 53)
+                        {
+                            display.ManufactureWeek = week;
+                        }
+                    }
+
+                    if (monitor.VideoOutputTechnology is { } technology)
+                    {
+                        display.ConnectionType = VideoOutputTechnologyNames.TryGetValue(technology, out var name)
+                            ? name
+                            : string.Empty;
+                        display.Type = IsInternalVideoOutput(technology) ? "internal" : "external";
+                    }
+                    else
+                    {
+                        // Without a connection technology we cannot tell a laptop panel from
+                        // an attached monitor. Say nothing rather than guess: the server-side
+                        // reconciliation cross-checks a display against the host model, and a
+                        // wrong "external" there creates a phantom asset.
+                        _logger.LogDebug("No connection parameters for monitor {Instance} - leaving type unset", monitor.InstanceName);
+                    }
+
+                    data.Displays.Add(display);
+
+                    _logger.LogDebug(
+                        "Display: {Name} (serial {Serial}, vendor {Vendor}/{VendorId}, {Type}, {Connection}, {Resolution})",
+                        display.Name, display.SerialNumber, display.Manufacturer, display.VendorId,
+                        string.IsNullOrEmpty(display.Type) ? "type unknown" : display.Type,
+                        display.ConnectionType, display.Resolution);
+                }
+
+                _logger.LogInformation(
+                    "Displays processed - {Total} attached, {External} external, {WithSerial} carrying a serial",
+                    data.Displays.Count,
+                    data.Displays.Count(d => d.Type == "external"),
+                    data.Displays.Count(d => !string.IsNullOrEmpty(d.SerialNumber)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to collect display EDID information");
+            }
+        }
+
+        /// <summary>
+        /// Monitor EDID from root\wmi via PowerShell.
+        ///
+        /// Every source here is session independent, which is the whole point: the agent
+        /// runs as SYSTEM in session 0, so the user32 display APIs enumerate nothing and
+        /// System.Management reports WMI unavailable in the trimmed single-file build.
+        /// Get-CimInstance against root\wmi answers correctly in that context.
+        /// </summary>
+        private async Task<List<MonitorEdid>> GetMonitorEdidViaPowerShellAsync()
+        {
+            var monitors = new List<MonitorEdid>();
+
+            // EDID strings are UInt16 arrays of ASCII codepoints, zero padded; decode them
+            // here so the payload crossing the process boundary is already text.
+            const string script = """
+                function D($a){ if(-not $a){ return "" }; -join ($a | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }) }
+                $cp = @{}
+                Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction SilentlyContinue |
+                    ForEach-Object { $cp[$_.InstanceName] = $_.VideoOutputTechnology }
+                $res = @{}
+                Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        $mode = $_.MonitorSourceModes[$_.PreferredMonitorSourceModeIndex]
+                        if ($mode) { $res[$_.InstanceName] = "$($mode.HorizontalActivePixels) x $($mode.VerticalActivePixels)" }
+                    }
+                $size = @{}
+                Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue |
+                    ForEach-Object { $size[$_.InstanceName] = @($_.MaxHorizontalImageSize, $_.MaxVerticalImageSize) }
+                @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue | ForEach-Object {
+                    $wh = $size[$_.InstanceName]
+                    [PSCustomObject]@{
+                        InstanceName = $_.InstanceName
+                        Name         = (D $_.UserFriendlyName)
+                        Serial       = (D $_.SerialNumberID)
+                        Pnp          = (D $_.ManufacturerName)
+                        Product      = (D $_.ProductCodeID)
+                        Year         = $_.YearOfManufacture
+                        Week         = $_.WeekOfManufacture
+                        Active       = $_.Active
+                        Vot          = $cp[$_.InstanceName]
+                        Resolution   = $res[$_.InstanceName]
+                        WidthCm      = if ($wh) { $wh[0] } else { $null }
+                        HeightCm     = if ($wh) { $wh[1] } else { $null }
+                    }
+                }) | ConvertTo-Json -Compress -Depth 3
+                """;
+
+            try
+            {
+                var output = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    return monitors;
+                }
+
+                var parsed = Newtonsoft.Json.JsonConvert.DeserializeObject(output);
+                var items = parsed switch
+                {
+                    Newtonsoft.Json.Linq.JArray array => array,
+                    Newtonsoft.Json.Linq.JObject single => new Newtonsoft.Json.Linq.JArray(single),
+                    _ => new Newtonsoft.Json.Linq.JArray(),
+                };
+
+                foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                {
+                    monitors.Add(new MonitorEdid(
+                        (string?)item["InstanceName"] ?? string.Empty,
+                        (string?)item["Name"] ?? string.Empty,
+                        (string?)item["Serial"] ?? string.Empty,
+                        (string?)item["Pnp"] ?? string.Empty,
+                        (string?)item["Product"] ?? string.Empty,
+                        (int?)item["Year"],
+                        (int?)item["Week"],
+                        (bool?)item["Active"] ?? true,
+                        NormalizeVideoOutputTechnology((long?)item["Vot"]),
+                        (string?)item["Resolution"] ?? string.Empty,
+                        DiagonalInchesFrom((double?)item["WidthCm"], (double?)item["HeightCm"])));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "PowerShell monitor EDID fallback failed");
+            }
+
+            return monitors;
+        }
+
+        /// <summary>
+        /// Panel diagonal from the EDID physical dimensions, which are whole centimetres.
+        /// That granularity is fine for a screen size but useless below about 10", so
+        /// implausible values are dropped rather than reported as a suspiciously exact
+        /// fraction of an inch.
+        /// </summary>
+        private static double? DiagonalInchesFrom(double? widthCm, double? heightCm)
+        {
+            if (widthCm is not > 0 || heightCm is not > 0)
+            {
+                return null;
+            }
+
+            var diagonal = Math.Sqrt((widthCm.Value * widthCm.Value) + (heightCm.Value * heightCm.Value)) / 2.54;
+            return diagonal is >= 10 and <= 120 ? Math.Round(diagonal, 1) : null;
+        }
+
+        /// <summary>
+        /// VideoOutputTechnology is declared uint32 but surfaces signed on some drivers,
+        /// so the internal sentinel 0x80000000 arrives as int.MinValue.
+        /// </summary>
+        private static long? NormalizeVideoOutputTechnology(object? raw)
+        {
+            if (raw is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var technology = Convert.ToInt64(raw);
+                return technology < 0 ? technology + 0x100000000L : technology;
+            }
+            catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
+            {
+                return null;
+            }
+        }
+
+        private static bool IsInternalVideoOutput(long technology) =>
+            technology is VideoOutputTechnologyInternal or 6 or 11 or 13; // internal, LVDS, embedded DP, embedded UDI
+
+        /// <summary>
+        /// Pack a three-letter PNP code into the 16-bit EDID manufacturer id as lowercase
+        /// hex - five bits per letter, offset from 'A'-1, so "DEL" becomes 10ac. This is
+        /// the one vendor field both clients fill in reliably, so inventory keys on it.
+        /// </summary>
+        private static string PackEdidVendorId(string pnpCode)
+        {
+            if (pnpCode.Length != 3)
+            {
+                return string.Empty;
+            }
+
+            var packed = 0;
+            foreach (var letter in pnpCode.ToUpperInvariant())
+            {
+                if (letter is < 'A' or > 'Z')
+                {
+                    return string.Empty;
+                }
+                packed = (packed << 5) | (letter - 'A' + 1);
+            }
+
+            return packed.ToString("x", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        #endregion
 
         /// <summary>
         /// Process storage analysis with mode support (quick/deep/auto)
