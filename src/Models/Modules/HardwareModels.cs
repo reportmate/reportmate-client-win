@@ -149,8 +149,13 @@ namespace ReportMate.WindowsClient.Models.Modules
         public int? ManufactureYear { get; set; }
         public int? ManufactureWeek { get; set; }
 
+        /// <summary>Native resolution from the panel's preferred EDID source mode.</summary>
         public string Resolution { get; set; } = string.Empty;
         public string ConnectionType { get; set; } = string.Empty;
+
+        /// <summary>Panel diagonal in inches, derived from the EDID physical dimensions.</summary>
+        public double? DiagonalInches { get; set; }
+
         public bool IsMainDisplay { get; set; }
         public bool Online { get; set; } = true;
     }

@@ -3510,38 +3510,54 @@ try {
             ["VSC"] = "ViewSonic", ["WAC"] = "Wacom",
         };
 
+        /// <summary>
+        /// One monitor's EDID, independent of which reader produced it.
+        /// </summary>
+        private sealed record MonitorEdid(
+            string InstanceName,
+            string Name,
+            string Serial,
+            string PnpCode,
+            string ProductCode,
+            int? Year,
+            int? Week,
+            bool Active,
+            long? VideoOutputTechnology,
+            string Resolution,
+            double? DiagonalInches);
+
         private async Task ProcessDisplayInformation(HardwareData data)
         {
             _logger.LogDebug("Processing display EDID information");
 
             try
             {
-                var monitors = await _wmiHelperService.QueryWmiMultipleAsync(
-                    "SELECT InstanceName, Active, ManufacturerName, ProductCodeID, SerialNumberID, UserFriendlyName, WeekOfManufacture, YearOfManufacture FROM WmiMonitorID",
-                    "root\\wmi");
+                var monitors = await GetMonitorEdidViaPowerShellAsync();
 
                 if (monitors.Count == 0)
                 {
-                    _logger.LogInformation("No monitors returned by WmiMonitorID - no attached displays, or the display driver does not publish EDID");
+                    _logger.LogInformation("No monitors reported - no attached displays, or the display driver does not publish EDID");
                     return;
                 }
 
-                var connectionTypes = await GetMonitorConnectionTypesAsync();
-                var attachedModes = GetAttachedDisplayModes();
-
                 foreach (var monitor in monitors)
                 {
-                    var instanceName = GetWmiString(monitor, "InstanceName");
-
                     var display = new DisplayDeviceInfo
                     {
-                        Name = DecodeEdidString(monitor, "UserFriendlyName"),
-                        SerialNumber = DecodeEdidString(monitor, "SerialNumberID"),
-                        ProductId = DecodeEdidString(monitor, "ProductCodeID").ToLowerInvariant(),
-                        Online = GetWmiBool(monitor, "Active", defaultValue: true),
+                        Name = monitor.Name,
+                        SerialNumber = monitor.Serial,
+                        ProductId = monitor.ProductCode.ToLowerInvariant(),
+                        Online = monitor.Active,
+                        Resolution = monitor.Resolution,
+                        DiagonalInches = monitor.DiagonalInches,
+                        // The agent runs as SYSTEM in session 0, where the desktop APIs that
+                        // name the primary monitor see nothing. A single attached panel is
+                        // unambiguously the main one; beyond that we cannot tell, and say so
+                        // by leaving it false rather than picking one.
+                        IsMainDisplay = monitors.Count == 1,
                     };
 
-                    var pnpCode = DecodeEdidString(monitor, "ManufacturerName");
+                    var pnpCode = monitor.PnpCode;
                     if (!string.IsNullOrEmpty(pnpCode))
                     {
                         display.VendorId = PackEdidVendorId(pnpCode);
@@ -3558,8 +3574,8 @@ try {
                     // hole the frontend has to special-case.
                     display.Model = display.Name;
 
-                    var year = GetWmiInt(monitor, "YearOfManufacture");
-                    var week = GetWmiInt(monitor, "WeekOfManufacture");
+                    var year = monitor.Year;
+                    var week = monitor.Week;
                     if (year is >= 1990 && year <= DateTime.UtcNow.Year)
                     {
                         display.ManufactureYear = year;
@@ -3569,8 +3585,7 @@ try {
                         }
                     }
 
-                    if (!string.IsNullOrEmpty(instanceName)
-                        && connectionTypes.TryGetValue(NormalizeMonitorKey(instanceName), out var technology))
+                    if (monitor.VideoOutputTechnology is { } technology)
                     {
                         display.ConnectionType = VideoOutputTechnologyNames.TryGetValue(technology, out var name)
                             ? name
@@ -3583,14 +3598,7 @@ try {
                         // an attached monitor. Say nothing rather than guess: the server-side
                         // reconciliation cross-checks a display against the host model, and a
                         // wrong "external" there creates a phantom asset.
-                        _logger.LogDebug("No connection parameters for monitor {Instance} - leaving type unset", instanceName);
-                    }
-
-                    if (!string.IsNullOrEmpty(instanceName)
-                        && attachedModes.TryGetValue(NormalizeMonitorKey(instanceName), out var mode))
-                    {
-                        display.Resolution = mode.Resolution;
-                        display.IsMainDisplay = mode.IsPrimary;
+                        _logger.LogDebug("No connection parameters for monitor {Instance} - leaving type unset", monitor.InstanceName);
                     }
 
                     data.Displays.Add(display);
@@ -3615,79 +3623,124 @@ try {
         }
 
         /// <summary>
-        /// VideoOutputTechnology per monitor, keyed by normalized instance name.
+        /// Monitor EDID from root\wmi via PowerShell.
+        ///
+        /// Every source here is session independent, which is the whole point: the agent
+        /// runs as SYSTEM in session 0, so the user32 display APIs enumerate nothing and
+        /// System.Management reports WMI unavailable in the trimmed single-file build.
+        /// Get-CimInstance against root\wmi answers correctly in that context.
         /// </summary>
-        private async Task<Dictionary<string, long>> GetMonitorConnectionTypesAsync()
+        private async Task<List<MonitorEdid>> GetMonitorEdidViaPowerShellAsync()
         {
-            var result = new Dictionary<string, long>();
+            var monitors = new List<MonitorEdid>();
+
+            // EDID strings are UInt16 arrays of ASCII codepoints, zero padded; decode them
+            // here so the payload crossing the process boundary is already text.
+            const string script = """
+                function D($a){ if(-not $a){ return "" }; -join ($a | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }) }
+                $cp = @{}
+                Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams -ErrorAction SilentlyContinue |
+                    ForEach-Object { $cp[$_.InstanceName] = $_.VideoOutputTechnology }
+                $res = @{}
+                Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction SilentlyContinue |
+                    ForEach-Object {
+                        $mode = $_.MonitorSourceModes[$_.PreferredMonitorSourceModeIndex]
+                        if ($mode) { $res[$_.InstanceName] = "$($mode.HorizontalActivePixels) x $($mode.VerticalActivePixels)" }
+                    }
+                $size = @{}
+                Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue |
+                    ForEach-Object { $size[$_.InstanceName] = @($_.MaxHorizontalImageSize, $_.MaxVerticalImageSize) }
+                @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue | ForEach-Object {
+                    $wh = $size[$_.InstanceName]
+                    [PSCustomObject]@{
+                        InstanceName = $_.InstanceName
+                        Name         = (D $_.UserFriendlyName)
+                        Serial       = (D $_.SerialNumberID)
+                        Pnp          = (D $_.ManufacturerName)
+                        Product      = (D $_.ProductCodeID)
+                        Year         = $_.YearOfManufacture
+                        Week         = $_.WeekOfManufacture
+                        Active       = $_.Active
+                        Vot          = $cp[$_.InstanceName]
+                        Resolution   = $res[$_.InstanceName]
+                        WidthCm      = if ($wh) { $wh[0] } else { $null }
+                        HeightCm     = if ($wh) { $wh[1] } else { $null }
+                    }
+                }) | ConvertTo-Json -Compress -Depth 3
+                """;
 
             try
             {
-                var rows = await _wmiHelperService.QueryWmiMultipleAsync(
-                    "SELECT InstanceName, VideoOutputTechnology FROM WmiMonitorConnectionParams",
-                    "root\\wmi");
-
-                foreach (var row in rows)
+                var output = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
+                if (string.IsNullOrWhiteSpace(output))
                 {
-                    var instanceName = GetWmiString(row, "InstanceName");
-                    if (string.IsNullOrEmpty(instanceName) || row.GetValueOrDefault("VideoOutputTechnology") is not { } raw)
-                    {
-                        continue;
-                    }
+                    return monitors;
+                }
 
-                    try
-                    {
-                        // Declared uint32 but surfaces signed on some drivers, so the
-                        // internal sentinel 0x80000000 arrives as int.MinValue.
-                        var technology = Convert.ToInt64(raw);
-                        if (technology < 0)
-                        {
-                            technology += 0x100000000L;
-                        }
-                        result[NormalizeMonitorKey(instanceName)] = technology;
-                    }
-                    catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
-                    {
-                        _logger.LogDebug("Unreadable VideoOutputTechnology for {Instance}", instanceName);
-                    }
+                var parsed = Newtonsoft.Json.JsonConvert.DeserializeObject(output);
+                var items = parsed switch
+                {
+                    Newtonsoft.Json.Linq.JArray array => array,
+                    Newtonsoft.Json.Linq.JObject single => new Newtonsoft.Json.Linq.JArray(single),
+                    _ => new Newtonsoft.Json.Linq.JArray(),
+                };
+
+                foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
+                {
+                    monitors.Add(new MonitorEdid(
+                        (string?)item["InstanceName"] ?? string.Empty,
+                        (string?)item["Name"] ?? string.Empty,
+                        (string?)item["Serial"] ?? string.Empty,
+                        (string?)item["Pnp"] ?? string.Empty,
+                        (string?)item["Product"] ?? string.Empty,
+                        (int?)item["Year"],
+                        (int?)item["Week"],
+                        (bool?)item["Active"] ?? true,
+                        NormalizeVideoOutputTechnology((long?)item["Vot"]),
+                        (string?)item["Resolution"] ?? string.Empty,
+                        DiagonalInchesFrom((double?)item["WidthCm"], (double?)item["HeightCm"])));
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to read monitor connection parameters");
+                _logger.LogWarning(ex, "PowerShell monitor EDID fallback failed");
             }
 
-            return result;
+            return monitors;
         }
 
-        private static bool IsInternalVideoOutput(long technology) =>
-            technology is VideoOutputTechnologyInternal or 6 or 11 or 13; // internal, LVDS, embedded DP, embedded UDI
-
-        private static string GetWmiString(Dictionary<string, object?> row, string propertyName) =>
-            row.GetValueOrDefault(propertyName)?.ToString()?.Trim() ?? string.Empty;
-
-        private static bool GetWmiBool(Dictionary<string, object?> row, string propertyName, bool defaultValue = false)
+        /// <summary>
+        /// Panel diagonal from the EDID physical dimensions, which are whole centimetres.
+        /// That granularity is fine for a screen size but useless below about 10", so
+        /// implausible values are dropped rather than reported as a suspiciously exact
+        /// fraction of an inch.
+        /// </summary>
+        private static double? DiagonalInchesFrom(double? widthCm, double? heightCm)
         {
-            var value = row.GetValueOrDefault(propertyName);
-            return value switch
+            if (widthCm is not > 0 || heightCm is not > 0)
             {
-                bool flag => flag,
-                null => defaultValue,
-                _ => bool.TryParse(value.ToString(), out var parsed) ? parsed : defaultValue,
-            };
+                return null;
+            }
+
+            var diagonal = Math.Sqrt((widthCm.Value * widthCm.Value) + (heightCm.Value * heightCm.Value)) / 2.54;
+            return diagonal is >= 10 and <= 120 ? Math.Round(diagonal, 1) : null;
         }
 
-        private static int? GetWmiInt(Dictionary<string, object?> row, string propertyName)
+        /// <summary>
+        /// VideoOutputTechnology is declared uint32 but surfaces signed on some drivers,
+        /// so the internal sentinel 0x80000000 arrives as int.MinValue.
+        /// </summary>
+        private static long? NormalizeVideoOutputTechnology(object? raw)
         {
-            var value = row.GetValueOrDefault(propertyName);
-            if (value is null)
+            if (raw is null)
             {
                 return null;
             }
 
             try
             {
-                return Convert.ToInt32(value);
+                var technology = Convert.ToInt64(raw);
+                return technology < 0 ? technology + 0x100000000L : technology;
             }
             catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException)
             {
@@ -3695,29 +3748,8 @@ try {
             }
         }
 
-        /// <summary>
-        /// Decode a WmiMonitorID UInt16 array property. EDID strings arrive one ASCII
-        /// codepoint per element, zero padded to the field width.
-        /// </summary>
-        private static string DecodeEdidString(Dictionary<string, object?> row, string propertyName)
-        {
-            if (row.GetValueOrDefault(propertyName) is not ushort[] codes)
-            {
-                return string.Empty;
-            }
-
-            var builder = new System.Text.StringBuilder(codes.Length);
-            foreach (var code in codes)
-            {
-                if (code == 0)
-                {
-                    break;
-                }
-                builder.Append((char)code);
-            }
-
-            return builder.ToString().Trim();
-        }
+        private static bool IsInternalVideoOutput(long technology) =>
+            technology is VideoOutputTechnologyInternal or 6 or 11 or 13; // internal, LVDS, embedded DP, embedded UDI
 
         /// <summary>
         /// Pack a three-letter PNP code into the 16-bit EDID manufacturer id as lowercase
@@ -3742,167 +3774,6 @@ try {
             }
 
             return packed.ToString("x", System.Globalization.CultureInfo.InvariantCulture);
-        }
-
-        /// <summary>
-        /// WmiMonitorID reports "DISPLAY\DEL41A2\5&amp;abc&amp;0&amp;UID4356_0" while
-        /// EnumDisplayDevices reports "MONITOR\DEL41A2\{guid}\0004". Reduce both to the
-        /// hardware id plus instance segment so the two sources can be joined.
-        /// </summary>
-        private static string NormalizeMonitorKey(string identifier)
-        {
-            var normalized = identifier.Replace('#', '\\').Trim();
-            var segments = normalized.Split('\\', StringSplitOptions.RemoveEmptyEntries);
-
-            // segments: [ "?", ] "DISPLAY", "<hardware id>", "<instance>", [ "{guid}" ]
-            var displayIndex = Array.FindIndex(segments, s =>
-                s.Equals("DISPLAY", StringComparison.OrdinalIgnoreCase)
-                || s.Equals("MONITOR", StringComparison.OrdinalIgnoreCase));
-
-            if (displayIndex < 0 || displayIndex + 2 >= segments.Length)
-            {
-                return normalized.ToUpperInvariant();
-            }
-
-            var hardwareId = segments[displayIndex + 1];
-            var instance = segments[displayIndex + 2];
-
-            // WmiMonitorID suffixes the instance with the EDID block index.
-            var underscore = instance.LastIndexOf('_');
-            if (underscore > 0)
-            {
-                instance = instance[..underscore];
-            }
-
-            return $"{hardwareId}\\{instance}".ToUpperInvariant();
-        }
-
-        private sealed record AttachedDisplayMode(string Resolution, bool IsPrimary);
-
-        /// <summary>
-        /// Current mode and primary flag per attached monitor, from the display driver.
-        /// EDID gives identity but not what the desktop is actually doing with the panel.
-        /// </summary>
-        private Dictionary<string, AttachedDisplayMode> GetAttachedDisplayModes()
-        {
-            var modes = new Dictionary<string, AttachedDisplayMode>();
-
-            try
-            {
-                for (uint adapterIndex = 0; ; adapterIndex++)
-                {
-                    var adapter = new NativeDisplay.DISPLAY_DEVICE { cb = NativeDisplay.DisplayDeviceSize };
-                    if (!NativeDisplay.EnumDisplayDevices(null, adapterIndex, ref adapter, 0))
-                    {
-                        break;
-                    }
-
-                    if ((adapter.StateFlags & NativeDisplay.DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) == 0)
-                    {
-                        continue;
-                    }
-
-                    var isPrimary = (adapter.StateFlags & NativeDisplay.DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
-
-                    var devMode = new NativeDisplay.DEVMODE { dmSize = NativeDisplay.DevModeSize };
-                    var resolution = NativeDisplay.EnumDisplaySettings(adapter.DeviceName, NativeDisplay.ENUM_CURRENT_SETTINGS, ref devMode)
-                        && devMode.dmPelsWidth > 0 && devMode.dmPelsHeight > 0
-                        ? $"{devMode.dmPelsWidth} x {devMode.dmPelsHeight}"
-                        : string.Empty;
-
-                    for (uint monitorIndex = 0; ; monitorIndex++)
-                    {
-                        var monitor = new NativeDisplay.DISPLAY_DEVICE { cb = NativeDisplay.DisplayDeviceSize };
-                        if (!NativeDisplay.EnumDisplayDevices(adapter.DeviceName, monitorIndex, ref monitor, 0))
-                        {
-                            break;
-                        }
-
-                        if (string.IsNullOrEmpty(monitor.DeviceID))
-                        {
-                            continue;
-                        }
-
-                        modes[NormalizeMonitorKey(monitor.DeviceID)] = new AttachedDisplayMode(resolution, isPrimary);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to enumerate attached display modes");
-            }
-
-            return modes;
-        }
-
-        private static class NativeDisplay
-        {
-            internal const int ENUM_CURRENT_SETTINGS = -1;
-            internal const int DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x00000001;
-            internal const int DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004;
-
-            internal static readonly int DisplayDeviceSize = System.Runtime.InteropServices.Marshal.SizeOf<DISPLAY_DEVICE>();
-            internal static readonly short DevModeSize = (short)System.Runtime.InteropServices.Marshal.SizeOf<DEVMODE>();
-
-            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-            internal struct DISPLAY_DEVICE
-            {
-                internal int cb;
-                [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
-                internal string DeviceName;
-                [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
-                internal string DeviceString;
-                internal int StateFlags;
-                [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
-                internal string DeviceID;
-                [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
-                internal string DeviceKey;
-            }
-
-            [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-            internal struct DEVMODE
-            {
-                [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
-                internal string dmDeviceName;
-                internal short dmSpecVersion;
-                internal short dmDriverVersion;
-                internal short dmSize;
-                internal short dmDriverExtra;
-                internal int dmFields;
-                internal int dmPositionX;
-                internal int dmPositionY;
-                internal int dmDisplayOrientation;
-                internal int dmDisplayFixedOutput;
-                internal short dmColor;
-                internal short dmDuplex;
-                internal short dmYResolution;
-                internal short dmTTOption;
-                internal short dmCollate;
-                [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
-                internal string dmFormName;
-                internal short dmLogPixels;
-                internal int dmBitsPerPel;
-                internal int dmPelsWidth;
-                internal int dmPelsHeight;
-                internal int dmDisplayFlags;
-                internal int dmDisplayFrequency;
-                internal int dmICMMethod;
-                internal int dmICMIntent;
-                internal int dmMediaType;
-                internal int dmDitherType;
-                internal int dmReserved1;
-                internal int dmReserved2;
-                internal int dmPanningWidth;
-                internal int dmPanningHeight;
-            }
-
-            [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-            internal static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
-
-            [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-            [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
-            internal static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
         }
 
         #endregion
