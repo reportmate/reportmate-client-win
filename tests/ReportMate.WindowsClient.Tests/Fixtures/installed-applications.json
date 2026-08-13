@@ -1,0 +1,49 @@
+// Hand-authored inventory of publicly documented Windows applications.
+//
+// Entry ORDER is load-bearing and deliberate. The Security Log path takes the
+// first entry that matches rather than the best one, so "Microsoft OneDrive"
+// sits ahead of "Microsoft Edge" to reproduce the vendor-token collapse that
+// this suite exists to pin. Do not sort this file.
+//
+// Roughly two thirds of registry uninstall entries carry no InstallLocation in
+// practice, so the entries below are weighted the same way.
+[
+  // --- No InstallLocation: the common case in the registry -----------------
+  { "name": "Microsoft OneDrive",                                  "publisher": "Microsoft Corporation",       "installLocation": "" },
+  { "name": "Google Chrome",                                       "publisher": "Google LLC",                  "installLocation": "" },
+  { "name": "Node.js",                                             "publisher": "Node.js Foundation",          "installLocation": "" },
+  { "name": "Mozilla Maintenance Service",                         "publisher": "Mozilla",                     "installLocation": "" },
+  { "name": "PowerShell 7-x64",                                    "publisher": "Microsoft Corporation",       "installLocation": "" },
+  { "name": "PowerShell 7.5.5.0-x64",                              "publisher": "Microsoft Corporation",       "installLocation": "" },
+  { "name": "VS Script Debugging Common",                          "publisher": "Microsoft Corporation",       "installLocation": "" },
+  { "name": "Universal CRT Extension SDK",                         "publisher": "Microsoft Corporation",       "installLocation": "" },
+  { "name": "Windows Team Extension SDK",                          "publisher": "Microsoft Corporation",       "installLocation": "" },
+  { "name": "Microsoft .NET Host - 8.0.30 (x64)",                  "publisher": "Microsoft Corporation",       "installLocation": "" },
+  { "name": "Microsoft ASP.NET Core 8.0.30 Shared Framework (x64)","publisher": "Microsoft Corporation",       "installLocation": "" },
+
+  // One product registering several sub-component entries.
+  { "name": "Python 3.12.10 Core Interpreter (64-bit)",            "publisher": "Python Software Foundation",  "installLocation": "" },
+  { "name": "Python 3.12.10 Executables (64-bit)",                 "publisher": "Python Software Foundation",  "installLocation": "" },
+  { "name": "Python 3.12.10 Standard Library (64-bit)",            "publisher": "Python Software Foundation",  "installLocation": "" },
+  { "name": "Python 3.12.10 Test Suite (64-bit)",                  "publisher": "Python Software Foundation",  "installLocation": "" },
+
+  // --- With InstallLocation, all after the Microsoft-prefixed entries above -
+  { "name": "Microsoft Azure Storage Explorer version 1.40.2",     "publisher": "Microsoft Corporation",       "installLocation": "C:\\Program Files\\Microsoft Azure Storage Explorer\\" },
+  { "name": "Microsoft Edge",                                      "publisher": "Microsoft Corporation",       "installLocation": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application" },
+  { "name": "Microsoft Edge WebView2 Runtime",                     "publisher": "Microsoft Corporation",       "installLocation": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application" },
+  { "name": "Mozilla Firefox (x64 en-US)",                         "publisher": "Mozilla",                     "installLocation": "C:\\Program Files\\Mozilla Firefox" },
+  { "name": "Microsoft Visual Studio Code",                        "publisher": "Microsoft Corporation",       "installLocation": "C:\\Program Files\\Microsoft VS Code\\" },
+  { "name": "Git",                                                 "publisher": "The Git Development Community","installLocation": "C:\\Program Files\\Git\\" },
+  { "name": "osquery",                                             "publisher": "osquery Foundation",          "installLocation": "C:\\Program Files\\osquery\\" },
+
+  // --- Appx packages: always a versioned, exact InstallLocation ------------
+  { "name": "Microsoft Teams",                                     "publisher": "Microsoft",                   "installLocation": "C:\\Program Files\\WindowsApps\\MSTeams_26198.304.4946.9672_x64__8wekyb3d8bbwe" },
+  { "name": "Microsoft.WindowsTerminal",                           "publisher": "Microsoft Corporation",       "installLocation": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.24.11911.0_x64__8wekyb3d8bbwe" },
+  { "name": "Microsoft.WindowsNotepad",                            "publisher": "Microsoft Corporation",       "installLocation": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2605.34.0_x64__8wekyb3d8bbwe" },
+  { "name": "Microsoft.ScreenSketch",                              "publisher": "Microsoft Corporation",       "installLocation": "C:\\Program Files\\WindowsApps\\Microsoft.ScreenSketch_11.2602.49.0_x64__8wekyb3d8bbwe" },
+
+  // --- Nested and adjacent install locations -------------------------------
+  { "name": "Parent Suite",                                        "publisher": "Example Vendor",              "installLocation": "C:\\Program Files\\Suite" },
+  { "name": "Bundled Tool",                                        "publisher": "Example Vendor",              "installLocation": "C:\\Program Files\\Suite\\Tool" },
+  { "name": "Widget",                                              "publisher": "Example Vendor",              "installLocation": "C:\\Program Files\\Widget" }
+]

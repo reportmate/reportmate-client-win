@@ -1,0 +1,59 @@
+// Hand-authored list of standard Windows executable paths. These are the
+// documented default install locations for each product, not a capture from any
+// machine, and they carry no account name or device identifier.
+//
+// Each path is here to exercise a specific behaviour of the resolver; see the
+// pinned outcome for each one in expected-resolutions.json.
+[
+  // Vendor-token collapse: a "microsoft" path component alone clears the 0.5
+  // score for any two-word "Microsoft X" name.
+  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+  "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\msedgewebview2.exe",
+  "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.24.11911.0_x64__8wekyb3d8bbwe\\WindowsTerminal.exe",
+  "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.24.11911.0_x64__8wekyb3d8bbwe\\OpenConsole.exe",
+  "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2605.34.0_x64__8wekyb3d8bbwe\\Notepad\\Notepad.exe",
+  "C:\\Program Files\\WindowsApps\\Microsoft.ScreenSketch_11.2602.49.0_x64__8wekyb3d8bbwe\\SnippingTool\\SnippingTool.exe",
+  "C:\\Windows\\SystemApps\\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\\StartMenuExperienceHost.exe",
+  "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\SearchHost.exe",
+  "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\TextInputHost.exe",
+
+  // Substring strategies reaching an unrelated product.
+  "C:\\Program Files\\WindowsApps\\MSTeams_26198.304.4946.9672_x64__8wekyb3d8bbwe\\ms-teams.exe",
+  "C:\\Windows\\explorer.exe",
+  "C:\\Windows\\System32\\wscript.exe",
+  "C:\\Windows\\System32\\ApplicationFrameHost.exe",
+  "C:\\Windows\\System32\\PickerHost.exe",
+  "C:\\Windows\\System32\\ctfmon.exe",
+  "C:\\Windows\\System32\\RuntimeBroker.exe",
+
+  // No InstallLocation, so the tracker path keeps the bare filename while the
+  // Security Log path resolves a display name. This is the original split.
+  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "C:\\Program Files\\Microsoft OneDrive\\OneDrive.exe",
+  "C:\\Program Files\\nodejs\\node.exe",
+  "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+
+  // Inbox Windows PowerShell 5.1 is a different product from PowerShell 7.
+  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+
+  // Resolves correctly on both paths today; guards against regression.
+  "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+  "C:\\Program Files\\Microsoft VS Code\\Code.exe",
+  "C:\\Program Files\\Git\\bin\\git.exe",
+  "C:\\Program Files\\osquery\\osqueryd\\osqueryd.exe",
+  "C:\\Program Files\\Microsoft Azure Storage Explorer\\StorageExplorer.exe",
+
+  // Nested install locations: the longest prefix must win.
+  "C:\\Program Files\\Suite\\suite.exe",
+  "C:\\Program Files\\Suite\\Tool\\tool.exe",
+
+  // Shares a string prefix with "C:\\Program Files\\Widget" but is a different
+  // directory, so prefix matching must reject it.
+  "C:\\Program Files\\WidgetWorks\\other.exe",
+
+  // Multi-entry product: one process, several registry entries.
+  "C:\\Program Files\\Python312\\python.exe",
+
+  // Nothing in the inventory covers this at all.
+  "C:\\Program Files\\Unlisted Vendor\\Unlisted Product\\unlisted.exe"
+]

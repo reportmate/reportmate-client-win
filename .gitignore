@@ -447,3 +447,6 @@ osquery-temp/
 *.msi
 *.msm
 *.msp
+# Local git worktrees (AGENTS.md working agreement)
+.worktrees/
+
