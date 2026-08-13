@@ -11,9 +11,9 @@ namespace ReportMate.WindowsClient.Tests
     /// <summary>
     /// Name resolution decides the app_name on every usage_history row, and the
     /// server accumulates by that name, so a change here silently re-partitions
-    /// fleet-wide usage. These tests run the real resolver over a real captured
-    /// inventory and pin the result for every executable observed on that
-    /// endpoint.
+    /// fleet-wide usage. These tests run the real resolver over the hand-authored
+    /// inventory in Fixtures and pin the name it produces for every executable
+    /// path, so any change in attribution shows up as a failing assertion.
     /// </summary>
     public class UsageAppNameResolverTests
     {
@@ -72,11 +72,18 @@ namespace ReportMate.WindowsClient.Tests
                     .ToDictionary(c => c.ExePath, StringComparer.OrdinalIgnoreCase);
                 foreach (var c in actual)
                 {
-                    if (previous.TryGetValue(c.ExePath, out var prev))
-                    {
-                        c.Defect = prev.Defect;
-                        c.Should = prev.Should;
-                    }
+                    if (!previous.TryGetValue(c.ExePath, out var prev)) continue;
+
+                    // A defect the resolver now gets right is not a defect. Left
+                    // in place the annotation outlives its fix, and the fixture
+                    // goes on advertising known-bad cases that are correct --
+                    // which is what happened to all 28 of the 4353 annotations.
+                    if (prev.Defect != null &&
+                        string.Equals(prev.Should, c.SecurityLog, StringComparison.Ordinal))
+                        continue;
+
+                    c.Defect = prev.Defect;
+                    c.Should = prev.Should;
                 }
                 Fixtures.Write("expected-resolutions.json", actual);
                 return;
