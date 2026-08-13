@@ -32,8 +32,40 @@ namespace ReportMate.WindowsClient.Tests
             AllowTrailingCommas = true
         };
 
+        /// <summary>
+        /// Where fixtures are read from: the copy beside the test binary, put
+        /// there by the csproj's CopyToOutputDirectory.
+        /// </summary>
         public static string Dir =>
             Path.Combine(AppContext.BaseDirectory, "Fixtures");
+
+        /// <summary>
+        /// Where regenerated fixtures are written: the copy under source control.
+        ///
+        /// Writing to <see cref="Dir"/> would update the build output and leave
+        /// the committed file untouched, so a test run straight after a
+        /// regeneration passes against the regenerated copy and reads as
+        /// confirmation when nothing has been reviewed. Found while fixing work
+        /// item 4353; work item 4444.
+        /// </summary>
+        public static string SourceDir
+        {
+            get
+            {
+                var dir = new DirectoryInfo(AppContext.BaseDirectory);
+                while (dir != null)
+                {
+                    if (dir.GetFiles("ReportMate.WindowsClient.Tests.csproj").Length > 0)
+                        return Path.Combine(dir.FullName, "Fixtures");
+                    dir = dir.Parent;
+                }
+
+                throw new DirectoryNotFoundException(
+                    "Could not locate the test project directory above " +
+                    AppContext.BaseDirectory + "; regenerated fixtures would be written " +
+                    "to the build output and lost.");
+            }
+        }
 
         private static T Load<T>(string fileName)
         {
@@ -54,15 +86,21 @@ namespace ReportMate.WindowsClient.Tests
         public static List<ResolutionCase> ExpectedResolutions() =>
             Load<List<ResolutionCase>>("expected-resolutions.json");
 
+        /// <summary>
+        /// Rewrite a fixture in the source tree. Key casing matches what is
+        /// committed, so a regeneration produces a diff of the values that moved
+        /// rather than a rename of every key in the file.
+        /// </summary>
         public static void Write<T>(string fileName, T value)
         {
             var json = JsonSerializer.Serialize(value, new JsonSerializerOptions
             {
                 WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
                 Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
             });
-            File.WriteAllText(Path.Combine(Dir, fileName), json);
+            File.WriteAllText(Path.Combine(SourceDir, fileName), json + Environment.NewLine);
         }
     }
 
