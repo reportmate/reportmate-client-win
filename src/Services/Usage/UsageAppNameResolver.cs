@@ -14,47 +14,69 @@ namespace ReportMate.WindowsClient.Services.Usage
     /// usage_history row, and it is deliberately free of logging, I/O and any
     /// other dependency so it can be exercised directly by tests.
     ///
-    /// Two independent collection paths call in here and they do not agree today:
+    /// Two collection paths call in here, and they now run the same algorithm:
     ///
     /// - <see cref="ResolveInstalledApp"/> backs the Security Log path, which
-    ///   supplies total_seconds. It uses the fuzzy <see cref="MatchesApplication"/>
-    ///   predicate and drops anything it cannot match.
+    ///   supplies total_seconds, and drops anything it cannot name.
     /// - <see cref="ResolveTrackerAppName"/> backs the per-user usage tracker
-    ///   merge, which supplies foreground and active seconds. It consults only
-    ///   InstallLocation and keeps what it cannot match, under the exe filename.
+    ///   merge, which supplies foreground and active seconds, and keeps what it
+    ///   cannot name under the executable filename.
     ///
-    /// The disagreement is why one application can appear as two rows. It is
-    /// tracked as work item 4353 and the fixture tests in
-    /// ReportMate.WindowsClient.Tests pin the current behaviour so that any
-    /// change to it is visible in a diff.
+    /// They used to differ -- the Security Log path ran the fuzzy predicate
+    /// first while the tracker consulted only InstallLocation -- so the same
+    /// application arrived as two rows, one holding total_seconds under
+    /// "Google Chrome" and another holding foreground and active seconds under
+    /// "chrome". Both now resolve through the same lookup, in this order:
+    ///
+    ///   1. never an operating-system component (<see cref="IsOperatingSystemComponent"/>)
+    ///   2. the longest InstallLocation that is a directory prefix of the path
+    ///   3. the fuzzy <see cref="MatchesApplication"/> predicate, as a guess
+    ///
+    /// The fixture tests in ReportMate.WindowsClient.Tests pin every resolution,
+    /// so any change to attribution is visible in a diff. Work item 4353.
     /// </summary>
     public static class UsageAppNameResolver
     {
         /// <summary>
-        /// Security Log path: first installed application that the fuzzy
-        /// predicate accepts, or null. Note that this is first-to-match and not
-        /// best-match, so the result depends on the order of the inventory.
+        /// Security Log path: the installed application this executable belongs
+        /// to, or null when nothing in the inventory owns it.
+        ///
+        /// InstallLocation is decided by longest prefix, so the result no longer
+        /// depends on the order of the inventory. Only the fuzzy fallback is
+        /// still first-to-match, and it is reached only when no location covers
+        /// the path at all.
         /// </summary>
         public static InstalledApplication? ResolveInstalledApp(
             string processPath,
             IEnumerable<InstalledApplication> installedApps)
         {
-            return installedApps.FirstOrDefault(app => MatchesApplication(processPath, app));
+            if (string.IsNullOrWhiteSpace(processPath)) return null;
+
+            // An OS component is never an installed application.
+            if (IsOperatingSystemComponent(processPath)) return null;
+
+            // InstallLocation is authoritative when it covers the executable, and
+            // the longest one wins so a bundled tool is not swallowed by the suite
+            // it ships inside. Only when no location covers the path does the
+            // fuzzy predicate get a say -- it is a guess, and it used to run first
+            // for every lookup, which is how msedge.exe became "Microsoft OneDrive".
+            return ResolveByInstallLocation(processPath, installedApps)
+                   ?? installedApps.FirstOrDefault(app => MatchesApplication(processPath, app));
         }
 
         /// <summary>
-        /// Usage tracker path: name of the application whose InstallLocation is
-        /// the longest prefix of the executable path, falling back to the
-        /// executable filename without its extension.
+        /// The installed application whose InstallLocation is the longest
+        /// directory prefix of the executable path, or null.
+        ///
+        /// The boundary check is what keeps "C:\Program Files\Widget" from
+        /// claiming "C:\Program Files\WidgetWorks\other.exe".
         /// </summary>
-        public static string ResolveTrackerAppName(
+        private static InstalledApplication? ResolveByInstallLocation(
             string exePath,
             IEnumerable<InstalledApplication> installedApps)
         {
-            if (string.IsNullOrWhiteSpace(exePath)) return string.Empty;
-
-            string? bestName = null;
-            int bestLen = 0;
+            InstalledApplication? best = null;
+            var bestLen = 0;
             var normExe = exePath.Replace('/', '\\').TrimEnd('\\');
 
             foreach (var app in installedApps)
@@ -62,21 +84,90 @@ namespace ReportMate.WindowsClient.Services.Usage
                 var loc = app.InstallLocation;
                 if (string.IsNullOrWhiteSpace(loc)) continue;
                 var normLoc = loc.Replace('/', '\\').TrimEnd('\\');
-                if (normLoc.Length == 0) continue;
+                if (normLoc.Length == 0 || normLoc.Length <= bestLen) continue;
+
                 if (normExe.StartsWith(normLoc, StringComparison.OrdinalIgnoreCase) &&
                     (normExe.Length == normLoc.Length || normExe[normLoc.Length] == '\\'))
                 {
-                    if (normLoc.Length > bestLen)
-                    {
-                        bestLen = normLoc.Length;
-                        bestName = app.Name;
-                    }
+                    bestLen = normLoc.Length;
+                    best = app;
                 }
             }
 
-            if (!string.IsNullOrEmpty(bestName)) return bestName!;
-            try { return Path.GetFileNameWithoutExtension(exePath) ?? string.Empty; }
-            catch { return string.Empty; }
+            return best;
+        }
+
+        /// <summary>
+        /// Usage tracker path: the same resolution the Security Log path makes,
+        /// falling back to the executable filename without its extension when
+        /// nothing in the inventory owns it.
+        /// </summary>
+        public static string ResolveTrackerAppName(
+            string exePath,
+            IEnumerable<InstalledApplication> installedApps)
+        {
+            if (string.IsNullOrWhiteSpace(exePath)) return string.Empty;
+
+            // Deliberately the same call the Security Log path makes. The two
+            // used to run different algorithms -- this one consulted only
+            // InstallLocation and kept the exe filename when that missed, so
+            // chrome.exe arrived as "chrome" here and "Google Chrome" there, and
+            // the same application landed as two usage_history rows. Sharing the
+            // resolver makes them agree by construction rather than by
+            // maintenance.
+            var app = ResolveInstalledApp(exePath, installedApps);
+            if (!string.IsNullOrWhiteSpace(app?.Name)) return app!.Name;
+
+            // Nothing in the inventory owns it. Keep the executable name so the
+            // usage is still attributed to something recognisable.
+            return ExecutableBaseName(exePath);
+        }
+
+        /// <summary>
+        /// The filename of a Windows executable path, without its extension.
+        ///
+        /// Deliberately not Path.GetFileNameWithoutExtension: that splits on the
+        /// host's separator, so on a non-Windows host it treats an entire
+        /// "C:\Windows\explorer.exe" as one filename. These paths are always
+        /// Windows paths regardless of where the code runs, and the resolver's
+        /// results must not depend on the machine evaluating them.
+        /// </summary>
+        public static string ExecutableBaseName(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return string.Empty;
+
+            var normalized = path.Replace('/', '\\').TrimEnd('\\');
+            var slash = normalized.LastIndexOf('\\');
+            var name = slash >= 0 ? normalized.Substring(slash + 1) : normalized;
+
+            var dot = name.LastIndexOf('.');
+            return dot > 0 ? name.Substring(0, dot) : name;
+        }
+
+        /// <summary>
+        /// Whether a path is an operating-system component rather than an
+        /// installed application.
+        ///
+        /// Nothing under the Windows directory is owned by an entry in the
+        /// installed-applications inventory, but the fuzzy predicate below
+        /// happily claims them: in production it attributed C:\Windows\explorer.exe
+        /// to "Microsoft Azure Storage Explorer", System32\wscript.exe to
+        /// "VS Script Debugging Common", and most SystemApps binaries to
+        /// "Microsoft OneDrive". Every one of those inflates an unrelated
+        /// application's usage with shell and input-stack activity.
+        ///
+        /// Store apps live under Program Files\WindowsApps, not here, so they
+        /// are unaffected.
+        /// </summary>
+        public static bool IsOperatingSystemComponent(string processPath)
+        {
+            if (string.IsNullOrWhiteSpace(processPath)) return false;
+            var normalized = processPath.Replace('/', '\\');
+
+            // Drive-qualified (C:\Windows\...) rather than %SystemRoot%, so the
+            // check behaves identically wherever the tests run.
+            var windows = normalized.IndexOf(@":\Windows\", StringComparison.OrdinalIgnoreCase);
+            return windows == 1;
         }
 
         /// <summary>
@@ -91,13 +182,23 @@ namespace ReportMate.WindowsClient.Services.Usage
             if (string.IsNullOrEmpty(processPath))
                 return false;
 
+            // An OS component is never an installed application. This is checked
+            // before InstallLocation too: an inventory entry whose location is a
+            // Windows directory would otherwise capture the entire shell.
+            if (IsOperatingSystemComponent(processPath))
+                return false;
+
             var normalizedProcessPath = processPath.Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
 
             // Strategy 1: Install location prefix match (most accurate)
             if (!string.IsNullOrEmpty(app.InstallLocation))
             {
                 var normalizedInstallPath = app.InstallLocation.Replace('/', '\\').TrimEnd('\\').ToLowerInvariant();
-                if (normalizedProcessPath.StartsWith(normalizedInstallPath, StringComparison.OrdinalIgnoreCase))
+                // Directory boundary, so "C:\Program Files\Widget" does not claim
+                // "C:\Program Files\WidgetWorks\other.exe".
+                if (normalizedProcessPath.StartsWith(normalizedInstallPath, StringComparison.OrdinalIgnoreCase) &&
+                    (normalizedProcessPath.Length == normalizedInstallPath.Length ||
+                     normalizedProcessPath[normalizedInstallPath.Length] == '\\'))
                 {
                     return true;
                 }
@@ -119,7 +220,7 @@ namespace ReportMate.WindowsClient.Services.Usage
             }
 
             // Strategy 3: Process filename directly matches app name word (minimum 4 chars to avoid false positives)
-            var processFileName = System.IO.Path.GetFileNameWithoutExtension(normalizedProcessPath);
+            var processFileName = ExecutableBaseName(normalizedProcessPath);
             if (processFileName.Length >= 4 && !string.IsNullOrEmpty(app.Name))
             {
                 var appNameLower = app.Name.ToLowerInvariant();
@@ -251,6 +352,30 @@ namespace ReportMate.WindowsClient.Services.Usage
         }
 
         /// <summary>
+        /// Whether two path or name words refer to the same thing.
+        ///
+        /// Equal words match. A longer word matches a shorter one only when the
+        /// extra characters are not letters, which admits a version suffix
+        /// ("python312" is Python) while rejecting a different word glued on
+        /// ("widgetworks" is not Widget). Plain StartsWith accepted both, and
+        /// that false positive now reaches the foreground and active counters
+        /// too, because the tracker path consults this predicate.
+        /// </summary>
+        public static bool IsWordOrVersionedMatch(string a, string b)
+        {
+            if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+
+            var (longer, shorter) = a.Length > b.Length ? (a, b) : (b, a);
+            if (!longer.StartsWith(shorter, StringComparison.OrdinalIgnoreCase)) return false;
+
+            for (var i = shorter.Length; i < longer.Length; i++)
+            {
+                if (char.IsLetter(longer[i])) return false;
+            }
+            return true;
+        }
+
+        /// <summary>
         /// Calculate a match score between path components and app name/publisher words.
         /// Returns a score from 0.0 to 1.0 indicating match confidence.
         /// Requires multiple significant word matches to avoid false positives.
@@ -274,10 +399,7 @@ namespace ReportMate.WindowsClient.Services.Usage
                     if (pathComp.Length < 4)
                         continue;
 
-                    // Require exact match or strong containment (not just partial overlap)
-                    if (pathComp == appWord ||
-                        pathComp.StartsWith(appWord) ||
-                        appWord.StartsWith(pathComp))
+                    if (IsWordOrVersionedMatch(pathComp, appWord))
                     {
                         appNameMatches++;
                         break;
@@ -296,7 +418,7 @@ namespace ReportMate.WindowsClient.Services.Usage
             if (publisherWords.Count > 0)
             {
                 var publisherMatches = publisherWords.Count(pw =>
-                    pw.Length >= 4 && pathComponents.Any(pc => pc.Length >= 4 && (pc == pw || pc.StartsWith(pw) || pw.StartsWith(pc))));
+                    pw.Length >= 4 && pathComponents.Any(pc => pc.Length >= 4 && IsWordOrVersionedMatch(pc, pw)));
                 if (publisherMatches > 0)
                 {
                     score = Math.Min(1.0, score + 0.1);

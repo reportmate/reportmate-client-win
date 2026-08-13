@@ -1,150 +1,130 @@
 [
   {
     "exePath": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft Edge",
     "tracker": "Microsoft Edge",
     "defect": "[tracked internally]",
     "should": "Microsoft Edge"
   },
   {
     "exePath": "C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\msedgewebview2.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft Edge WebView2 Runtime",
     "tracker": "Microsoft Edge WebView2 Runtime",
     "defect": "[tracked internally]",
     "should": "Microsoft Edge WebView2 Runtime"
   },
   {
     "exePath": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.24.11911.0_x64__8wekyb3d8bbwe\\WindowsTerminal.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft.WindowsTerminal",
     "tracker": "Microsoft.WindowsTerminal",
     "defect": "[tracked internally]",
     "should": "Microsoft.WindowsTerminal"
   },
   {
     "exePath": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.24.11911.0_x64__8wekyb3d8bbwe\\OpenConsole.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft.WindowsTerminal",
     "tracker": "Microsoft.WindowsTerminal",
     "defect": "[tracked internally]",
     "should": "Microsoft.WindowsTerminal"
   },
   {
     "exePath": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2605.34.0_x64__8wekyb3d8bbwe\\Notepad\\Notepad.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft.WindowsNotepad",
     "tracker": "Microsoft.WindowsNotepad",
     "defect": "[tracked internally]",
     "should": "Microsoft.WindowsNotepad"
   },
   {
     "exePath": "C:\\Program Files\\WindowsApps\\Microsoft.ScreenSketch_11.2602.49.0_x64__8wekyb3d8bbwe\\SnippingTool\\SnippingTool.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft.ScreenSketch",
     "tracker": "Microsoft.ScreenSketch",
     "defect": "[tracked internally]",
     "should": "Microsoft.ScreenSketch"
   },
   {
     "exePath": "C:\\Windows\\SystemApps\\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\\StartMenuExperienceHost.exe",
-    "securityLog": "Microsoft OneDrive",
     "tracker": "StartMenuExperienceHost",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\SearchHost.exe",
-    "securityLog": "Microsoft OneDrive",
     "tracker": "SearchHost",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\TextInputHost.exe",
-    "securityLog": "Microsoft OneDrive",
     "tracker": "TextInputHost",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Program Files\\WindowsApps\\MSTeams_26198.304.4946.9672_x64__8wekyb3d8bbwe\\ms-teams.exe",
-    "securityLog": "Windows Team Extension SDK",
+    "securityLog": "Microsoft Teams",
     "tracker": "Microsoft Teams",
     "defect": "[tracked internally]",
     "should": "Microsoft Teams"
   },
   {
     "exePath": "C:\\Windows\\explorer.exe",
-    "securityLog": "Microsoft Azure Storage Explorer version 1.40.2",
     "tracker": "explorer",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Windows\\System32\\wscript.exe",
-    "securityLog": "VS Script Debugging Common",
     "tracker": "wscript",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Windows\\System32\\ApplicationFrameHost.exe",
-    "securityLog": "Microsoft .NET Host - 8.0.30 (x64)",
     "tracker": "ApplicationFrameHost",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Windows\\System32\\PickerHost.exe",
-    "securityLog": "Microsoft .NET Host - 8.0.30 (x64)",
     "tracker": "PickerHost",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Windows\\System32\\ctfmon.exe",
-    "securityLog": null,
     "tracker": "ctfmon",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Windows\\System32\\RuntimeBroker.exe",
-    "securityLog": null,
     "tracker": "RuntimeBroker",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "securityLog": "Google Chrome",
-    "tracker": "chrome",
+    "tracker": "Google Chrome",
     "defect": "[tracked internally]",
     "should": "Google Chrome"
   },
   {
     "exePath": "C:\\Program Files\\Microsoft OneDrive\\OneDrive.exe",
     "securityLog": "Microsoft OneDrive",
-    "tracker": "OneDrive",
+    "tracker": "Microsoft OneDrive",
     "defect": "[tracked internally]",
     "should": "Microsoft OneDrive"
   },
   {
     "exePath": "C:\\Program Files\\nodejs\\node.exe",
     "securityLog": "Node.js",
-    "tracker": "node",
+    "tracker": "Node.js",
     "defect": "[tracked internally]",
     "should": "Node.js"
   },
   {
     "exePath": "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
     "securityLog": "PowerShell 7-x64",
-    "tracker": "pwsh",
+    "tracker": "PowerShell 7-x64",
     "defect": "[tracked internally]",
     "should": "PowerShell 7-x64"
   },
   {
     "exePath": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    "securityLog": "PowerShell 7-x64",
     "tracker": "powershell",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
@@ -153,7 +133,7 @@
   },
   {
     "exePath": "C:\\Program Files\\Microsoft VS Code\\Code.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft Visual Studio Code",
     "tracker": "Microsoft Visual Studio Code",
     "defect": "[tracked internally]",
     "should": "Microsoft Visual Studio Code"
@@ -170,44 +150,40 @@
   },
   {
     "exePath": "C:\\Program Files\\Microsoft Azure Storage Explorer\\StorageExplorer.exe",
-    "securityLog": "Microsoft OneDrive",
+    "securityLog": "Microsoft Azure Storage Explorer version 1.40.2",
     "tracker": "Microsoft Azure Storage Explorer version 1.40.2",
     "defect": "[tracked internally]",
     "should": "Microsoft Azure Storage Explorer version 1.40.2"
   },
   {
     "exePath": "C:\\Program Files\\Suite\\suite.exe",
-    "securityLog": "Python 3.12.10 Test Suite (64-bit)",
+    "securityLog": "Parent Suite",
     "tracker": "Parent Suite",
     "defect": "[tracked internally]",
     "should": "Parent Suite"
   },
   {
     "exePath": "C:\\Program Files\\Suite\\Tool\\tool.exe",
-    "securityLog": "Parent Suite",
+    "securityLog": "Bundled Tool",
     "tracker": "Bundled Tool",
     "defect": "[tracked internally]",
     "should": "Bundled Tool"
   },
   {
     "exePath": "C:\\Program Files\\WidgetWorks\\other.exe",
-    "securityLog": "Widget",
     "tracker": "other",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   },
   {
     "exePath": "C:\\Program Files\\Python312\\python.exe",
     "securityLog": "Python 3.12.10 Core Interpreter (64-bit)",
-    "tracker": "python",
+    "tracker": "Python 3.12.10 Core Interpreter (64-bit)",
     "defect": "[tracked internally]",
     "should": "Python 3.12.10 Core Interpreter (64-bit)"
   },
   {
     "exePath": "C:\\Program Files\\Unlisted Vendor\\Unlisted Product\\unlisted.exe",
-    "securityLog": null,
     "tracker": "unlisted",
-    "defect": "[tracked internally]",
-    "should": null
+    "defect": "[tracked internally]"
   }
 ]
