@@ -254,7 +254,13 @@ public class ApiService : IApiService
                     _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
                     _logger.LogInformation("Device Serial in payload: {DeviceSerial}", payload?.Device ?? "Unknown");
 
-                    var response = await _httpClient.PostAsync("/api/v1/device", httpContent);
+                    var response = await PostWithIdentityAsync(
+                        "/api/v1/device",
+                        httpContent,
+                        deviceSerial,
+                        payload?.Device,
+                        null,
+                        null);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
 
                     if (response.IsSuccessStatusCode)
@@ -496,7 +502,14 @@ public class ApiService : IApiService
                     _logger.LogInformation("Payload size: {DataSize} KB ({DataSizeBytes} bytes)", dataSizeKB, jsonContent.Length);
                     _logger.LogInformation("Device Serial in payload: {DeviceSerial}", deviceSerial);
 
-                    var response = await _httpClient.PostAsync("/api/v1/events", httpContent);
+                    var response = await PostWithIdentityAsync(
+                        "/api/v1/events",
+                        httpContent,
+                        deviceSerial,
+                        deviceId,
+                        payload.Metadata.Additional.TryGetValue("deviceName", out var unifiedName) ? unifiedName?.ToString() : null,
+                        payload.Metadata.ClientVersion,
+                        payload.Metadata.Platform);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
 
                     if (response.IsSuccessStatusCode)
@@ -640,7 +653,13 @@ public class ApiService : IApiService
             var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
 
             _logger.LogInformation("Sending registration request to /api/v1/device...");
-            var response = await _httpClient.PostAsync("/api/v1/device", httpContent);
+            var response = await PostWithIdentityAsync(
+                "/api/v1/device",
+                httpContent,
+                deviceInfo.SerialNumber,
+                deviceInfo.DeviceId,
+                deviceInfo.ComputerName,
+                deviceInfo.ClientVersion);
 
             _logger.LogInformation("Registration response: {StatusCode}", response.StatusCode);
 
@@ -843,6 +862,62 @@ public class ApiService : IApiService
         {
             _logger.LogWarning(ex, "Failed to cleanup deprecated payload files");
         }
+    }
+
+    /// <summary>
+    /// POST to an ingest endpoint with the device's identity mirrored into
+    /// request headers.
+    /// </summary>
+    /// <remarks>
+    /// The payload already carries the serial, but the server can only read it
+    /// when the body arrives intact and parses. A check-in that is truncated,
+    /// aborted mid-upload, or serialized wrong is rejected with no idea which
+    /// machine sent it, and lands in /events/failures as "unidentified" -- a
+    /// rejection nobody can act on. Headers survive an unreadable body, so the
+    /// server can always name the device it turned away.
+    /// </remarks>
+    private async Task<HttpResponseMessage> PostWithIdentityAsync(
+        string url,
+        HttpContent content,
+        string? serialNumber,
+        string? deviceUuid,
+        string? deviceName,
+        string? clientVersion,
+        string? platform = "Windows")
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+        AddIdentityHeader(request, "X-Device-Serial", serialNumber);
+        AddIdentityHeader(request, "X-Device-Uuid", deviceUuid);
+        AddIdentityHeader(request, "X-Device-Name", deviceName);
+        AddIdentityHeader(request, "X-Platform", platform);
+        AddIdentityHeader(request, "X-Client-Version", clientVersion);
+        return await _httpClient.SendAsync(request);
+    }
+
+    /// <summary>
+    /// Add one identity header, or nothing if the value is unusable.
+    /// </summary>
+    /// <remarks>
+    /// Values come from hardware and directory lookups that occasionally
+    /// return control characters, so CR/LF are stripped before the value goes
+    /// anywhere near a header. Identity is diagnostic metadata: a bad value
+    /// must never cost the client its check-in, which is why this adds
+    /// without validation and skips silently rather than throwing.
+    /// </remarks>
+    private static void AddIdentityHeader(HttpRequestMessage request, string name, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        var cleaned = new string(value.Where(c => c >= 32 && c < 127).ToArray()).Trim();
+        if (cleaned.Length == 0)
+        {
+            return;
+        }
+
+        request.Headers.TryAddWithoutValidation(name, cleaned[..Math.Min(cleaned.Length, 255)]);
     }
 
     private void ConfigureHttpClient()
