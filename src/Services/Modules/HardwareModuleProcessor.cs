@@ -537,58 +537,34 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Process disk info from multiple sources
+            // Process disk info from multiple sources - physical disks (disk_info) are the
+            // authoritative source so the fleet reports hardware identity (model, serial),
+            // not logical volumes
             var processedDisks = new HashSet<string>(); // Track processed disks to avoid duplicates
             var logicalDriveData = new Dictionary<string, long>(); // Store free space data
-            
-            // Get logical drive information for free space (enhanced query with better filtering)
+            var logicalDriveDetails = new List<(string DriveId, long Size, long FreeSpace, string FileSystem)>();
+
+            // Gather logical drive data first (free space only exists at the volume level),
+            // but do not emit StorageDevice entries yet - physical disks take precedence below
             if (osqueryResults.TryGetValue("logical_drives_extended", out var logicalDrivesExtended))
             {
                 _logger.LogDebug("Processing {Count} logical drives with free space", logicalDrivesExtended.Count);
-                
+
                 foreach (var drive in logicalDrivesExtended)
                 {
                     var driveId = GetStringValue(drive, "device_id");
                     var freeSpace = GetLongValue(drive, "free_space");
                     var size = GetLongValue(drive, "size");
                     var fileSystem = GetStringValue(drive, "file_system");
-                    
+
                     if (!string.IsNullOrEmpty(driveId) && size > 0)
                     {
                         logicalDriveData[driveId] = freeSpace;
-                        
-                        // Add to storage if it's a primary drive (like C:, D:, etc.) with valid size and free space
-                        if (driveId.Length >= 2 && driveId.Contains(":") && !driveId.Contains("\\Device\\") && 
-                            size > 1000000000 && freeSpace > 0) // Minimum 1GB and has free space
-                        {
-                            var storage = new StorageDevice
-                            {
-                                Name = $"Drive {driveId}",
-                                Type = DetermineStorageType("", fileSystem),
-                                Capacity = size,
-                                FreeSpace = freeSpace,
-                                Interface = "Logical Drive",
-                                Health = freeSpace > 0 ? "Good" : "Unknown"
-                            };
-                            
-                            if (!processedDisks.Any(d => d.Contains(driveId)))
-                            {
-                                data.Storage.Add(storage);
-                                processedDisks.Add($"logical_{driveId}");
-                                
-                                _logger.LogDebug("Added storage from logical drives - Drive: {Drive}, Size: {Size}, Free: {Free}, Type: {Type}", 
-                                    driveId, FormatStorageSize(size), FormatStorageSize(freeSpace), storage.Type);
-                            }
-                        }
-                        else if (size <= 1000000000 || freeSpace == 0)
-                        {
-                            _logger.LogDebug("Filtered out logical drive - Drive: {Drive}, Size: {Size}, Free: {Free} (insufficient size or no free space)", 
-                                driveId, FormatStorageSize(size), FormatStorageSize(freeSpace));
-                        }
+                        logicalDriveDetails.Add((driveId, size, freeSpace, fileSystem));
                     }
                 }
             }
-            
+
             // Also get logical drive information from the original query as fallback
             if (osqueryResults.TryGetValue("logical_drives", out var logicalDrives))
             {
@@ -603,63 +579,114 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
                 _logger.LogDebug("Loaded free space data for {Count} logical drives", logicalDriveData.Count);
             }
-            
-            // Process physical disk information
+
+            // Process physical disk information - authoritative
             if (osqueryResults.TryGetValue("disk_info", out var diskInfo))
             {
                 _logger.LogDebug("Processing {Count} storage devices from disk_info", diskInfo.Count);
-                
+
+                // Map drive letters to physical disk numbers so volume free space can be
+                // attributed to the disk it lives on (osquery has no partition-to-disk table)
+                var driveLetterToDisk = await GetDriveLetterToDiskMapAsync();
+
+                // osquery's disk_info.type reports the WMI InterfaceType, which is "SCSI" for
+                // NVMe and for USB mass storage alike - it cannot tell an internal drive from
+                // an external one. Get-PhysicalDisk carries the real bus.
+                var diskBusTypes = await GetDiskBusTypeMapAsync();
+
                 foreach (var disk in diskInfo)
                 {
                     var diskName = GetStringValue(disk, "name");
                     var diskModel = GetStringValue(disk, "hardware_model");
                     var diskKey = $"{diskName}_{diskModel}";
-                    
+
                     if (!processedDisks.Contains(diskKey))
                     {
-                        var diskType = GetStringValue(disk, "type");
+                        var diskType = GetStringValue(disk, "type"); // Interface type: IDE, SCSI, USB
+                        var diskIndex = ParseDiskIndex(disk);
+                        diskBusTypes.TryGetValue(diskIndex, out var busType);
+
+                        // Fall back to the interface column only when the bus is unavailable,
+                        // so a machine without Get-PhysicalDisk is no worse off than before.
+                        var isRemovable = !string.IsNullOrEmpty(busType)
+                            ? RemovableBusTypes.Contains(busType)
+                            : diskType?.Contains("USB", StringComparison.OrdinalIgnoreCase) == true;
+
                         var storage = new StorageDevice
                         {
                             Name = !string.IsNullOrEmpty(diskModel) ? diskModel : diskName,
-                            Type = DetermineStorageType(diskType, diskModel ?? diskName),
+                            Model = diskModel ?? string.Empty,
+                            SerialNumber = NormalizeSerial(GetStringValue(disk, "serial")),
+                            Type = DetermineStorageType(
+                                string.IsNullOrEmpty(busType) ? diskType : busType,
+                                diskModel ?? diskName),
                             Capacity = GetLongValue(disk, "disk_size"),
-                            Interface = CleanInterfaceName(GetStringValue(disk, "manufacturer")),
+                            Interface = string.IsNullOrEmpty(busType)
+                                ? CleanInterfaceName(GetStringValue(disk, "manufacturer"))
+                                : busType,
+                            IsInternal = !isRemovable,
                             Health = "Unknown" // Will be updated if SMART data is available
                         };
 
-                        // Try to find corresponding free space
-                        foreach (var kvp in logicalDriveData)
+                        // Attribute volume free space to this disk via the partition map
+                        if (diskIndex >= 0 && driveLetterToDisk.Count > 0)
                         {
-                            if (kvp.Key.Contains(diskName, StringComparison.OrdinalIgnoreCase))
+                            foreach (var kvp in logicalDriveData)
                             {
-                                storage.FreeSpace = kvp.Value;
-                                break;
+                                var letter = kvp.Key.TrimEnd(':', '\\').ToUpperInvariant();
+                                if (driveLetterToDisk.TryGetValue(letter, out var mappedDisk) && mappedDisk == diskIndex)
+                                {
+                                    storage.FreeSpace += kvp.Value;
+                                }
                             }
                         }
 
                         // Only add storage devices with valid capacity (> 1GB to avoid system artifacts)
-                        // Also filter out devices with 0 free space (indicates collection issues)
                         if (storage.Capacity > 1000000000) // Minimum 1GB to be considered a real storage device
                         {
-                            // Filter out devices with 0 free space (indicates bad data collection)
-                            if (storage.FreeSpace > 0)
-                            {
-                                data.Storage.Add(storage);
-                                processedDisks.Add(diskKey);
-                                _logger.LogDebug("Added storage device from disk_info - Name: {Name}, Size: {Size} ({FormattedSize}), Free: {Free}", 
-                                    storage.Name, storage.Capacity, FormatStorageSize(storage.Capacity), FormatStorageSize(storage.FreeSpace));
-                            }
-                            else
-                            {
-                                _logger.LogDebug("Filtered out drive with no free space data - Name: {Name}, Capacity: {Capacity}, FreeSpace: {FreeSpace}", 
-                                    storage.Name, storage.Capacity, storage.FreeSpace);
-                            }
+                            data.Storage.Add(storage);
+                            processedDisks.Add(diskKey);
+                            _logger.LogDebug("Added physical disk from disk_info - Model: {Model}, Serial: {Serial}, Size: {Size}, Free: {Free}",
+                                storage.Model, storage.SerialNumber, FormatStorageSize(storage.Capacity), FormatStorageSize(storage.FreeSpace));
                         }
                         else
                         {
-                            _logger.LogDebug("Filtered out storage device with insufficient capacity - Name: {Name}, Capacity: {Capacity}", 
+                            _logger.LogDebug("Filtered out storage device with insufficient capacity - Name: {Name}, Capacity: {Capacity}",
                                 storage.Name, storage.Capacity);
                         }
+                    }
+                }
+
+                // Single-disk machines: when the partition map was unavailable, all volume
+                // free space necessarily belongs to the one internal disk
+                var internalDisks = data.Storage.Where(s => s.IsInternal).ToList();
+                if (internalDisks.Count == 1 && internalDisks[0].FreeSpace == 0 && logicalDriveData.Count > 0)
+                {
+                    internalDisks[0].FreeSpace = logicalDriveData.Values.Sum();
+                }
+            }
+
+            // Fall back to logical volumes only when no physical disk was usable, so VMs and
+            // exotic controllers still report storage
+            if (data.Storage.Count == 0)
+            {
+                foreach (var (driveId, size, freeSpace, fileSystem) in logicalDriveDetails)
+                {
+                    if (driveId.Length >= 2 && driveId.Contains(":") && !driveId.Contains("\\Device\\") &&
+                        size > 1000000000 && freeSpace > 0) // Minimum 1GB and has free space
+                    {
+                        data.Storage.Add(new StorageDevice
+                        {
+                            Name = $"Drive {driveId}",
+                            Type = DetermineStorageType("", fileSystem),
+                            Capacity = size,
+                            FreeSpace = freeSpace,
+                            Interface = "Logical Drive",
+                            Health = freeSpace > 0 ? "Good" : "Unknown"
+                        });
+
+                        _logger.LogDebug("Added storage from logical drives (fallback) - Drive: {Drive}, Size: {Size}, Free: {Free}",
+                            driveId, FormatStorageSize(size), FormatStorageSize(freeSpace));
                     }
                 }
             }
@@ -4325,6 +4352,153 @@ try {
         /// <summary>
         /// Execute a PowerShell script and return the result
         /// </summary>
+        /// <summary>
+        /// Map drive letters to physical disk numbers via Get-Partition, so logical volume
+        /// free space can be attributed to the physical disk it lives on
+        /// </summary>
+        private async Task<Dictionary<string, int>> GetDriveLetterToDiskMapAsync()
+        {
+            var map = new Dictionary<string, int>();
+            try
+            {
+                // Coerce to plain string/int properties - Get-Partition's DriveLetter is a char,
+                // which older PowerShell serializes to JSON as a character code
+                var output = await ExecutePowerShellScriptAsync(
+                    "Get-Partition | Where-Object DriveLetter | ForEach-Object { [PSCustomObject]@{ Letter = [string]$_.DriveLetter; Disk = [int]$_.DiskNumber } } | ConvertTo-Json -Compress");
+
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    return map;
+                }
+
+                var trimmed = output.Trim();
+                if (!trimmed.StartsWith("["))
+                {
+                    trimmed = $"[{trimmed}]"; // Single partition serializes as a bare object
+                }
+
+                using var doc = System.Text.Json.JsonDocument.Parse(trimmed);
+                foreach (var element in doc.RootElement.EnumerateArray())
+                {
+                    if (element.TryGetProperty("Letter", out var letterProp) &&
+                        element.TryGetProperty("Disk", out var diskProp) &&
+                        letterProp.ValueKind == System.Text.Json.JsonValueKind.String &&
+                        diskProp.TryGetInt32(out var diskNumber))
+                    {
+                        var letter = letterProp.GetString();
+                        if (!string.IsNullOrEmpty(letter))
+                        {
+                            map[letter.ToUpperInvariant()] = diskNumber;
+                        }
+                    }
+                }
+
+                _logger.LogDebug("Mapped {Count} drive letters to physical disks", map.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Drive letter to disk mapping failed: {Error}", ex.Message);
+            }
+
+            return map;
+        }
+
+        /// <summary>
+        /// Bus types that mean the drive is attached rather than built in. Everything else
+        /// (NVMe, SATA, RAID, SAS, ...) is treated as internal.
+        /// </summary>
+        private static readonly HashSet<string> RemovableBusTypes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "USB", "1394", "SD", "MMC", "Fibre Channel", "iSCSI"
+        };
+
+        /// <summary>
+        /// Map physical disk numbers to their bus type via Get-PhysicalDisk. osquery's
+        /// disk_info.type is the WMI InterfaceType, which reports "SCSI" for both an internal
+        /// NVMe drive and a USB-attached SSD, so it cannot be used to tell them apart.
+        /// </summary>
+        private async Task<Dictionary<int, string>> GetDiskBusTypeMapAsync()
+        {
+            var map = new Dictionary<int, string>();
+            try
+            {
+                var output = await ExecutePowerShellScriptAsync(
+                    "Get-PhysicalDisk | ForEach-Object { [PSCustomObject]@{ Disk = [int]$_.DeviceId; Bus = [string]$_.BusType } } | ConvertTo-Json -Compress");
+
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    return map;
+                }
+
+                var trimmed = output.Trim();
+                if (!trimmed.StartsWith("["))
+                {
+                    trimmed = $"[{trimmed}]"; // A single disk serializes as a bare object
+                }
+
+                using var doc = System.Text.Json.JsonDocument.Parse(trimmed);
+                foreach (var element in doc.RootElement.EnumerateArray())
+                {
+                    if (element.TryGetProperty("Disk", out var diskProp) &&
+                        element.TryGetProperty("Bus", out var busProp) &&
+                        diskProp.TryGetInt32(out var diskNumber) &&
+                        busProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var bus = busProp.GetString();
+                        if (!string.IsNullOrEmpty(bus))
+                        {
+                            map[diskNumber] = bus;
+                        }
+                    }
+                }
+
+                _logger.LogDebug("Mapped bus types for {Count} physical disks", map.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Physical disk bus type mapping failed: {Error}", ex.Message);
+            }
+
+            return map;
+        }
+
+        /// <summary>
+        /// Clean a WMI disk serial. WMI pads NVMe serials into underscore-grouped hex and
+        /// appends a trailing period, neither of which appears on the drive's own label.
+        /// </summary>
+        private static string NormalizeSerial(string? serial)
+        {
+            if (string.IsNullOrWhiteSpace(serial))
+            {
+                return string.Empty;
+            }
+
+            return serial.Trim().TrimEnd('.').Trim();
+        }
+
+        /// <summary>
+        /// Resolve the physical disk number for a disk_info row, from the disk_index column
+        /// or the device path (\\.\PHYSICALDRIVE0)
+        /// </summary>
+        private static int ParseDiskIndex(Dictionary<string, object> disk)
+        {
+            var indexValue = GetStringValue(disk, "disk_index");
+            if (int.TryParse(indexValue, out var index))
+            {
+                return index;
+            }
+
+            var name = GetStringValue(disk, "name") ?? string.Empty;
+            const string marker = "PHYSICALDRIVE";
+            var pos = name.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (pos >= 0 && int.TryParse(name.Substring(pos + marker.Length), out var parsed))
+            {
+                return parsed;
+            }
+
+            return -1;
+        }
+
         private async Task<string> ExecutePowerShellScriptAsync(string script)
         {
             try
