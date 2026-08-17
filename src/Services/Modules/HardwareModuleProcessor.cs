@@ -589,6 +589,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // attributed to the disk it lives on (osquery has no partition-to-disk table)
                 var driveLetterToDisk = await GetDriveLetterToDiskMapAsync();
 
+                // osquery's disk_info.type reports the WMI InterfaceType, which is "SCSI" for
+                // NVMe and for USB mass storage alike - it cannot tell an internal drive from
+                // an external one. Get-PhysicalDisk carries the real bus.
+                var diskBusTypes = await GetDiskBusTypeMapAsync();
+
                 foreach (var disk in diskInfo)
                 {
                     var diskName = GetStringValue(disk, "name");
@@ -599,15 +604,26 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         var diskType = GetStringValue(disk, "type"); // Interface type: IDE, SCSI, USB
                         var diskIndex = ParseDiskIndex(disk);
-                        var isRemovable = diskType?.Contains("USB", StringComparison.OrdinalIgnoreCase) == true;
+                        diskBusTypes.TryGetValue(diskIndex, out var busType);
+
+                        // Fall back to the interface column only when the bus is unavailable,
+                        // so a machine without Get-PhysicalDisk is no worse off than before.
+                        var isRemovable = !string.IsNullOrEmpty(busType)
+                            ? RemovableBusTypes.Contains(busType)
+                            : diskType?.Contains("USB", StringComparison.OrdinalIgnoreCase) == true;
+
                         var storage = new StorageDevice
                         {
                             Name = !string.IsNullOrEmpty(diskModel) ? diskModel : diskName,
                             Model = diskModel ?? string.Empty,
-                            SerialNumber = GetStringValue(disk, "serial")?.Trim() ?? string.Empty,
-                            Type = DetermineStorageType(diskType, diskModel ?? diskName),
+                            SerialNumber = NormalizeSerial(GetStringValue(disk, "serial")),
+                            Type = DetermineStorageType(
+                                string.IsNullOrEmpty(busType) ? diskType : busType,
+                                diskModel ?? diskName),
                             Capacity = GetLongValue(disk, "disk_size"),
-                            Interface = CleanInterfaceName(GetStringValue(disk, "manufacturer")),
+                            Interface = string.IsNullOrEmpty(busType)
+                                ? CleanInterfaceName(GetStringValue(disk, "manufacturer"))
+                                : busType,
                             IsInternal = !isRemovable,
                             Health = "Unknown" // Will be updated if SMART data is available
                         };
@@ -4385,6 +4401,79 @@ try {
             }
 
             return map;
+        }
+
+        /// <summary>
+        /// Bus types that mean the drive is attached rather than built in. Everything else
+        /// (NVMe, SATA, RAID, SAS, ...) is treated as internal.
+        /// </summary>
+        private static readonly HashSet<string> RemovableBusTypes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "USB", "1394", "SD", "MMC", "Fibre Channel", "iSCSI"
+        };
+
+        /// <summary>
+        /// Map physical disk numbers to their bus type via Get-PhysicalDisk. osquery's
+        /// disk_info.type is the WMI InterfaceType, which reports "SCSI" for both an internal
+        /// NVMe drive and a USB-attached SSD, so it cannot be used to tell them apart.
+        /// </summary>
+        private async Task<Dictionary<int, string>> GetDiskBusTypeMapAsync()
+        {
+            var map = new Dictionary<int, string>();
+            try
+            {
+                var output = await ExecutePowerShellScriptAsync(
+                    "Get-PhysicalDisk | ForEach-Object { [PSCustomObject]@{ Disk = [int]$_.DeviceId; Bus = [string]$_.BusType } } | ConvertTo-Json -Compress");
+
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    return map;
+                }
+
+                var trimmed = output.Trim();
+                if (!trimmed.StartsWith("["))
+                {
+                    trimmed = $"[{trimmed}]"; // A single disk serializes as a bare object
+                }
+
+                using var doc = System.Text.Json.JsonDocument.Parse(trimmed);
+                foreach (var element in doc.RootElement.EnumerateArray())
+                {
+                    if (element.TryGetProperty("Disk", out var diskProp) &&
+                        element.TryGetProperty("Bus", out var busProp) &&
+                        diskProp.TryGetInt32(out var diskNumber) &&
+                        busProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var bus = busProp.GetString();
+                        if (!string.IsNullOrEmpty(bus))
+                        {
+                            map[diskNumber] = bus;
+                        }
+                    }
+                }
+
+                _logger.LogDebug("Mapped bus types for {Count} physical disks", map.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Physical disk bus type mapping failed: {Error}", ex.Message);
+            }
+
+            return map;
+        }
+
+        /// <summary>
+        /// Clean a WMI disk serial. WMI pads NVMe serials into underscore-grouped hex and
+        /// appends a trailing period, neither of which appears on the drive's own label.
+        /// </summary>
+        private static string NormalizeSerial(string? serial)
+        {
+            if (string.IsNullOrWhiteSpace(serial))
+            {
+                return string.Empty;
+            }
+
+            return serial.Trim().TrimEnd('.').Trim();
         }
 
         /// <summary>
