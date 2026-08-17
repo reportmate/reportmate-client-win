@@ -17,7 +17,7 @@
             <StackPanel HorizontalAlignment="Center" Spacing="8" Margin="0,8,0,4">
                 <Image x:Name="AppIcon" Width="64" Height="64" HorizontalAlignment="Center" />
 
-                <TextBlock Text="ReportMate"
+                <TextBlock Text="Managed Reports Runner"
                            Style="{StaticResource TitleTextBlockStyle}"
                            HorizontalAlignment="Center" />
 
