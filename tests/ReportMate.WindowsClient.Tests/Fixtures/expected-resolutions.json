@@ -31,15 +31,15 @@
   },
   {
     "exePath": "C:\\Windows\\SystemApps\\Microsoft.Windows.StartMenuExperienceHost_cw5n1h2txyewy\\StartMenuExperienceHost.exe",
-    "tracker": "StartMenuExperienceHost"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\SearchHost.exe",
-    "tracker": "SearchHost"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\TextInputHost.exe",
-    "tracker": "TextInputHost"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Program Files\\WindowsApps\\MSTeams_26198.304.4946.9672_x64__8wekyb3d8bbwe\\ms-teams.exe",
@@ -48,27 +48,27 @@
   },
   {
     "exePath": "C:\\Windows\\explorer.exe",
-    "tracker": "explorer"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Windows\\System32\\wscript.exe",
-    "tracker": "wscript"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Windows\\System32\\ApplicationFrameHost.exe",
-    "tracker": "ApplicationFrameHost"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Windows\\System32\\PickerHost.exe",
-    "tracker": "PickerHost"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Windows\\System32\\ctfmon.exe",
-    "tracker": "ctfmon"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Windows\\System32\\RuntimeBroker.exe",
-    "tracker": "RuntimeBroker"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
@@ -92,7 +92,7 @@
   },
   {
     "exePath": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-    "tracker": "powershell"
+    "tracker": ""
   },
   {
     "exePath": "C:\\Program Files\\Mozilla Firefox\\firefox.exe",

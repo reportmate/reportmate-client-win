@@ -20,7 +20,9 @@ namespace ReportMate.WindowsClient.Services.Usage
     ///   supplies total_seconds, and drops anything it cannot name.
     /// - <see cref="ResolveTrackerAppName"/> backs the per-user usage tracker
     ///   merge, which supplies foreground and active seconds, and keeps what it
-    ///   cannot name under the executable filename.
+    ///   cannot name under the executable filename -- except an OS component,
+    ///   which it drops, because "not an application" and "an application I do
+    ///   not recognise" warrant different answers.
     ///
     /// They used to differ -- the Security Log path ran the fuzzy predicate
     /// first while the tracker consulted only InstallLocation -- so the same
@@ -100,13 +102,28 @@ namespace ReportMate.WindowsClient.Services.Usage
         /// <summary>
         /// Usage tracker path: the same resolution the Security Log path makes,
         /// falling back to the executable filename without its extension when
-        /// nothing in the inventory owns it.
+        /// nothing in the inventory owns it, and to nothing at all when the
+        /// executable is an operating-system component.
+        ///
+        /// The caller skips an empty name, so returning empty is how this path
+        /// drops a process -- the same outcome the Security Log path reaches by
+        /// returning a null application.
         /// </summary>
         public static string ResolveTrackerAppName(
             string exePath,
             IEnumerable<InstalledApplication> installedApps)
         {
             if (string.IsNullOrWhiteSpace(exePath)) return string.Empty;
+
+            // An OS component is dropped rather than named. ResolveInstalledApp
+            // returns null for two different reasons -- "this is not an
+            // application" and "I don't recognise this application" -- and only
+            // the second one justifies the basename fallback below. Without this
+            // check the shell reached the report as "explorer", 74.7 active hours
+            // across 150 devices, ranked above After Effects and Maya, while the
+            // Security Log path had already dropped every one of those sessions.
+            // Work item 4525.
+            if (IsOperatingSystemComponent(exePath)) return string.Empty;
 
             // Deliberately the same call the Security Log path makes. The two
             // used to run different algorithms -- this one consulted only

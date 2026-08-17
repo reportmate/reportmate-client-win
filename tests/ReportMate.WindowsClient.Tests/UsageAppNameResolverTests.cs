@@ -260,6 +260,53 @@ namespace ReportMate.WindowsClient.Tests
                     new List<InstalledApplication>()));
         }
 
+        /// <summary>
+        /// An OS component is dropped by BOTH paths rather than kept under its
+        /// executable name. The basename fallback exists for an application the
+        /// inventory does not list; the shell is not an unlisted application, it
+        /// is not an application. Reported as "explorer", it was the 8th most-used
+        /// application on the fleet at 74.7 active hours over 150 devices, ranked
+        /// above After Effects and Maya. Work item 4525.
+        /// </summary>
+        [Theory]
+        [InlineData(@"C:\Windows\explorer.exe")]
+        [InlineData(@"C:\Windows\System32\ctfmon.exe")]
+        [InlineData(@"C:\Windows\System32\RuntimeBroker.exe")]
+        [InlineData(@"C:\Windows\System32\mstsc.exe")]
+        [InlineData(@"C:\Windows\System32\mmc.exe")]
+        [InlineData(@"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")]
+        [InlineData(@"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe")]
+        [InlineData(@"c:/windows/EXPLORER.EXE")]
+        public void Os_components_are_dropped_by_both_paths(string path)
+        {
+            Assert.Null(UsageAppNameResolver.ResolveInstalledApp(path, Inventory));
+            Assert.Equal(string.Empty, UsageAppNameResolver.ResolveTrackerAppName(path, Inventory));
+        }
+
+        /// <summary>
+        /// The exclusion is the Windows directory specifically, not "anything
+        /// with windows in the path". Store apps install under Program
+        /// Files\WindowsApps and a vendor is free to ship a directory named
+        /// Windows something; both must still resolve normally, or this fix
+        /// would delete real usage.
+        /// </summary>
+        [Fact]
+        public void Paths_that_merely_mention_windows_are_not_os_components()
+        {
+            var inventory = new List<InstalledApplication>
+            {
+                new() { Name = "Windows Tidy", InstallLocation = @"C:\Program Files\WindowsTidy" }
+            };
+
+            Assert.Equal("Windows Tidy",
+                UsageAppNameResolver.ResolveTrackerAppName(@"C:\Program Files\WindowsTidy\tidy.exe", inventory));
+
+            // Not under the Windows directory, so the ordinary filename fallback
+            // applies rather than the drop.
+            Assert.Equal("thing",
+                UsageAppNameResolver.ResolveTrackerAppName(@"D:\Windows Media\thing.exe", inventory));
+        }
+
         private static List<ResolutionCase> SafeLoadExpected()
         {
             try { return Fixtures.ExpectedResolutions(); }
