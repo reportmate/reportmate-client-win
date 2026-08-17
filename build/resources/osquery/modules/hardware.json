@@ -14,7 +14,7 @@
       "description": "Logical drive information"
     },
     "disk_info": {
-      "query": "SELECT name, type, disk_size, manufacturer, hardware_model, serial, description FROM disk_info;",
+      "query": "SELECT name, type, disk_index, disk_size, manufacturer, hardware_model, serial, description FROM disk_info;",
       "interval": 3600,
       "description": "Physical disk hardware information"
     },
