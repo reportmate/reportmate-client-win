@@ -1995,11 +1995,31 @@ try {
             if (element.TryGetProperty(propertyName, out var prop))
             {
                 if (prop.ValueKind == JsonValueKind.String)
-                    return prop.GetString() ?? string.Empty;
+                    return StripNul(prop.GetString());
                 if (prop.ValueKind == JsonValueKind.Number)
                     return prop.GetRawText();
             }
             return string.Empty;
+        }
+
+        /// <summary>
+        /// Remove NUL characters from a value read out of a PowerShell result.
+        /// </summary>
+        /// <remarks>
+        /// Some Windows APIs return fixed-width character fields padded with
+        /// NUL rather than trimmed strings: Get-Tpm reports ManufacturerIdTxt
+        /// as a 4-byte field, so Infineon arrives as "IFX" plus a NUL and
+        /// Nuvoton as "NTC" plus a NUL. That character cannot be stored in the
+        /// server's JSON column, and because one bad value fails the write for
+        /// the whole module, it silently cost 171 machines a month of identity
+        /// data while their check-ins kept returning success. The padding
+        /// carries no meaning, so dropping it loses nothing.
+        /// </remarks>
+        internal static string StripNul(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+            return value.IndexOf('\0') < 0 ? value : value.Replace("\0", string.Empty);
         }
 
         private bool GetJsonBoolValue(JsonElement element, string propertyName)

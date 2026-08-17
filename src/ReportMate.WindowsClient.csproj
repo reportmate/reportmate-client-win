@@ -78,4 +78,8 @@
     <TrimmerRootAssembly Include="System.Management" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ReportMate.WindowsClient.Tests" />
+  </ItemGroup>
+
 </Project>
