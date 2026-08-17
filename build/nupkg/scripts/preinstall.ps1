@@ -76,8 +76,11 @@ function Stop-ReportMateProcess {
 # Stop old runner.exe processes
 Stop-ReportMateProcess -ProcessName "runner" -BinaryPath "C:\Program Files\ReportMate\runner.exe"
 
-# Stop new managedreportsrunner.exe processes  
+# Stop new managedreportsrunner.exe processes
 Stop-ReportMateProcess -ProcessName "managedreportsrunner" -BinaryPath "C:\Program Files\ReportMate\managedreportsrunner.exe"
+
+# Stop the Managed Reports Runner GUI if it is running
+Stop-ReportMateProcess -ProcessName "Managed Reports Runner" -BinaryPath "C:\Program Files\ReportMate\Managed Reports Runner.exe"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MIGRATION: Forcefully remove old runner.exe binary (renamed to managedreportsrunner.exe)

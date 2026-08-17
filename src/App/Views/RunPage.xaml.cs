@@ -93,7 +93,7 @@ public sealed partial class RunPage : Page
         else
         {
             RunIcon.Glyph = "\uE768"; // Play icon
-            RunText.Text = "Run ReportMate";
+            RunText.Text = "Run Managed Reports Runner";
             RunButton.Background = null;
             RunningProgress.IsActive = false;
             RunningLabel.Visibility = Visibility.Collapsed;
