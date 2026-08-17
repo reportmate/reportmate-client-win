@@ -59,6 +59,8 @@ namespace ReportMate.WindowsClient.Models.Modules
     public class StorageDevice
     {
         public string Name { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty; // Hardware model, e.g. "Samsung SSD 980 1TB"
+        public string SerialNumber { get; set; } = string.Empty; // Physical disk serial for hardware identification
         public string Type { get; set; } = string.Empty; // SSD, HDD, NVMe
         public long Capacity { get; set; } // bytes
         public long FreeSpace { get; set; } // bytes
