@@ -10,7 +10,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <RootNamespace>ReportMate.App</RootNamespace>
-    <AssemblyName>ReportMate</AssemblyName>
+    <AssemblyName>Managed Reports Runner</AssemblyName>
+    <Product>Managed Reports Runner</Product>
+    <Description>Managed Reports Runner</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>true</SelfContained>

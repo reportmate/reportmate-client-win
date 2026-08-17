@@ -15,7 +15,7 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
-        Title = "ReportMate";
+        Title = "Managed Reports Runner";
 
         // DPI-aware sizing clamped to available screen work area
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);

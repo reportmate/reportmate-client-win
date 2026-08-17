@@ -120,7 +120,7 @@ public partial class RunViewModel : ObservableObject
         var cliPath = FindCliExecutable();
         if (cliPath is null)
         {
-            AppendLine("[ERROR] managedreportsrunner.exe not found. Install ReportMate or check the install path.", LogLevel.Error);
+            AppendLine("[ERROR] managedreportsrunner.exe not found. Install Managed Reports Runner or check the install path.", LogLevel.Error);
             IsRunning = false;
             return;
         }
