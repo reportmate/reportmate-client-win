@@ -33,6 +33,22 @@ public interface IApiService
 
 public class ApiService : IApiService
 {
+    /// <summary>
+    /// Name format for one transmission's log directory. Written by the payload loggers
+    /// and parsed back by the retention sweep - both must use this constant, so that a
+    /// change to the format cannot leave the sweep matching nothing.
+    /// </summary>
+    private const string TransmissionLogDirectoryFormat = "yyyy-MM-dd-HHmmss";
+
+    /// <summary>How many transmission log directories to keep.</summary>
+    private const int TransmissionLogDirectoriesRetained = 10;
+
+    /// <summary>
+    /// Upper bound on directories removed per run, so an endpoint with a large backlog
+    /// does not stall a transmission while it catches up.
+    /// </summary>
+    private const int MaxTransmissionLogDeletesPerRun = 2000;
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<ApiService> _logger;
     private readonly IConfiguration _configuration;
@@ -738,7 +754,7 @@ public class ApiService : IApiService
         {
             // Create timestamped directory structure like cache (YYYY-MM-DD-HHmmss)
             var now = DateTime.UtcNow;
-            var timestamp = now.ToString("yyyy-MM-dd-HHmmss");
+            var timestamp = now.ToString(TransmissionLogDirectoryFormat);
             var logDir = Path.Combine(_cacheDirectory, timestamp);
             
             if (!Directory.Exists(logDir))
@@ -772,7 +788,7 @@ public class ApiService : IApiService
         {
             // Create timestamped directory structure like cache (YYYY-MM-DD-HHmmss)
             var now = DateTime.UtcNow;
-            var timestamp = now.ToString("yyyy-MM-dd-HHmmss");
+            var timestamp = now.ToString(TransmissionLogDirectoryFormat);
             var logDir = Path.Combine(_cacheDirectory, timestamp);
             
             if (!Directory.Exists(logDir))
@@ -795,6 +811,30 @@ public class ApiService : IApiService
         }
     }
 
+    /// <summary>
+    /// From a set of directories under the transmission logs root, return the ones that
+    /// are past retention, oldest last.
+    /// </summary>
+    /// <remarks>
+    /// Selection is by parsing the directory name as
+    /// <see cref="TransmissionLogDirectoryFormat"/>. A name-length test is silently wrong
+    /// the moment the format changes, and it was: the format renders 17 characters, so an
+    /// earlier <c>Length &gt;= 19</c> filter matched nothing and this cleanup deleted
+    /// nothing for as long as it had existed. Endpoints accumulated tens of thousands of
+    /// directories as a result.
+    /// </remarks>
+    internal static string[] SelectExpiredTransmissionLogDirectories(IEnumerable<string> directories)
+        => directories
+            .Where(d => DateTime.TryParseExact(
+                Path.GetFileName(d),
+                TransmissionLogDirectoryFormat,
+                null,
+                System.Globalization.DateTimeStyles.None,
+                out _))
+            .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal)
+            .Skip(TransmissionLogDirectoriesRetained)
+            .ToArray();
+
     private Task CleanupOldCacheFilesAsync(string deviceSerial)
     {
         try
@@ -804,24 +844,36 @@ public class ApiService : IApiService
                 return Task.CompletedTask;
             }
 
-            // Clean up old timestamped log directories (keep only last 10)
-            var logDirs = Directory.GetDirectories(_cacheDirectory)
-                .Where(d => Path.GetFileName(d).Length >= 19) // YYYY-MM-DD-HHmmss format
-                .OrderByDescending(d => Path.GetFileName(d))
-                .Skip(10)
-                .ToArray();
+            var logDirs = SelectExpiredTransmissionLogDirectories(
+                Directory.GetDirectories(_cacheDirectory));
 
-            foreach (var dir in logDirs)
+            // Endpoints that ran with the broken filter have tens of thousands of these
+            // directories banked up. Deleting them all in one pass would stall a run for
+            // minutes, so take a bounded batch per run and converge over the next few.
+            var batch = logDirs.Take(MaxTransmissionLogDeletesPerRun).ToArray();
+
+            foreach (var dir in batch)
             {
                 Directory.Delete(dir, true);
                 _logger.LogDebug("Deleted old transmission log directory: {DirName}", Path.GetFileName(dir));
+            }
+
+            if (logDirs.Length > batch.Length)
+            {
+                _logger.LogInformation(
+                    "Removed {Deleted} of {Total} expired transmission log directories; the remaining {Remaining} will be removed on subsequent runs",
+                    batch.Length, logDirs.Length, logDirs.Length - batch.Length);
+            }
+            else if (batch.Length > 0)
+            {
+                _logger.LogDebug("Removed {Deleted} expired transmission log directories", batch.Length);
             }
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Failed to cleanup old transmission log directories");
         }
-        
+
         return Task.CompletedTask;
     }
 
@@ -983,7 +1035,7 @@ public class ApiService : IApiService
             }
             
             var cacheDirectories = Directory.GetDirectories(baseCacheDirectory)
-                .Where(dir => DateTime.TryParseExact(Path.GetFileName(dir), "yyyy-MM-dd-HHmmss", null, System.Globalization.DateTimeStyles.None, out _))
+                .Where(dir => DateTime.TryParseExact(Path.GetFileName(dir), TransmissionLogDirectoryFormat, null, System.Globalization.DateTimeStyles.None, out _))
                 .OrderByDescending(dir => Path.GetFileName(dir))
                 .ToArray();
             
