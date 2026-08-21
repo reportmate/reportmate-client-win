@@ -450,3 +450,6 @@ osquery-temp/
 # Local git worktrees (AGENTS.md working agreement)
 .worktrees/
 
+# Agent session scratch. Caches internal-only material (boards playbook,
+# org URLs, area paths) that must never reach this public repository.
+.agents/
