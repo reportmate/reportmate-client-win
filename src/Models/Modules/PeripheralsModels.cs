@@ -394,8 +394,29 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("modelId")]
         public string? ModelId { get; set; }
 
-        [JsonPropertyName("serial")]
-        public string? Serial { get; set; }
+        /// <summary>
+        /// Full PnP device instance path, e.g. "USB\VID_056A&amp;PID_0391\0AA00A0000001".
+        /// Kept verbatim for diagnostics - this is a bus address, not an identity.
+        /// </summary>
+        [JsonPropertyName("deviceInstanceId")]
+        public string? DeviceInstanceId { get; set; }
+
+        /// <summary>
+        /// Hardware serial number, present only when the device exposes a USB
+        /// iSerialNumber descriptor. Null when Windows generated the instance id
+        /// from bus topology (see <see cref="PeripheralsModuleProcessor"/>).
+        /// Named to match the macOS client's USBDevice.serialNumber.
+        /// </summary>
+        [JsonPropertyName("serialNumber")]
+        public string? SerialNumber { get; set; }
+
+        /// <summary>
+        /// True when this node is one interface of a composite device (the path
+        /// carries "&amp;MI_nn"). The serial lives on the parent node, so consumers
+        /// must collapse children onto the parent to resolve identity.
+        /// </summary>
+        [JsonPropertyName("isCompositeChild")]
+        public bool IsCompositeChild { get; set; }
 
         [JsonPropertyName("class")]
         public string? Class { get; set; }
