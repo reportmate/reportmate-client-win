@@ -11,26 +11,33 @@ namespace ReportMate.WindowsClient.Services.Modules
 {
     /// <summary>
     /// Peripherals module processor - Full parity with macOS Swift implementation
-    /// Categories: USB, Input (keyboards/mice/trackpads/tablets), Audio, Bluetooth, 
+    /// Categories: USB, Input (keyboards/mice/trackpads/tablets), Audio, Bluetooth,
     /// Cameras, Thunderbolt, Printers, Scanners, External Storage, Serial Ports
-    /// NOTE: Displays are NOT collected here - they are part of Hardware module
+    ///
+    /// External panels appear here as well as in the Hardware module, and deliberately
+    /// so: a pen display is a peripheral whose USB nodes may carry no serial, and its
+    /// EDID is the only identity that resolves it. Both modules read that EDID through
+    /// the same <see cref="IMonitorEdidReader"/> so the serial is one string, not two.
     /// </summary>
     public class PeripheralsModuleProcessor : BaseModuleProcessor<PeripheralsModuleData>
     {
         private readonly ILogger<PeripheralsModuleProcessor> _logger;
         private readonly IOsQueryService _osQueryService;
         private readonly IWmiHelperService _wmiHelperService;
+        private readonly IMonitorEdidReader _monitorEdidReader;
 
         public override string ModuleId => "peripherals";
 
         public PeripheralsModuleProcessor(
             ILogger<PeripheralsModuleProcessor> logger,
             IOsQueryService osQueryService,
-            IWmiHelperService wmiHelperService)
+            IWmiHelperService wmiHelperService,
+            IMonitorEdidReader monitorEdidReader)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _osQueryService = osQueryService ?? throw new ArgumentNullException(nameof(osQueryService));
             _wmiHelperService = wmiHelperService ?? throw new ArgumentNullException(nameof(wmiHelperService));
+            _monitorEdidReader = monitorEdidReader ?? throw new ArgumentNullException(nameof(monitorEdidReader));
         }
 
         public override async Task<PeripheralsModuleData> ProcessModuleAsync(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, string deviceId)
@@ -209,44 +216,24 @@ namespace ReportMate.WindowsClient.Services.Modules
                     }
                 }
 
-                // Add WMI/PowerShell monitor information as supplement
-                if (await _wmiHelperService.IsWmiAvailableAsync())
-                {
-                    try
-                    {
-                        var wmiMonitors = await _wmiHelperService.QueryWmiMultipleAsync(
-                            "SELECT Name, DeviceID, ScreenWidth, ScreenHeight, Status FROM Win32_DesktopMonitor");
-                        if (wmiMonitors?.Any() == true)
-                        {
-                            foreach (var wmiMonitorRaw in wmiMonitors)
-                            {
-                                var wmiMonitor = wmiMonitorRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                                AddMonitorFromWmiOrPs(data, GetStringValue(wmiMonitor, "Name"), GetStringValue(wmiMonitor, "DeviceID"),
-                                    GetStringValue(wmiMonitor, "ScreenWidth"), GetStringValue(wmiMonitor, "ScreenHeight"), "WMI");
-                            }
-                        }
-                    }
-                    catch (Exception ex) { _logger.LogError(ex, "Failed to collect WMI monitor information"); }
-                }
-                else
-                {
-                    try
-                    {
-                        var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
-                            "Get-CimInstance Win32_DesktopMonitor | Select-Object Name, DeviceID, ScreenWidth, ScreenHeight | ConvertTo-Json -Compress");
-                        if (!string.IsNullOrWhiteSpace(psResult))
-                        {
-                            var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
-                            var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
-                            foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
-                                AddMonitorFromWmiOrPs(data, (string?)item["Name"] ?? "", (string?)item["DeviceID"] ?? "",
-                                    item["ScreenWidth"]?.ToString() ?? "", item["ScreenHeight"]?.ToString() ?? "", "PowerShell");
-                        }
-                    }
-                    catch (Exception ex) { _logger.LogWarning(ex, "PowerShell monitor fallback failed"); }
-                }
+                // Panel identity comes from EDID, never from Win32_DesktopMonitor. That
+                // class names every attached monitor "Default Monitor" or "Generic PnP
+                // Monitor" and carries no serial, so what it produced here was a row per
+                // monitor that identified nothing.
+                //
+                // This matters past monitors. A pen display is a tablet and a panel at
+                // once, and on several generations the USB nodes publish no iSerialNumber
+                // at all - their instance paths are bus addresses that change with the
+                // port. For those units the EDID serial is the only stable hardware
+                // identity the device offers, and it is the same string the USB
+                // descriptor reports on the generations that do expose one.
+                await AddMonitorsFromEdidAsync(data);
 
-                _logger.LogInformation("Processed external monitor inventory - Total: {Count}", data.Displays.ExternalMonitors?.Count ?? 0);
+                var monitorCount = data.Displays.ExternalMonitors?.Count ?? 0;
+                _logger.LogInformation(
+                    "Processed external monitor inventory - Total: {Count}, {WithSerial} carrying a serial",
+                    monitorCount,
+                    data.Displays.ExternalMonitors?.Count(m => !string.IsNullOrEmpty(m.SerialNumber)) ?? 0);
             }
             catch (Exception ex)
             {
@@ -1024,18 +1011,59 @@ namespace ReportMate.WindowsClient.Services.Modules
             });
         }
 
-        private void AddMonitorFromWmiOrPs(PeripheralsModuleData data, string name, string deviceId, string width, string height, string source)
+        /// <summary>
+        /// Add one entry per attached external panel, identified from its EDID.
+        ///
+        /// Internal panels are skipped: a laptop screen is part of the host, not a
+        /// peripheral, and reporting one creates a phantom asset that looks like a
+        /// monitor nobody can find.
+        /// </summary>
+        private async Task AddMonitorsFromEdidAsync(PeripheralsModuleData data)
         {
-            if (name.Contains("Surface", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("Built-in", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("Integrated", StringComparison.OrdinalIgnoreCase)) return;
-            data.Displays?.ExternalMonitors?.Add(new ExternalMonitor
+            foreach (var monitor in await _monitorEdidReader.ReadAsync())
             {
-                FriendlyName = name,
-                DeviceDescription = !string.IsNullOrEmpty(width) && !string.IsNullOrEmpty(height) ? $"{name} ({width}x{height})" : name,
-                HardwareId = deviceId, ConnectionType = source, IsExternal = true
-            });
+                var external = ToExternalMonitor(monitor);
+                if (external != null)
+                {
+                    data.Displays?.ExternalMonitors?.Add(external);
+                }
+            }
         }
+
+        /// <summary>
+        /// Map one panel's EDID onto a peripheral entry, or null when the panel is
+        /// internal and therefore part of the host rather than an asset of its own.
+        /// </summary>
+        public static ExternalMonitor? ToExternalMonitor(MonitorEdid monitor)
+        {
+            if (monitor.VideoOutputTechnology is { } technology && MonitorEdidReader.IsInternalVideoOutput(technology))
+            {
+                return null;
+            }
+
+            var connection = monitor.VideoOutputTechnology is { } vot
+                ? MonitorEdidReader.VideoOutputTechnologyName(vot)
+                : string.Empty;
+
+            return new ExternalMonitor
+            {
+                // EDID carries no separate model field - the friendly name is the
+                // panel's own model string ("Cintiq 22HD"), so it serves as both.
+                SerialNumber = NullIfBlank(monitor.Serial),
+                Manufacturer = string.IsNullOrEmpty(monitor.PnpCode)
+                    ? null
+                    : MonitorEdidReader.ResolveVendorName(monitor.PnpCode),
+                Model = NullIfBlank(monitor.Name),
+                FriendlyName = NullIfBlank(monitor.Name),
+                HardwareId = NullIfBlank(monitor.InstanceName),
+                DeviceDescription = NullIfBlank(monitor.Resolution),
+                ConnectionType = NullIfBlank(connection),
+                IsExternal = true
+            };
+        }
+
+        private static string? NullIfBlank(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
         private void AddExternalDriveFromDictionary(PeripheralsModuleData data, Dictionary<string, object> dict)
         {
