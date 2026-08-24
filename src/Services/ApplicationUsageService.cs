@@ -189,7 +189,7 @@ namespace ReportMate.WindowsClient.Services
                 // (see MergeUserSessionTrackerData): a failed transmission loses this
                 // window rather than replaying it. Given the server accumulates
                 // unconditionally, losing a window is far cheaper than double-counting
-                // one, and the API-side fix for that is tracked as [tracked internally].
+                // one. Making the server idempotent is tracked separately.
                 SaveWindowWatermark(windowEnd);
 
                 return snapshot;
