@@ -268,13 +268,15 @@ namespace ReportMate.WindowsClient.Services.Modules
             {
                 foreach (var usb in usbRegistry)
                 {
-                    var usbDeviceId = GetStringValue(usb, "usb_device_id");
+                    var usbDeviceId = NormalizeUsbInstanceId(GetStringValue(usb, "usb_device_id"));
                     var deviceDescription = GetStringValue(usb, "device_description");
 
                     var device = new PeripheralUsbDevice
                     {
                         Model = deviceDescription,
-                        Serial = usbDeviceId,
+                        DeviceInstanceId = usbDeviceId,
+                        SerialNumber = ExtractUsbSerialNumber(usbDeviceId),
+                        IsCompositeChild = IsUsbCompositeChild(usbDeviceId),
                         VendorId = ExtractIdFromPath(usbDeviceId, "VID_"),
                         ModelId = ExtractIdFromPath(usbDeviceId, "PID_"),
                         Class = DetermineUSBDeviceType(deviceDescription, ""),
@@ -288,9 +290,10 @@ namespace ReportMate.WindowsClient.Services.Modules
                 {
                     foreach (var hardwareId in usbHardwareIds)
                     {
-                        var usbDeviceId = GetStringValue(hardwareId, "usb_device_id");
+                        var usbDeviceId = NormalizeUsbInstanceId(GetStringValue(hardwareId, "usb_device_id"));
                         var hardwareIdValue = GetStringValue(hardwareId, "hardware_id");
-                        var matchingDevice = data.UsbDevices.ConnectedDevices.FirstOrDefault(d => d.Serial == usbDeviceId);
+                        var matchingDevice = data.UsbDevices.ConnectedDevices.FirstOrDefault(
+                            d => string.Equals(d.DeviceInstanceId, usbDeviceId, StringComparison.OrdinalIgnoreCase));
                         if (matchingDevice != null && !string.IsNullOrEmpty(hardwareIdValue))
                         {
                             matchingDevice.Vendor = hardwareIdValue;
@@ -336,7 +339,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                 catch (Exception ex) { _logger.LogWarning(ex, "PowerShell USB fallback failed"); }
             }
 
-            _logger.LogInformation("Processed USB devices - Total: {Count}", data.UsbDevices.ConnectedDevices.Count);
+            var withSerial = data.UsbDevices.ConnectedDevices.Count(d => !string.IsNullOrEmpty(d.SerialNumber));
+            var compositeChildren = data.UsbDevices.ConnectedDevices.Count(d => d.IsCompositeChild);
+            _logger.LogInformation(
+                "Processed USB devices - Total: {Count}, with hardware serial: {WithSerial}, composite children: {CompositeChildren}",
+                data.UsbDevices.ConnectedDevices.Count, withSerial, compositeChildren);
         }
 
         #endregion
@@ -1002,12 +1009,17 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         private void AddUsbDeviceFromDict(PeripheralsModuleData data, string name, string deviceId, string description)
         {
-            if (data.UsbDevices?.ConnectedDevices?.Any(d => d.Serial == deviceId) == true) return;
+            var instanceId = NormalizeUsbInstanceId(deviceId);
+            if (data.UsbDevices?.ConnectedDevices?.Any(
+                    d => string.Equals(d.DeviceInstanceId, instanceId, StringComparison.OrdinalIgnoreCase)) == true) return;
             data.UsbDevices?.ConnectedDevices?.Add(new PeripheralUsbDevice
             {
-                Model = name, Vendor = description, Serial = deviceId,
-                VendorId = ExtractIdFromPath(deviceId, "VID_"),
-                ModelId = ExtractIdFromPath(deviceId, "PID_"),
+                Model = name, Vendor = description,
+                DeviceInstanceId = instanceId,
+                SerialNumber = ExtractUsbSerialNumber(instanceId),
+                IsCompositeChild = IsUsbCompositeChild(instanceId),
+                VendorId = ExtractIdFromPath(instanceId, "VID_"),
+                ModelId = ExtractIdFromPath(instanceId, "PID_"),
                 Class = DetermineUSBDeviceType(name, ""), Removable = true
             });
         }
@@ -1354,6 +1366,73 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
             catch (Exception ex) { _logger.LogWarning(ex, "PowerShell JSON fallback failed"); }
             return results;
+        }
+
+        /// <summary>
+        /// Normalise a PnP USB identifier to its full instance path.
+        /// Win32_PnPEntity.DeviceID carries the "USB\" prefix; the osquery registry
+        /// queries strip it, because they parse the key name out of
+        /// HKLM\SYSTEM\CurrentControlSet\Enum\USB\&lt;device-id&gt;\&lt;instance-id&gt;.
+        /// Both sources describe the same node, so they have to agree on one form
+        /// before either can be matched or de-duplicated against the other.
+        /// </summary>
+        public static string NormalizeUsbInstanceId(string? deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId)) return string.Empty;
+
+            var trimmed = deviceId.Trim().Trim('\\');
+            if (trimmed.Length == 0) return string.Empty;
+
+            return trimmed.StartsWith("USB\\", StringComparison.OrdinalIgnoreCase)
+                ? trimmed
+                : "USB\\" + trimmed;
+        }
+
+        /// <summary>
+        /// True when the path belongs to one interface of a composite device, which
+        /// Windows marks with "&amp;MI_nn" and enumerates as its own node:
+        ///   USB\VID_056A&amp;PID_0358&amp;MI_02\6&amp;2E4F6A8B&amp;0&amp;0002
+        /// The Wacom driver binds to an interface child, so the node that classifies
+        /// as a Graphics Tablet is frequently the child while the serial sits on the
+        /// parent. Consumers need the flag to collapse children onto the parent
+        /// rather than reading the child's bus address as an identity.
+        /// </summary>
+        public static bool IsUsbCompositeChild(string? deviceId)
+        {
+            return !string.IsNullOrEmpty(deviceId)
+                && deviceId.Contains("&MI_", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Pull the hardware serial out of a PnP instance path, or null when the path
+        /// does not carry one.
+        ///
+        /// When a device exposes a USB iSerialNumber descriptor, Windows uses it
+        /// verbatim as the final path segment and the value is the real serial:
+        ///   USB\VID_056A&amp;PID_0391\0AA00A0000001  -&gt; 0AA00A0000001
+        ///
+        /// When it does not, Windows synthesises an instance id from the bus
+        /// topology. Those always contain '&amp;', are not serials, and are not stable
+        /// across ports, so they must not be reported as identity:
+        ///   USB\VID_056A&amp;PID_00FA\7&amp;1A2B3C4D&amp;0&amp;1    -&gt; null
+        /// </summary>
+        public static string? ExtractUsbSerialNumber(string? deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId)) return null;
+
+            var path = deviceId.Trim();
+            var lastSeparator = path.LastIndexOf('\\');
+
+            // No instance segment at all - nothing here can be claimed as a serial.
+            if (lastSeparator < 0) return null;
+
+            var instanceId = path.Substring(lastSeparator + 1).Trim();
+            if (instanceId.Length == 0) return null;
+
+            // Bus-derived instance id, not a serial.
+            if (instanceId.Contains('&')) return null;
+
+            return instanceId;
         }
 
         /// <summary>
