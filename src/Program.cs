@@ -490,6 +490,7 @@ public class Program
         services.AddScoped<IDeviceInfoService, DeviceInfoService>();
         services.AddScoped<IConfigurationService, ConfigurationService>();
         services.AddScoped<IWmiHelperService, WmiHelperService>(); // Used by Hardware, Display, Peripherals, Printer, Management, Network, Identity
+        services.AddScoped<IMonitorEdidReader, MonitorEdidReader>(); // Shared by Hardware and Peripherals - one EDID read, one serial
         
         // Register diagnostic services
         services.AddScoped<MdmDiagnosticsService>();
