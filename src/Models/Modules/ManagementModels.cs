@@ -91,18 +91,48 @@ namespace ReportMate.WindowsClient.Models.Modules
 
     // --- Policy model classes (consolidated from deprecated profiles module) ---
 
+    /// <summary>
+    /// A configuration profile. Shaped to match the macOS client's `profiles -P` output so
+    /// both platforms render through the same frontend reader: a profile carries payloads,
+    /// and each payload carries its settings verbatim.
+    /// </summary>
     public class ConfigurationProfile
     {
         public string Name { get; set; } = string.Empty;
+
+        /// <summary>Display name. The frontend reads profileName first, then displayName.</summary>
+        public string ProfileName { get; set; } = string.Empty;
+
+        /// <summary>Stable identity for the profile. On Windows this is the policy key path.</summary>
+        public string Uuid { get; set; } = string.Empty;
         public string Identifier { get; set; } = string.Empty;
         public string Source { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
+        public string Organization { get; set; } = string.Empty;
+
+        /// <summary>"Device" or "User" - matches the macOS scope distinction.</summary>
+        public string Type { get; set; } = "Device";
         public DateTime? InstallDate { get; set; }
         public DateTime? LastModified { get; set; }
         public string Status { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
+        public List<ProfilePayload> Payloads { get; set; } = new();
+        public int PayloadCount { get; set; }
         public Dictionary<string, object> Settings { get; set; } = new();
         public List<string> AppliedSettings { get; set; } = new();
+    }
+
+    /// <summary>
+    /// One payload within a configuration profile - the Windows analogue of a mobileconfig
+    /// PayloadContent dictionary. Settings holds every key under the payload, verbatim.
+    /// </summary>
+    public class ProfilePayload
+    {
+        public string Type { get; set; } = string.Empty;
+        public string Identifier { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public int Version { get; set; } = 1;
+        public Dictionary<string, object> Settings { get; set; } = new();
     }
 
     public class RegistryPolicy

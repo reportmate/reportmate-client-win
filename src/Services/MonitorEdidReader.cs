@@ -150,10 +150,10 @@ namespace ReportMate.WindowsClient.Services
                 {
                     monitors.Add(new MonitorEdid(
                         (string?)item["InstanceName"] ?? string.Empty,
-                        (string?)item["Name"] ?? string.Empty,
-                        (string?)item["Serial"] ?? string.Empty,
-                        (string?)item["Pnp"] ?? string.Empty,
-                        (string?)item["Product"] ?? string.Empty,
+                        Clean((string?)item["Name"]),
+                        Clean((string?)item["Serial"]),
+                        Clean((string?)item["Pnp"]),
+                        Clean((string?)item["Product"]),
                         (int?)item["Year"],
                         (int?)item["Week"],
                         (bool?)item["Active"] ?? true,
@@ -168,6 +168,31 @@ namespace ReportMate.WindowsClient.Services
             }
 
             return monitors;
+        }
+
+        /// <summary>
+        /// Strip the padding EDID descriptor strings carry.
+        ///
+        /// A descriptor field is a fixed 13 bytes. Vendors that use the whole field leave
+        /// it as-is, but a shorter value is terminated with 0x0A and padded - some vendors
+        /// with 0x00, others with 0x20. The decode drops the nulls, so a space-padding
+        /// vendor yields "ABC1234567  " where a null-padding one yields "ABC1234567".
+        ///
+        /// This is an identity key. The same panel arriving as two different strings
+        /// creates two assets, so normalise here, at the one point both modules read
+        /// through, rather than leaving each caller to remember.
+        /// </summary>
+        public static string Clean(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            // Control characters can appear mid-string (the 0x0A terminator), so trimming
+            // the ends is not enough on its own.
+            var stripped = new string(value.Where(c => !char.IsControl(c)).ToArray());
+            return stripped.Trim();
         }
 
         /// <summary>

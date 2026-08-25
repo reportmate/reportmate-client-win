@@ -150,6 +150,37 @@ public class MonitorEdidTests
         Assert.Null(MonitorEdidReader.DiagonalInchesFrom(width, height));
     }
 
+    // EDID descriptor fields are a fixed 13 bytes. A value shorter than that is
+    // terminated with 0x0A and padded - some vendors with 0x00, others with 0x20 - so
+    // the same panel can arrive as two different strings and become two assets.
+    [Theory]
+    [InlineData("0AA00A00001  ", "0AA00A00001")]      // space padded
+    [InlineData("0AA00A00001\n", "0AA00A00001")]      // 0x0A terminator
+    [InlineData("0AA00A00001\n  ", "0AA00A00001")]    // terminator then padding
+    [InlineData("  0AA00A00001", "0AA00A00001")]      // leading
+    [InlineData("0AA00A0000001", "0AA00A0000001")]    // exactly 13, nothing to strip
+    public void Clean_strips_edid_descriptor_padding(string raw, string expected)
+    {
+        Assert.Equal(expected, MonitorEdidReader.Clean(raw));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\n")]
+    public void Clean_reduces_an_empty_field_to_empty(string? raw)
+    {
+        Assert.Equal(string.Empty, MonitorEdidReader.Clean(raw));
+    }
+
+    // Both padding styles must land on the same string, or the panel becomes two assets.
+    [Fact]
+    public void Clean_makes_both_padding_conventions_agree()
+    {
+        Assert.Equal(MonitorEdidReader.Clean("0AA00A00001"), MonitorEdidReader.Clean("0AA00A00001  "));
+    }
+
     // Serials below are invented. A pen display's EDID serial is the identity the
     // inventory keys on, so no real one belongs in a fixture.
     private static MonitorEdid PenDisplay(
