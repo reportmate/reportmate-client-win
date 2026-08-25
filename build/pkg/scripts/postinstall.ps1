@@ -377,30 +377,57 @@ try {
     $scheduleConfig = Get-Content $scheduleConfigPath | ConvertFrom-Json
     Write-Host "Loaded module schedules configuration"
 
+    # Every interval task was pinned to the same absolute clock -- -Once -At
+    # "09:00" with an hourly repetition means every machine in the fleet fires
+    # on the hour, together. Measured over 24h, 82% of the estate's check-ins
+    # landed in the first 15 minutes of every hour and the peak five-minute
+    # bucket ran ~25x baseline, which is what pushes uploads past the ingress
+    # and gets them recorded as aborted. The API cannot absorb that shape: a
+    # 60-second burst is over before a second replica is warm.
+    #
+    # RandomDelay is the same fix the all-modules task has always carried, and
+    # its comment already states the principle -- it simply was never applied
+    # to the other three. Each device draws its own offset, so the fleet
+    # spreads across the window instead of arriving in one minute, and the two
+    # tiers that share a 4-hour mark stop starting a collection on the same
+    # machine at the same instant.
+    function Get-ReportMateRandomDelay {
+        param($Schedule, [int]$DefaultMinutes)
+        $minutes = if ($null -ne $Schedule -and $null -ne $Schedule.random_delay_minutes) {
+            [int]$Schedule.random_delay_minutes
+        } else {
+            $DefaultMinutes
+        }
+        return (New-TimeSpan -Minutes $minutes)
+    }
+
     $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
     
     # Create hourly collection task
     Write-Host "Creating hourly collection task..."
     $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.hourly.modules -join ',')" -WorkingDirectory $InstallPath
-    $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 1)
+    $hourlyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.hourly 55
+    $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay $hourlyDelay
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable -Hidden -AllowStartIfOnBatteries
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     
-    Register-ScheduledTask -TaskName "ReportMate Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits security-critical device data every hour" -Force
+    Register-ScheduledTask -TaskName "ReportMate Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits security-critical device data hourly, at a per-device random offset within the hour" -Force
     
     # Create 4-hourly collection task  
     Write-Host "Creating 4-hourly collection task..."
     $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.every4hours.modules -join ',')" -WorkingDirectory $InstallPath
-    $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 4)
+    $fourHourlyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.every4hours 55
+    $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 4) -RandomDelay $fourHourlyDelay
     
-    Register-ScheduledTask -TaskName "ReportMate 4-Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits moderately changing device data every 4 hours" -Force
+    Register-ScheduledTask -TaskName "ReportMate 4-Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits moderately changing device data every 4 hours, at a per-device random offset" -Force
     
     # Create daily collection task
     Write-Host "Creating daily collection task..."
     $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.daily.modules -join ',')" -WorkingDirectory $InstallPath
-    $trigger = New-ScheduledTaskTrigger -Daily -At "09:00"
+    $dailyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.daily 120
+    $trigger = New-ScheduledTaskTrigger -Daily -At "09:00" -RandomDelay $dailyDelay
     
-    Register-ScheduledTask -TaskName "ReportMate Daily Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits static device data once daily" -Force
+    Register-ScheduledTask -TaskName "ReportMate Daily Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits static device data once daily, at a per-device random offset within 2 hours of 09:00" -Force
     
     # Create all modules collection task (if configured)
     if ($scheduleConfig.schedules.all) {
