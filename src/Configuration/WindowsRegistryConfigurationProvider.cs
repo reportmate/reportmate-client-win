@@ -66,6 +66,11 @@ public class WindowsRegistryConfigurationProvider : ConfigurationProvider
                 { "SkipCertificateValidation", "ReportMate:SkipCertificateValidation" },
                 { "MaxRetryAttempts", "ReportMate:MaxRetryAttempts" },
                 { "ApiTimeoutSeconds", "ReportMate:ApiTimeoutSeconds" },
+                // Kill switch for request-side gzip. Set to "false" by policy
+                // to put a machine back on uncompressed check-ins without a
+                // client rebuild; the client also falls back on its own if the
+                // server answers a compressed body with 400.
+                { "CompressPayload", "ReportMate:CompressPayload" },
                 { "CimianIntegrationEnabled", "ReportMate:CimianIntegrationEnabled" },
                 
                 // CSP/OMA-URI specific settings

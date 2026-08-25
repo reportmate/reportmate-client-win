@@ -4,17 +4,20 @@
       "modules": ["security", "network", "management", "identity", "hardware"],
       "args": "--storage-mode quick",
       "interval_minutes": 60,
+      "random_delay_minutes": 55,
       "description": "Security/identity monitoring + quick hardware snapshot (drive totals only)"
     },
     "every4hours": {
       "modules": ["applications", "inventory", "system", "peripherals"],
       "interval_minutes": 240,
+      "random_delay_minutes": 55,
       "description": "Modules that change moderately - software, device info, and peripheral devices"
     },
     "daily": {
       "modules": ["hardware"],
       "args": "--storage-mode deep",
       "interval_minutes": 1440,
+      "random_delay_minutes": 120,
       "description": "Full hardware deep-scan including directory-level storage analysis"
     },
     "all": {
@@ -37,6 +40,6 @@
     "stop_if_going_on_batteries": false,
     "disallow_start_if_on_batteries": false
   },
-  "version": "1.1.0",
-  "updated": "2025-08-10T00:00:00Z"
+  "version": "1.2.0",
+  "updated": "2026-08-25T00:00:00Z"
 }
