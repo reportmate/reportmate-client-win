@@ -70,14 +70,13 @@ namespace ReportMate.WindowsClient.Services.Modules
             ProcessAutopilotConfig(data);
 
             // --- Policy & configuration collection (consolidated from deprecated profiles module) ---
-            ProcessGroupPolicySettings(osqueryResults, data);
+            ProcessPolicyRegistry(osqueryResults, data);
             ProcessMDMConfigurations(osqueryResults, data);
             ProcessIntunePolicies(osqueryResults, data);
             await CollectMDMPoliciesViaPowerShellAsync(data);
             ProcessOMAURISettings(osqueryResults, data);
             ProcessSecurityPolicies(osqueryResults, data);
             ProcessCompliancePolicies(osqueryResults, data);
-            ProcessBrowserPolicies(osqueryResults, data);
             ProcessOfficePolicies(osqueryResults, data);
 
             // Populate settingCount on legacy MdmProfile objects from IntunePolicies
@@ -1370,27 +1369,32 @@ $apps -join '|'
         // Policy & Configuration Collection (consolidated from profiles module)
         // =====================================================================
 
-        private void ProcessGroupPolicySettings(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        /// <summary>
+        /// Policy roots swept generically. Adding vendor coverage means adding a registry root
+        /// here, never a per-product query.
+        /// </summary>
+        private static readonly PolicyRegistryGrouping.PolicyRoot[] PolicyRegistryRoots =
         {
-            if (!osqueryResults.TryGetValue("group_policy_registry", out var gpResults)) return;
+            new("policy_registry_machine",         "Group Policy", "Device"),
+            new("policy_registry_machine_wow6432", "Group Policy", "Device"),
+            new("policy_registry_mdm_current",     "MDM",          "Device"),
+        };
 
-            foreach (var result in gpResults)
-            {
-                var registryPolicy = new RegistryPolicy
-                {
-                    KeyPath = result.GetValueOrDefault("path", "").ToString() ?? "",
-                    ValueName = result.GetValueOrDefault("name", "").ToString() ?? "",
-                    Value = result.GetValueOrDefault("data", "").ToString() ?? "",
-                    Type = result.GetValueOrDefault("type", "").ToString() ?? "",
-                    Source = "Group Policy",
-                    Category = ExtractPolicyCategory(result.GetValueOrDefault("path", "").ToString() ?? ""),
-                    LastModified = DateTime.UtcNow
-                };
+        /// <summary>
+        /// Collects every policy value under every policy root, grouped the way the macOS client
+        /// groups mobileconfig profiles. Grouping lives in PolicyRegistryGrouping so it can be
+        /// exercised directly by tests.
+        /// </summary>
+        private void ProcessPolicyRegistry(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
+        {
+            var grouped = PolicyRegistryGrouping.Group(PolicyRegistryRoots, osqueryResults, DateTime.UtcNow);
 
-                data.RegistryPolicies.Add(registryPolicy);
-            }
+            data.RegistryPolicies.AddRange(grouped.RegistryPolicies);
+            data.ConfigurationProfiles.AddRange(grouped.ConfigurationProfiles);
 
-            _logger.LogDebug("Processed {Count} Group Policy registry settings", gpResults.Count);
+            _logger.LogInformation(
+                "Collected {ValueCount} policy values across {ProfileCount} policy branches",
+                grouped.RegistryPolicies.Count, grouped.ConfigurationProfiles.Count);
         }
 
         private void ProcessMDMConfigurations(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
@@ -1801,38 +1805,6 @@ $policies | ConvertTo-Json -Depth 3 -Compress
             _logger.LogDebug("Processed {Count} compliance policies", results.Count);
         }
 
-        private void ProcessBrowserPolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
-        {
-            var browserQueries = new[] { "edge_browser_policies", "chrome_browser_policies" };
-
-            foreach (var queryName in browserQueries)
-            {
-                if (!osqueryResults.TryGetValue(queryName, out var results)) continue;
-
-                foreach (var result in results)
-                {
-                    var configProfile = new ConfigurationProfile
-                    {
-                        Name = result.GetValueOrDefault("name", "").ToString() ?? "",
-                        Source = queryName.Contains("edge") ? "Microsoft Edge" : "Google Chrome",
-                        Category = "Browser Policy",
-                        InstallDate = DateTime.UtcNow,
-                        Status = "Applied",
-                        Settings = new Dictionary<string, object>
-                        {
-                            ["RegistryPath"] = result.GetValueOrDefault("path", "").ToString() ?? "",
-                            ["Value"] = result.GetValueOrDefault("data", "").ToString() ?? "",
-                            ["Type"] = result.GetValueOrDefault("type", "").ToString() ?? ""
-                        }
-                    };
-
-                    data.ConfigurationProfiles.Add(configProfile);
-                }
-
-                _logger.LogDebug("Processed {Count} browser policies from {QueryName}", results.Count, queryName);
-            }
-        }
-
         private void ProcessOfficePolicies(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, ManagementData data)
         {
             if (!osqueryResults.TryGetValue("office_policies", out var results)) return;
@@ -2084,17 +2056,7 @@ $policies | ConvertTo-Json -Depth 3 -Compress
         // =====================================================================
 
         private string ExtractPolicyCategory(string path)
-        {
-            if (path.Contains("\\Policies\\Microsoft\\Windows Defender\\")) return "Windows Defender";
-            if (path.Contains("\\Policies\\Microsoft\\WindowsFirewall\\")) return "Windows Firewall";
-            if (path.Contains("\\Policies\\Microsoft\\Windows\\WindowsUpdate\\")) return "Windows Update";
-            if (path.Contains("\\Policies\\Microsoft\\FVE\\")) return "BitLocker";
-            if (path.Contains("\\Policies\\Microsoft\\Edge\\")) return "Microsoft Edge";
-            if (path.Contains("\\Policies\\Google\\Chrome\\")) return "Google Chrome";
-            if (path.Contains("\\Policies\\Microsoft\\Office\\")) return "Microsoft Office";
-            if (path.Contains("\\PolicyManager\\")) return "MDM";
-            return "General";
-        }
+            => PolicyRegistryGrouping.ExtractPolicyCategory(path);
 
         private string ExtractProviderName(string path)
         {
