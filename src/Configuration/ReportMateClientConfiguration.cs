@@ -58,6 +58,11 @@ public class ReportMateClientConfiguration
     public int MaxRetryAttempts { get; set; } = 3;
 
     /// <summary>
+    /// Gzip the check-in body before sending (default: true)
+    /// </summary>
+    public bool CompressPayload { get; set; } = true;
+
+    /// <summary>
     /// Enable debug logging
     /// </summary>
     public bool DebugLogging { get; set; } = false;
