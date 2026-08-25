@@ -1281,13 +1281,10 @@ public class Program
                 return 1;
             }
             
-            // Create unified payloads for successful modules
-            var unifiedPayloads = new List<UnifiedDevicePayload>();
-            foreach (var moduleData in results)
-            {
-                var unifiedPayload = await modularService.CreateSingleModuleUnifiedPayloadAsync(moduleData);
-                unifiedPayloads.Add(unifiedPayload);
-            }
+            // One payload for the whole run, not one per module. A scheduled
+            // sweep of five modules previously became five HTTP requests, five
+            // full metadata envelopes and five identical system_info queries.
+            var unifiedPayload = await modularService.CreateUnifiedPayloadAsync(results);
             
             if (verbose > 0)
             {
@@ -1344,58 +1341,45 @@ public class Program
                 }
                 
                 var apiService = _serviceProvider!.GetRequiredService<IApiService>();
-                int successCount = 0;
+                var moduleSummary = string.Join(", ", results.Select(r => r.ModuleId));
                 
-                for (int i = 0; i < unifiedPayloads.Count; i++)
+                try
                 {
-                    var payload = unifiedPayloads[i];
-                    var moduleId = results[i].ModuleId;
+                    var transmissionResult = await apiService.SendUnifiedPayloadAsync(unifiedPayload);
                     
-                    try
-                    {
-                        var transmissionResult = await apiService.SendUnifiedPayloadAsync(payload);
-                        
-                        if (transmissionResult)
-                        {
-                            successCount++;
-                            if (verbose > 0)
-                            {
-                                Logger.Info("✅ Successfully transmitted data for module: {0}", moduleId);
-                            }
-                        }
-                        else
-                        {
-                            if (verbose > 0)
-                            {
-                                Logger.Error("❌ Failed to transmit data for module: {0}", moduleId);
-                            }
-                        }
-                    }
-                    catch (Exception ex)
+                    if (transmissionResult)
                     {
                         if (verbose > 0)
                         {
-                            Logger.Error("❌ Transmission error for module {0}: {1}", moduleId, ex.Message);
+                            Logger.Info("✅ Successfully transmitted {0} module(s) in one submission: {1}", results.Count, moduleSummary);
+                            Logger.Info("DASHBOARD: Check your ReportMate dashboard for updated module data");
                         }
-                        _logger!.LogError(ex, "Error during transmission for module: {ModuleId}", moduleId);
+                        _logger!.LogInformation("Transmitted {ModuleCount} module(s) in one submission: {Modules}", results.Count, moduleSummary);
+                        return 0;
                     }
+                    
+                    // The run is now all-or-nothing rather than partially
+                    // delivered. That is the correct trade: a partial sweep left
+                    // the device's modules at inconsistent collection times, and
+                    // --transmit-only replays the cached payload whole.
+                    if (verbose > 0)
+                    {
+                        Logger.Error("❌ Failed to transmit module data: {0}", moduleSummary);
+                        Logger.Info("TIP: Use --transmit-only later to retry the cached payload");
+                    }
+                    _logger!.LogError("Failed to transmit unified payload for modules: {Modules}", moduleSummary);
+                    return 1;
                 }
-                
-                if (verbose > 0)
+                catch (Exception ex)
                 {
-                    if (successCount == unifiedPayloads.Count)
+                    if (verbose > 0)
                     {
-                        Logger.Info("✅ All transmissions completed successfully ({0}/{1})", successCount, unifiedPayloads.Count);
-                        Logger.Info("DASHBOARD: Check your ReportMate dashboard for updated module data");
+                        Logger.Error("❌ Transmission error for modules {0}: {1}", moduleSummary, ex.Message);
+                        Logger.Info("TIP: Use --transmit-only later to retry the cached payload");
                     }
-                    else
-                    {
-                        Logger.Warning("⚠️  Partial success: {0}/{1} transmissions completed", successCount, unifiedPayloads.Count);
-                        Logger.Info("TIP: Use --transmit-only later to retry failed transmissions");
-                    }
+                    _logger!.LogError(ex, "Error during transmission for modules: {Modules}", moduleSummary);
+                    return 1;
                 }
-                
-                return successCount == unifiedPayloads.Count ? 0 : 1;
             }
             else
             {
