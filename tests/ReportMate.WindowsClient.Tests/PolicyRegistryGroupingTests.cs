@@ -28,6 +28,7 @@ namespace ReportMate.WindowsClient.Tests
             new("policy_registry_machine",         "Group Policy", "Device"),
             new("policy_registry_machine_wow6432", "Group Policy", "Device"),
             new("policy_registry_mdm_current",     "MDM",          "Device"),
+            new("policy_registry_user",            "Group Policy", "User"),
         };
 
         private static Dictionary<string, object> Row(string path, string name, string data, string type = "REG_DWORD")
@@ -36,13 +37,15 @@ namespace ReportMate.WindowsClient.Tests
         private static PolicyRegistryGrouping.Result GroupFixture(
             IEnumerable<Dictionary<string, object>>? machine = null,
             IEnumerable<Dictionary<string, object>>? wow = null,
-            IEnumerable<Dictionary<string, object>>? mdm = null)
+            IEnumerable<Dictionary<string, object>>? mdm = null,
+            IEnumerable<Dictionary<string, object>>? user = null)
         {
             var results = new Dictionary<string, List<Dictionary<string, object>>>
             {
                 ["policy_registry_machine"] = (machine ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
                 ["policy_registry_machine_wow6432"] = (wow ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
                 ["policy_registry_mdm_current"] = (mdm ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
+                ["policy_registry_user"] = (user ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
             };
             return PolicyRegistryGrouping.Group(Roots, results, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         }
@@ -157,6 +160,57 @@ namespace ReportMate.WindowsClient.Tests
 
             Assert.Empty(result.ConfigurationProfiles);
             Assert.Empty(result.RegistryPolicies);
+        }
+
+        [Fact]
+        public void User_scope_policies_are_collected_and_marked_as_user_scope()
+        {
+            // The agent runs as SYSTEM, where HKEY_CURRENT_USER resolves to S-1-5-18's own hive,
+            // so user policy is only reachable through HKEY_USERS. Verified against a planted
+            // probe value on a real endpoint before this path was written.
+            const string sid = "S-1-5-21-3988616498-1384486608-2171474746-1001";
+            var result = GroupFixture(user: new[]
+            {
+                Row($@"HKEY_USERS\{sid}\SOFTWARE\Policies\Microsoft\Windows\Network Connections\NC_ShowSharedAccessUI", "NC_ShowSharedAccessUI", "0"),
+            });
+
+            var profile = Assert.Single(result.ConfigurationProfiles);
+            Assert.Equal("User", profile.Type);
+            Assert.Contains(sid, profile.Description);
+            Assert.Equal("Microsoft", profile.Organization);
+            Assert.Equal("0", profile.Payloads.Single().Settings["NC_ShowSharedAccessUI"]);
+        }
+
+        [Fact]
+        public void The_default_hive_and_the_system_sid_are_one_hive_not_two()
+        {
+            // HKU\.DEFAULT and HKU\S-1-5-18 alias the same hive. A probe planted once under
+            // .DEFAULT came back through both names; without folding them together every such
+            // policy reports twice.
+            var result = GroupFixture(user: new[]
+            {
+                Row(@"HKEY_USERS\.DEFAULT\SOFTWARE\Policies\Contoso\App\Setting", "Setting", "1"),
+                Row(@"HKEY_USERS\S-1-5-18\SOFTWARE\Policies\Contoso\App\Setting", "Setting", "1"),
+            });
+
+            Assert.Single(result.ConfigurationProfiles);
+            Assert.Single(result.RegistryPolicies);
+            Assert.Contains("S-1-5-18", result.ConfigurationProfiles[0].Description);
+        }
+
+        [Fact]
+        public void Machine_and_user_copies_of_the_same_policy_stay_separate()
+        {
+            // Same product, both scopes. These are genuinely different settings and must not
+            // collapse into one another the way the WOW6432Node duplicate does.
+            var result = GroupFixture(
+                machine: new[] { Row($@"{Hklm}\SOFTWARE\Policies\Google\Chrome\HomepageLocation", "HomepageLocation", "https://machine.example", "REG_SZ") },
+                user: new[] { Row(@"HKEY_USERS\S-1-5-21-1-2-3-1001\SOFTWARE\Policies\Google\Chrome\HomepageLocation", "HomepageLocation", "https://user.example", "REG_SZ") });
+
+            Assert.Equal(2, result.ConfigurationProfiles.Count);
+            Assert.Equal(2, result.RegistryPolicies.Count);
+            Assert.Equal(new[] { "Device", "User" },
+                result.ConfigurationProfiles.Select(p => p.Type).OrderBy(t => t));
         }
     }
 }

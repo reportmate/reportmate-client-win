@@ -91,6 +91,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                             Category = category,
                             Type = root.Scope,
                             Status = "Applied",
+                            Description = IsUserHive(branchPath)
+                                ? "User hive " + GetUserHiveSid(branchPath)
+                                : "",
                             InstallDate = collectedAt,
                             LastModified = collectedAt,
                             Payloads =
@@ -136,7 +139,28 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// both does not report as two separate profiles.
         /// </summary>
         public static string NormalisePolicyPath(string path)
-            => path.Replace("\\SOFTWARE\\WOW6432Node\\", "\\SOFTWARE\\", StringComparison.OrdinalIgnoreCase);
+        {
+            // HKU\.DEFAULT and HKU\S-1-5-18 are two names for the same hive; without this they
+            // report as two profiles holding identical settings.
+            path = path.Replace("HKEY_USERS\\.DEFAULT\\", "HKEY_USERS\\S-1-5-18\\", StringComparison.OrdinalIgnoreCase);
+            return path.Replace("\\SOFTWARE\\WOW6432Node\\", "\\SOFTWARE\\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>True when the value lives in a loaded user hive rather than machine scope.</summary>
+        public static bool IsUserHive(string path)
+            => path.StartsWith("HKEY_USERS\\", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The hive a user-scope value belongs to. Returns the SID as written; callers get
+        /// S-1-5-18 for the SYSTEM/default hive because NormalisePolicyPath folds .DEFAULT onto it.
+        /// </summary>
+        public static string GetUserHiveSid(string path)
+        {
+            if (!IsUserHive(path)) return "";
+            var rest = path.Substring("HKEY_USERS\\".Length);
+            var i = rest.IndexOf('\\');
+            return i > 0 ? rest.Substring(0, i) : rest;
+        }
 
         /// <summary>Branch name relative to its policy root, e.g. Google\Chrome.</summary>
         public static string GetPolicyBranchName(string branchPath)

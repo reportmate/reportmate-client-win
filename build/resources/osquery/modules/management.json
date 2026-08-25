@@ -87,6 +87,11 @@
       "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\%%' AND data != '';",
       "interval": 3600,
       "description": "All applied MDM/CSP policy values. Scoped to 'current' deliberately: the full PolicyManager tree is the CSP schema plus provider defaults, ~23k values / 6MB per device, and is not device state"
+    },
+    "policy_registry_user": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Policies\\%%' AND data != '';",
+      "interval": 3600,
+      "description": "All user-scope policy values across every loaded user hive. HKEY_CURRENT_USER is useless here - the agent runs as SYSTEM, so HKCU resolves to S-1-5-18's own hive - so user policy must be read through HKEY_USERS. Verified from the SYSTEM context against a planted probe value"
     }
   }
 }
