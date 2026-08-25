@@ -92,6 +92,21 @@
       "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Policies\\%%' AND data != '';",
       "interval": 3600,
       "description": "All user-scope policy values across every loaded user hive. HKEY_CURRENT_USER is useless here - the agent runs as SYSTEM, so HKCU resolves to S-1-5-18's own hive - so user policy must be read through HKEY_USERS. Verified from the SYSTEM context against a planted probe value"
+    },
+    "policy_registry_system": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\%%' AND data != '';",
+      "interval": 3600,
+      "description": "Machine system policy: UAC, Explorer restrictions, attachment handling and the rest of the CurrentVersion\\Policies branch. Not reachable from SOFTWARE\\Policies, so a sweep of that root alone misses all of it"
+    },
+    "policy_registry_system_control": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Policies\\%%' AND data != '';",
+      "interval": 3600,
+      "description": "Machine system policy held under the control set rather than under SOFTWARE"
+    },
+    "policy_registry_user_system": {
+      "query": "SELECT path, name, type, data FROM registry WHERE path LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\%%' AND data != '';",
+      "interval": 3600,
+      "description": "The user-hive counterpart of the system policy branch, across every loaded hive"
     }
   }
 }
