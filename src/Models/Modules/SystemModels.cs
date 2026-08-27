@@ -72,6 +72,28 @@ namespace ReportMate.WindowsClient.Models.Modules
         
         [JsonPropertyOrder(16)]
         public ActivationInfo? Activation { get; set; }
+
+        /// <summary>
+        /// When the most recent in-place upgrade ran, from the newest
+        /// HKLM\SYSTEM\Setup\"Source OS (Updated on &lt;date&gt;)" subkey, or null when
+        /// the machine carries none.
+        ///
+        /// InstallDate alone cannot say whether it moved because the machine was wiped
+        /// or because a feature update ran over it. A clean install writes a fresh
+        /// registry and so has no Source OS marker at all; an in-place upgrade writes
+        /// one stamped with the date it ran. A marker sitting at the install date is
+        /// therefore direct evidence the install date belongs to an upgrade.
+        /// </summary>
+        [JsonPropertyOrder(17)]
+        public DateTime? LastInPlaceUpgrade { get; set; }
+
+        /// <summary>
+        /// How many Source OS markers the machine carries - one per in-place upgrade
+        /// since the last clean install. Zero is the signal that matters most: it means
+        /// this OS has never been upgraded over, so its install date is an install.
+        /// </summary>
+        [JsonPropertyOrder(18)]
+        public int InPlaceUpgradeCount { get; set; }
     }
 
     public class ActivationInfo
