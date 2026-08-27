@@ -69,6 +69,11 @@
       "interval": 3600,
       "description": "Windows install date from registry"
     },
+    "source_os_markers": {
+      "query": "SELECT name, path, type FROM registry WHERE key = 'HKEY_LOCAL_MACHINE\\SYSTEM\\Setup' AND name LIKE 'Source OS%';",
+      "interval": 3600,
+      "description": "In-place upgrade markers. Windows writes a 'Source OS (Updated on <date>)' subkey under HKLM\\SYSTEM\\Setup for each in-place upgrade, holding the OS it replaced; a clean install writes a fresh registry and carries none. This is what separates an install date that moved because of a feature update from one that moved because the machine was wiped."
+    },
     "locale_info": {
       "query": "SELECT name, type, data FROM registry WHERE path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Language\\Default' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation\\TimeZoneKeyName' OR path = 'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\Locale\\InstallLanguage' OR path = 'HKEY_CURRENT_USER\\Control Panel\\International\\LocaleName' OR path = 'HKEY_CURRENT_USER\\Control Panel\\International\\sLanguage';",
       "interval": 3600,
