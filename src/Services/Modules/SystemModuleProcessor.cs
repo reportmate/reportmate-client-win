@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -103,6 +104,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                 {
                     data.OperatingSystem.InstallDate = DateTimeOffset.FromUnixTimeSeconds(installDateUnix).DateTime;
                 }
+            }
+
+            // Process in-place upgrade markers
+            if (osqueryResults.TryGetValue("source_os_markers", out var sourceOsMarkers))
+            {
+                ProcessSourceOsMarkers(data, sourceOsMarkers);
             }
 
             // Process display version from registry
@@ -1055,6 +1062,26 @@ Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmware
             }
 
             return Task.FromResult(events);
+        }
+
+        /// <summary>
+        /// Record whether this OS has been upgraded over, and when it last was.
+        /// Parsing lives in SourceOsMarkers so it can be tested against the key names
+        /// real machines carry.
+        /// </summary>
+        private void ProcessSourceOsMarkers(SystemData data, List<Dictionary<string, object>> markers)
+        {
+            var result = SourceOsMarkers.Parse(markers);
+
+            data.OperatingSystem.InPlaceUpgradeCount = result.Count;
+            data.OperatingSystem.LastInPlaceUpgrade = result.Newest;
+
+            if (result.Count > 0)
+            {
+                _logger.LogDebug(
+                    "{Count} in-place upgrade marker(s), newest {Newest}, {Undated} undated",
+                    result.Count, result.Newest?.ToString("o") ?? "none", result.Undated);
+            }
         }
 
         /// <summary>
