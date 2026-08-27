@@ -504,11 +504,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                             (deviceId.StartsWith("BTHENUM", StringComparison.OrdinalIgnoreCase) || lower.Contains("bluetooth")) ? "Bluetooth" :
                             (deviceId.StartsWith("USB", StringComparison.OrdinalIgnoreCase) || deviceId.StartsWith("HID", StringComparison.OrdinalIgnoreCase)) ? "USB" :
                             isBuiltIn ? "Built-in" : "Unknown";
+                        // The PnP Manufacturer for an input device is usually the driver
+                        // package's publisher -- "(Standard keyboards)", "Microsoft" --
+                        // which names nobody. Prefer the vendor the hardware id declares.
+                        var inputVendorId = ExtractIdFromPath(deviceId, "VID_");
                         var dev = new InputDevice
                         {
                             Name = name,
                             Description = name,
-                            Vendor = GetStringValue(row, "Manufacturer"),
+                            Vendor = ResolveUsbVendor(inputVendorId, GetStringValue(row, "Manufacturer")),
+                            VendorId = inputVendorId,
                             HidDeviceId = deviceId,
                             IsBuiltIn = isBuiltIn,
                             ConnectionType = connectionType
