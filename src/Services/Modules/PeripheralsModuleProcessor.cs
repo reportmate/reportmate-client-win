@@ -258,13 +258,17 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var usbDeviceId = NormalizeUsbInstanceId(GetStringValue(usb, "usb_device_id"));
                     var deviceDescription = GetStringValue(usb, "device_description");
 
+                    var vendorId = ExtractIdFromPath(usbDeviceId, "VID_");
+
                     var device = new PeripheralUsbDevice
                     {
+                        Name = deviceDescription,
                         Model = deviceDescription,
+                        Vendor = ResolveUsbVendor(vendorId),
                         DeviceInstanceId = usbDeviceId,
                         SerialNumber = ExtractUsbSerialNumber(usbDeviceId),
                         IsCompositeChild = IsUsbCompositeChild(usbDeviceId),
-                        VendorId = ExtractIdFromPath(usbDeviceId, "VID_"),
+                        VendorId = vendorId,
                         ModelId = ExtractIdFromPath(usbDeviceId, "PID_"),
                         Class = DetermineUSBDeviceType(deviceDescription, ""),
                         Removable = true
@@ -272,7 +276,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                     data.UsbDevices.ConnectedDevices.Add(device);
                 }
 
-                // Enrich with hardware IDs
+                // Enrich with hardware IDs. A hardware id is a match string
+                // ("USB\VID_056A&PID_0391&REV_0100"), not a vendor name -- it used to be
+                // assigned straight to Vendor, which is why the UI rendered bus paths in
+                // the vendor row. Use it only to backfill the VID/PID when the device's
+                // own instance path did not carry them.
                 if (osqueryResults.TryGetValue("usb_device_hardware_ids", out var usbHardwareIds))
                 {
                     foreach (var hardwareId in usbHardwareIds)
@@ -281,10 +289,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                         var hardwareIdValue = GetStringValue(hardwareId, "hardware_id");
                         var matchingDevice = data.UsbDevices.ConnectedDevices.FirstOrDefault(
                             d => string.Equals(d.DeviceInstanceId, usbDeviceId, StringComparison.OrdinalIgnoreCase));
-                        if (matchingDevice != null && !string.IsNullOrEmpty(hardwareIdValue))
-                        {
-                            matchingDevice.Vendor = hardwareIdValue;
-                        }
+                        if (matchingDevice == null || string.IsNullOrEmpty(hardwareIdValue)) continue;
+
+                        if (string.IsNullOrEmpty(matchingDevice.VendorId))
+                            matchingDevice.VendorId = ExtractIdFromPath(hardwareIdValue, "VID_");
+                        if (string.IsNullOrEmpty(matchingDevice.ModelId))
+                            matchingDevice.ModelId = ExtractIdFromPath(hardwareIdValue, "PID_");
+                        if (string.IsNullOrEmpty(matchingDevice.Vendor))
+                            matchingDevice.Vendor = ResolveUsbVendor(matchingDevice.VendorId);
                     }
                 }
             }
@@ -295,13 +307,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                 try
                 {
                     var wmiUsbDevices = await _wmiHelperService.QueryWmiMultipleAsync(
-                        "SELECT Name, DeviceID, Description, Status FROM Win32_PnPEntity WHERE DeviceID LIKE 'USB%'");
+                        "SELECT Name, DeviceID, Description, Manufacturer, Status FROM Win32_PnPEntity WHERE DeviceID LIKE 'USB%'");
                     if (wmiUsbDevices?.Any() == true)
                     {
                         foreach (var wmiUsbRaw in wmiUsbDevices)
                         {
                             var wmiUsb = wmiUsbRaw.ToDictionary(kvp => kvp.Key, kvp => kvp.Value ?? "");
-                            AddUsbDeviceFromDict(data, GetStringValue(wmiUsb, "Name"), GetStringValue(wmiUsb, "DeviceID"), GetStringValue(wmiUsb, "Description"));
+                            AddUsbDeviceFromDict(data, GetStringValue(wmiUsb, "Name"), GetStringValue(wmiUsb, "DeviceID"),
+                                GetStringValue(wmiUsb, "Description"), GetStringValue(wmiUsb, "Manufacturer"));
                         }
                     }
                 }
@@ -313,13 +326,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                 try
                 {
                     var psResult = await _wmiHelperService.ExecutePowerShellCommandAsync(
-                        "Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -like 'USB*' } | Select-Object Name, DeviceID, Description | ConvertTo-Json -Compress");
+                        "Get-CimInstance Win32_PnPEntity | Where-Object { $_.DeviceID -like 'USB*' } | Select-Object Name, DeviceID, Description, Manufacturer | ConvertTo-Json -Compress");
                     if (!string.IsNullOrWhiteSpace(psResult))
                     {
                         var json = Newtonsoft.Json.JsonConvert.DeserializeObject(psResult);
                         var items = json is Newtonsoft.Json.Linq.JArray arr ? arr : json != null ? new Newtonsoft.Json.Linq.JArray(json) : new Newtonsoft.Json.Linq.JArray();
                         foreach (var item in items.OfType<Newtonsoft.Json.Linq.JObject>())
-                            AddUsbDeviceFromDict(data, (string?)item["Name"] ?? "", (string?)item["DeviceID"] ?? "", (string?)item["Description"] ?? "");
+                            AddUsbDeviceFromDict(data, (string?)item["Name"] ?? "", (string?)item["DeviceID"] ?? "",
+                                (string?)item["Description"] ?? "", (string?)item["Manufacturer"] ?? "");
                         _logger.LogDebug("PowerShell fallback collected {Count} USB devices", items.Count);
                     }
                 }
@@ -416,7 +430,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
-            // Process graphics tablets (Wacom, Huion, XP-Pen)
+            // Process graphics tablets (Wacom, Huion, XP-Pen) from the HID subtree.
             if (osqueryResults.TryGetValue("input_devices_tablets", out var tablets))
             {
                 foreach (var tablet in tablets)
@@ -424,31 +438,25 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var description = GetStringValue(tablet, "device_description");
                     var hidDeviceId = GetStringValue(tablet, "hid_device_id");
 
-                    // Determine vendor from description
-                    var vendor = "";
-                    var tabletType = "Graphics Tablet";
-                    var lowerDesc = description.ToLowerInvariant();
-
-                    if (lowerDesc.Contains("wacom")) vendor = "Wacom";
-                    else if (lowerDesc.Contains("huion")) vendor = "Huion";
-                    else if (lowerDesc.Contains("xp-pen")) vendor = "XP-Pen";
-
-                    if (lowerDesc.Contains("cintiq") || lowerDesc.Contains("display"))
-                        tabletType = "Pen Display";
-                    else if (lowerDesc.Contains("intuos") || lowerDesc.Contains("bamboo"))
-                        tabletType = "Pen Tablet";
-
-                    data.InputDevices.Tablets.Add(new GraphicsTablet
-                    {
-                        Name = description,
-                        Vendor = vendor,
-                        VendorId = ExtractIdFromPath(hidDeviceId, "VID_"),
-                        ProductId = ExtractIdFromPath(hidDeviceId, "PID_"),
-                        ConnectionType = "USB",
-                        TabletType = tabletType,
-                        DeviceType = "Graphics Tablet"
-                    });
+                    AddGraphicsTabletIfNew(data, description,
+                        ExtractIdFromPath(hidDeviceId, "VID_"),
+                        ExtractIdFromPath(hidDeviceId, "PID_"));
                 }
+            }
+
+            // ...and from the USB subtree, which is where the vendor name actually lives.
+            //
+            // The HID query above matches on the HID node's DeviceDesc containing a
+            // vendor or model name. A pen display's HID children are named for their
+            // HID function -- "HID-compliant pen", "USB Input Device" -- and carry no
+            // vendor string at all, so that query returns nothing and a Cintiq reports
+            // zero input devices while sitting in the USB list as an unnamed device.
+            // The parent USB node is the one Windows names "Wacom Tablet". This mirrors
+            // what the macOS client already does in collectGraphicsTablets().
+            foreach (var usb in data.UsbDevices?.ConnectedDevices ?? new List<PeripheralUsbDevice>())
+            {
+                if (!IsGraphicsTablet(usb)) continue;
+                AddGraphicsTabletIfNew(data, usb.Name ?? usb.Model ?? "", usb.VendorId, usb.ModelId);
             }
 
             // WMI/PnP fallback: the osquery registry queries above return 0 rows under
@@ -994,20 +1002,31 @@ namespace ReportMate.WindowsClient.Services.Modules
             _logger.LogInformation("Processed printers - Total: {Count}", data.Printers?.InstalledPrinters?.Count ?? 0);
         }
 
-        private void AddUsbDeviceFromDict(PeripheralsModuleData data, string name, string deviceId, string description)
+        private void AddUsbDeviceFromDict(PeripheralsModuleData data, string name, string deviceId, string description, string manufacturer = "")
         {
             var instanceId = NormalizeUsbInstanceId(deviceId);
             if (data.UsbDevices?.ConnectedDevices?.Any(
                     d => string.Equals(d.DeviceInstanceId, instanceId, StringComparison.OrdinalIgnoreCase)) == true) return;
+
+            // Win32_PnPEntity Name and Description are usually the same friendly string
+            // ("Wacom Tablet", "Generic USB Hub"). Neither is a vendor: Description used to
+            // be assigned to Vendor, which is what put device descriptions in the UI's
+            // vendor row. Resolve the vendor from the VID, and fall back to the PnP
+            // Manufacturer only when the VID is not one we know.
+            var friendlyName = !string.IsNullOrWhiteSpace(name) ? name : description;
+            var vendorId = ExtractIdFromPath(instanceId, "VID_");
+
             data.UsbDevices?.ConnectedDevices?.Add(new PeripheralUsbDevice
             {
-                Model = name, Vendor = description,
+                Name = friendlyName,
+                Model = friendlyName,
+                Vendor = ResolveUsbVendor(vendorId, manufacturer),
                 DeviceInstanceId = instanceId,
                 SerialNumber = ExtractUsbSerialNumber(instanceId),
                 IsCompositeChild = IsUsbCompositeChild(instanceId),
-                VendorId = ExtractIdFromPath(instanceId, "VID_"),
+                VendorId = vendorId,
                 ModelId = ExtractIdFromPath(instanceId, "PID_"),
-                Class = DetermineUSBDeviceType(name, ""), Removable = true
+                Class = DetermineUSBDeviceType(friendlyName, ""), Removable = true
             });
         }
 
@@ -1481,6 +1500,147 @@ namespace ReportMate.WindowsClient.Services.Modules
                 endIndex = devicePath.Length;
 
             return devicePath.Substring(startIndex, Math.Min(4, endIndex - startIndex));
+        }
+
+        /// <summary>
+        /// Whether a USB node is the graphics tablet itself, as opposed to one of the
+        /// other functions a pen display puts on the same bus.
+        ///
+        /// A Cintiq presents its built-in hub, its audio function and its USB-C
+        /// billboard under the same vendor ID as the tablet, so a VID match alone
+        /// misclassifies all of them. Take a node when it is named for a tablet, or
+        /// when it is a known tablet vendor whose class is not something else
+        /// recognisable (hub, audio, camera, storage...). Composite children are
+        /// skipped: they are interfaces of a device already counted.
+        /// </summary>
+        public static bool IsGraphicsTablet(PeripheralUsbDevice usb)
+        {
+            if (usb.IsCompositeChild) return false;
+
+            var name = (usb.Name ?? usb.Model ?? "").ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(name)) return false;
+
+            if (usb.Class == "USB Hub") return false;
+
+            // Named for a tablet -- trustworthy regardless of vendor id.
+            if (name.Contains("wacom") || name.Contains("huion") || name.Contains("xp-pen") ||
+                name.Contains("intuos") || name.Contains("cintiq") || name.Contains("bamboo") ||
+                name.Contains("graphics tablet") || name.Contains("pen display"))
+                return true;
+
+            // Known tablet vendor, and nothing else has claimed the node.
+            if (usb.VendorId != null && TabletVendorIds.ContainsKey(usb.VendorId) &&
+                (usb.Class == "Graphics Tablet" || usb.Class == "USB Device"))
+                return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Add a graphics tablet, ignoring one already recorded under the same
+        /// name and vendor id -- the HID and USB passes can both see the same device.
+        /// </summary>
+        private void AddGraphicsTabletIfNew(PeripheralsModuleData data, string name, string? vendorId, string? productId)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return;
+            if (data.InputDevices?.Tablets == null) return;
+
+            if (data.InputDevices.Tablets.Any(t =>
+                    string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(t.VendorId ?? "", vendorId ?? "", StringComparison.OrdinalIgnoreCase)))
+                return;
+
+            var lowerName = name.ToLowerInvariant();
+
+            var vendor = "";
+            if (lowerName.Contains("wacom")) vendor = "Wacom";
+            else if (lowerName.Contains("huion")) vendor = "Huion";
+            else if (lowerName.Contains("xp-pen")) vendor = "XP-Pen";
+            else if (!string.IsNullOrEmpty(vendorId) && TabletVendorIds.TryGetValue(vendorId, out var byId)) vendor = byId;
+
+            var tabletType = "Graphics Tablet";
+            if (lowerName.Contains("cintiq") || lowerName.Contains("display"))
+                tabletType = "Pen Display";
+            else if (lowerName.Contains("intuos") || lowerName.Contains("bamboo"))
+                tabletType = "Pen Tablet";
+
+            data.InputDevices.Tablets.Add(new GraphicsTablet
+            {
+                Name = name,
+                Vendor = vendor,
+                VendorId = vendorId,
+                ProductId = productId,
+                ConnectionType = "USB",
+                TabletType = tabletType,
+                DeviceType = "Graphics Tablet"
+            });
+        }
+
+        /// <summary>
+        /// USB vendor IDs of the graphics-tablet makers we deploy. A pen display
+        /// exposes several nodes under the same VID -- the tablet itself, its built-in
+        /// hub, and its audio/display function -- so a VID match alone is not enough
+        /// to call something a tablet; see <see cref="IsGraphicsTablet"/>.
+        /// </summary>
+        private static readonly Dictionary<string, string> TabletVendorIds = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["056A"] = "Wacom",
+            ["256C"] = "Huion",
+            ["28BD"] = "XP-Pen",
+            ["5543"] = "XP-Pen",
+        };
+
+        /// <summary>
+        /// Vendor names for USB vendor IDs we care about naming correctly. Anything
+        /// not listed falls back to the PnP Manufacturer string when one was
+        /// collected, and to empty otherwise -- an unknown vendor is better rendered
+        /// as absent than as a device description or a bus path.
+        /// </summary>
+        private static readonly Dictionary<string, string> UsbVendorNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["056A"] = "Wacom",
+            ["256C"] = "Huion",
+            ["28BD"] = "XP-Pen",
+            ["5543"] = "XP-Pen",
+            ["05AC"] = "Apple",
+            ["8087"] = "Intel",
+            ["8086"] = "Intel",
+            ["1B1C"] = "Corsair",
+            ["046D"] = "Logitech",
+            ["045E"] = "Microsoft",
+            ["413C"] = "Dell",
+            ["03F0"] = "HP",
+            ["17EF"] = "Lenovo",
+            ["0403"] = "FTDI",
+            ["2109"] = "VIA Labs",
+            ["1D6B"] = "Linux Foundation",
+            ["0BDA"] = "Realtek",
+            ["04B4"] = "Cypress",
+            ["0951"] = "Kingston",
+            ["0781"] = "SanDisk",
+        };
+
+        /// <summary>
+        /// Resolve a display vendor for a USB device from its vendor ID, falling back
+        /// to the PnP Manufacturer when the VID is unknown. Generic Microsoft-supplied
+        /// driver manufacturers are dropped -- "(Standard USB Host Controller)" tells
+        /// nobody who made the device.
+        /// </summary>
+        public static string ResolveUsbVendor(string? vendorId, string manufacturer = "")
+        {
+            if (!string.IsNullOrEmpty(vendorId) && UsbVendorNames.TryGetValue(vendorId, out var known))
+                return known;
+
+            if (string.IsNullOrWhiteSpace(manufacturer)) return "";
+
+            var trimmed = manufacturer.Trim();
+            if (trimmed.StartsWith("(", StringComparison.Ordinal)) return "";
+            if (trimmed.Equals("Microsoft", StringComparison.OrdinalIgnoreCase)) return "";
+            if (trimmed.Contains("Standard", StringComparison.OrdinalIgnoreCase) &&
+                trimmed.Contains("Controller", StringComparison.OrdinalIgnoreCase)) return "";
+            if (trimmed.Equals("Generic", StringComparison.OrdinalIgnoreCase)) return "";
+
+            return trimmed;
         }
 
         /// <summary>
