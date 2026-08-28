@@ -93,5 +93,25 @@ namespace ReportMate.WindowsClient.Tests
         {
             Assert.Equal(expected, PeripheralsModuleProcessor.ResolveUsbVendor(vendorId, manufacturer));
         }
+
+        [Theory]
+        // Windows' placeholder descriptions: a bus role, not a product. An in-field
+        // pen display enumerates as "USB Input Device" with no better-named node
+        // anywhere on the bus, so the card would otherwise read that under Graphics
+        // Tablets.
+        [InlineData("USB Input Device", true)]
+        [InlineData("usb composite device", true)]
+        [InlineData("USB Device", true)]
+        [InlineData("Unknown USB Device", true)]
+        [InlineData("  USB Input Device  ", true)]
+        // Real product names are left alone.
+        [InlineData("Wacom Tablet", false)]
+        [InlineData("Wacom Cintiq Pro 27", false)]
+        [InlineData("Generic USB Hub", false)]
+        [InlineData("USB Input Device Pro", false)]
+        public void RecognisesPlaceholderDeviceNames(string name, bool expected)
+        {
+            Assert.Equal(expected, PeripheralsModuleProcessor.IsGenericDeviceName(name));
+        }
     }
 }
