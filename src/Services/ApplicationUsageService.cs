@@ -142,7 +142,10 @@ namespace ReportMate.WindowsClient.Services
                 // Include ALL sessions (complete + active) so the API can aggregate fleet-wide usage.
                 // Previously only active (still-running) sessions were included, causing empty data.
                 snapshot.ActiveSessions = sessions;
-                snapshot.TotalLaunches = sessions.Count;
+                // App-opens, not process creations -- see CountActivations.
+                snapshot.TotalLaunches = sessions
+                    .GroupBy(s => s.Name ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .Sum(g => CountActivations(g));
                 snapshot.TotalUsageSeconds = sessions.Sum(s => s.DurationSeconds);
 
                 // Update installed apps with their usage summaries
@@ -930,7 +933,7 @@ namespace ReportMate.WindowsClient.Services
                     LastExitTime = appSessions.Where(s => s.EndTime.HasValue)
                         .OrderByDescending(s => s.EndTime)
                         .FirstOrDefault()?.EndTime,
-                    LaunchCount = appSessions.Count,
+                    LaunchCount = CountActivations(appSessions),
                     TotalSeconds = appSessions.Sum(s => s.DurationSeconds),
                     ActiveUsageSeconds = appSessions.Sum(s => s.DurationSeconds), // Same for now, could track foreground time later
                     AverageSessionSeconds = appSessions.Count > 0
@@ -1233,6 +1236,77 @@ namespace ReportMate.WindowsClient.Services
                                  StringComparer.OrdinalIgnoreCase.GetHashCode(k.AppName ?? ""));
         }
 
+        /// <summary>
+        /// The number of times an application was opened, given every process
+        /// lifetime recorded for it on one day.
+        /// </summary>
+        /// <remarks>
+        /// A Security-Log session is one process, not one app-open, and a modern
+        /// application is many processes: Chrome starts a renderer per tab and a
+        /// utility process per service, and a scheduled agent starts a fresh
+        /// process on every invocation. Counting sessions therefore reported
+        /// 4.6 million launches across the Windows fleet in two days -- 231 Chrome
+        /// launches per device per day, and 4,618 for osquery, which nobody opens
+        /// at all. macOS counts one launch per app-open and the two platforms
+        /// share a column in the same report, so they have to mean the same thing.
+        ///
+        /// An activation is a transition from none of the application's processes
+        /// running to at least one. Lifetimes are walked in start order per user,
+        /// and a session that begins while the application is already up belongs
+        /// to the activation in progress; only one that begins after everything
+        /// has exited opens a new one. Users are separated because two people on
+        /// a shared machine opening the same application are two app-opens, and
+        /// their sessions overlap in wall-clock time.
+        ///
+        /// Durations are untouched -- this changes counting only.
+        /// </remarks>
+        internal static int CountActivations(IEnumerable<ApplicationUsageSession> sessions)
+        {
+            var activations = 0;
+
+            foreach (var perUser in sessions.GroupBy(s => s.User ?? string.Empty, StringComparer.OrdinalIgnoreCase))
+            {
+                DateTime? openUntil = null;
+
+                foreach (var session in perUser.OrderBy(s => s.StartTime))
+                {
+                    if (openUntil == null || session.StartTime > openUntil.Value)
+                    {
+                        activations++;
+                        openUntil = EffectiveEnd(session);
+                        continue;
+                    }
+
+                    // Still inside the run already counted; extend it to cover
+                    // whichever of its processes lives longest.
+                    var end = EffectiveEnd(session);
+                    if (end > openUntil.Value)
+                    {
+                        openUntil = end;
+                    }
+                }
+            }
+
+            return activations;
+        }
+
+        /// <summary>
+        /// When a session's process stopped occupying the application.
+        /// A session still running has no end time; its duration is measured
+        /// from the start, so the two agree for a completed session and the
+        /// running one extends to now.
+        /// </summary>
+        private static DateTime EffectiveEnd(ApplicationUsageSession session)
+        {
+            if (session.EndTime.HasValue)
+            {
+                return session.EndTime.Value;
+            }
+
+            var duration = session.DurationSeconds > 0 ? session.DurationSeconds : 0;
+            return session.StartTime.AddSeconds(duration);
+        }
+
         public List<DailyUsageSummary> BuildDailySummaries(List<ApplicationUsageSession> sessions)
         {
             if (sessions.Count == 0)
@@ -1254,7 +1328,7 @@ namespace ReportMate.WindowsClient.Services
                         Date = g.Key.Date,
                         AppName = g.Key.Name,
                         Publisher = g.First().Publisher,
-                        Launches = g.Count(),
+                        Launches = CountActivations(g),
                         TotalSeconds = g.Sum(s => s.DurationSeconds),
                         // Foreground/active counters stay at 0 until the
                         // user-context usagetracker.exe companion is shipped
