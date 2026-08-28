@@ -1579,11 +1579,18 @@ namespace ReportMate.WindowsClient.Services.Modules
             else if (lowerName.Contains("xp-pen")) vendor = "XP-Pen";
             else if (!string.IsNullOrEmpty(vendorId) && TabletVendorIds.TryGetValue(vendorId, out var byId)) vendor = byId;
 
-            var tabletType = "Graphics Tablet";
-            if (lowerName.Contains("cintiq") || lowerName.Contains("display"))
-                tabletType = "Pen Display";
-            else if (lowerName.Contains("intuos") || lowerName.Contains("bamboo"))
-                tabletType = "Pen Tablet";
+            // What this entry describes is the pen digitizer, whether or not the same
+            // chassis also contains a panel. A pen display's screen is a display: it is
+            // enumerated from EDID by the hardware module, which reports it with its
+            // real model name and its own serial. Splitting the distinction across the
+            // two modules keeps each one describing what it actually collected, so the
+            // input entry does not try to infer a screen it never looked at.
+            //
+            // The earlier Pen Display / Pen Tablet split was inferred from the product
+            // name, which never carries the model -- both pen displays in the field
+            // report as "Wacom Tablet" -- so it always fell through to a generic label
+            // anyway.
+            var tabletType = "Pen Input";
 
             // Older pen displays enumerate under a generic Windows name -- an in-field
             // model reports "USB Input Device" with no better-named node anywhere on
