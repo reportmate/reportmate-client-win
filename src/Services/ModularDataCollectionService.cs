@@ -24,6 +24,7 @@ namespace ReportMate.WindowsClient.Services
         Task<T?> CollectModuleDataAsync<T>(string moduleId) where T : BaseModuleData;
         Task<BaseModuleData?> CollectSingleModuleDataAsync(string moduleId);
         Task<UnifiedDevicePayload> CreateSingleModuleUnifiedPayloadAsync(BaseModuleData moduleData);
+        Task<UnifiedDevicePayload> CreateUnifiedPayloadAsync(IReadOnlyList<BaseModuleData> modules);
         Task SaveModuleDataLocallyAsync<T>(string moduleId, T data) where T : BaseModuleData;
         Task<UnifiedDevicePayload> LoadCachedDataAsync();
         Task<bool> ValidateModuleDataAsync(string moduleId, object data);
@@ -306,17 +307,74 @@ namespace ReportMate.WindowsClient.Services
         }
 
         /// <summary>
-        /// Create a unified payload structure for a single module (for --run-module support)
-        /// This enables --transmit-only to work with single module collections
+        /// "Single" only when the run genuinely covered one module. The server
+        /// records this verbatim, and it is how a one-off --run-module is told
+        /// apart from a scheduled sweep on the ingest side.
         /// </summary>
-        public async Task<UnifiedDevicePayload> CreateSingleModuleUnifiedPayloadAsync(BaseModuleData moduleData)
+        public static string DetermineCollectionType(int moduleCount)
+            => moduleCount == 1 ? "Single" : "Full";
+
+        /// <summary>
+        /// Modules that belong in the run's summary event. installs is excluded
+        /// because it emits its own events conditionally -- summarising it here
+        /// double-counts, which is why the single-module path skipped it too.
+        /// </summary>
+        public static IReadOnlyList<string> SummaryModules(IEnumerable<string> moduleIds)
+            => (moduleIds ?? Enumerable.Empty<string>())
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Where(id => !id.Equals("installs", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+        /// <summary>
+        /// One summary line for the run. A single module keeps the wording the
+        /// dashboard has always shown for it.
+        /// </summary>
+        public static string SummaryMessage(IReadOnlyList<string> summaryModules)
         {
-            _logger.LogInformation("Creating unified payload for single module: {ModuleId}", moduleData.ModuleId);
+            if (summaryModules.Count == 1)
+            {
+                var id = summaryModules[0];
+                return $"{char.ToUpper(id[0])}{id.Substring(1)} data reported";
+            }
+
+            return $"{summaryModules.Count} modules reported";
+        }
+
+        /// <summary>
+        /// Create one unified payload covering every module collected in this run.
+        /// </summary>
+        /// <remarks>
+        /// A scheduled run such as <c>--run-modules security,network,management,identity,hardware</c>
+        /// used to build one payload per module and POST each separately. Five modules
+        /// meant five HTTP requests, five bodies each carrying the full metadata
+        /// envelope, and -- because every payload ran its own <c>system_info</c>
+        /// query to find the serial and UUID -- five extra osquery invocations
+        /// for an answer that cannot change between them.
+        ///
+        /// Fleet-wide that was roughly 126 submissions per Windows device per day
+        /// against a schedule that only calls for 33 collection runs. The server
+        /// already accepts a multi-module body: module data lives under top-level
+        /// keys and metadata.enabledModules carries the list, which is what a
+        /// "Full" collection has always sent.
+        ///
+        /// The identity query runs once here and the result is shared, which is
+        /// the other half of the saving and the reason this is not simply a loop
+        /// around the single-module builder.
+        /// </remarks>
+        public async Task<UnifiedDevicePayload> CreateUnifiedPayloadAsync(IReadOnlyList<BaseModuleData> modules)
+        {
+            if (modules == null || modules.Count == 0)
+            {
+                throw new ArgumentException("At least one module is required to build a unified payload", nameof(modules));
+            }
+
+            var moduleIds = modules.Select(m => m.ModuleId).ToList();
+            _logger.LogInformation("Creating unified payload for {ModuleCount} module(s): {Modules}",
+                modules.Count, string.Join(", ", moduleIds));
 
             try
             {
-                // For single module collection, we need to get serial number and UUID from a system query
-                // Since we don't have the full osquery results, run a minimal query to get device info
+                // One identity query for the whole run, not one per module.
                 var systemQueries = new Dictionary<string, object>
                 {
                     ["system_info"] = "SELECT uuid, hardware_serial, computer_name FROM system_info;"
@@ -326,93 +384,108 @@ namespace ReportMate.WindowsClient.Services
                 var serialNumber = ExtractSerialNumber(systemResults);
                 var deviceUuid = ExtractDeviceUuid(systemResults);
 
-                // Ensure we have both required identifiers
                 if (string.IsNullOrEmpty(serialNumber))
                 {
-                    _logger.LogError("Failed to extract serial number for single module unified payload");
+                    _logger.LogError("Failed to extract serial number for unified payload");
                     throw new InvalidOperationException("Serial number is required for transmission");
                 }
-                
+
                 if (string.IsNullOrEmpty(deviceUuid))
                 {
-                    _logger.LogError("Failed to extract device UUID for single module unified payload");
+                    _logger.LogError("Failed to extract device UUID for unified payload");
                     throw new InvalidOperationException("Device UUID is required for transmission");
                 }
 
-                // Create unified payload with metadata
                 var payload = new UnifiedDevicePayload();
                 payload.Metadata = new EventMetadata
                 {
                     DeviceId = deviceUuid,
                     SerialNumber = serialNumber,
-                    CollectedAt = moduleData.CollectedAt,
+                    // The newest collection timestamp in the run, so the server's
+                    // last_seen reflects when the run actually finished rather than
+                    // when its slowest module started.
+                    CollectedAt = modules.Max(m => m.CollectedAt),
                     ClientVersion = GetClientVersion(),
                     Platform = "Windows",
-                    CollectionType = "Single",
-                    EnabledModules = new List<string> { moduleData.ModuleId }
+                    // "Single" only when the run genuinely covered one module --
+                    // the server records this verbatim and it is how a one-off
+                    // --run-module is told apart from a scheduled sweep.
+                    CollectionType = DetermineCollectionType(modules.Count),
+                    EnabledModules = moduleIds
                 };
 
-                // Assign the single module data to the payload
-                AssignModuleDataToPayload(payload, moduleData);
-
-                // Generate events for the single module and add to unified payload
-                try
+                foreach (var moduleData in modules)
                 {
-                    var processor = _moduleProcessorFactory.GetProcessor(moduleData.ModuleId);
-                    if (processor != null)
+                    AssignModuleDataToPayload(payload, moduleData);
+
+                    try
                     {
-                        var moduleEvents = await processor.GenerateEventsAsync(moduleData);
-                        if (moduleEvents.Any())
+                        var processor = _moduleProcessorFactory.GetProcessor(moduleData.ModuleId);
+                        if (processor != null)
                         {
-                            payload.Events.AddRange(moduleEvents);
-                            _logger.LogInformation("Added {EventCount} events from single module {ModuleId} to unified payload", moduleEvents.Count, moduleData.ModuleId);
-                        }
-                        else
-                        {
-                            _logger.LogDebug("No events to add from single module {ModuleId} to unified payload", moduleData.ModuleId);
+                            var moduleEvents = await processor.GenerateEventsAsync(moduleData);
+                            if (moduleEvents.Any())
+                            {
+                                payload.Events.AddRange(moduleEvents);
+                                _logger.LogDebug("Added {EventCount} events from module {ModuleId}", moduleEvents.Count, moduleData.ModuleId);
+                            }
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to generate events for single module {ModuleId} in unified payload", moduleData.ModuleId);
+                    catch (Exception ex)
+                    {
+                        // One module's event generation failing must not cost the
+                        // run every other module's data, which is the whole point
+                        // of collecting them into a single payload.
+                        _logger.LogWarning(ex, "Failed to generate events for module {ModuleId} in unified payload", moduleData.ModuleId);
+                    }
                 }
 
-                // Add summary info event about the single module collection (skip for installs - it generates its own events when needed)
-                if (!moduleData.ModuleId.Equals("installs", StringComparison.OrdinalIgnoreCase))
+                // One summary event for the run. installs is excluded for the same
+                // reason as in the single-module path: it emits its own events
+                // conditionally and a summary here would double-count.
+                var summaryModules = SummaryModules(moduleIds);
+
+                if (summaryModules.Count > 0)
                 {
-                    var capitalizedModule = char.ToUpper(moduleData.ModuleId[0]) + moduleData.ModuleId.Substring(1);
-                    var summaryEvent = new ReportMateEvent
+                    payload.Events.Add(new ReportMateEvent
                     {
                         EventType = "info",
-                        Message = $"{capitalizedModule} data reported",
+                        Message = SummaryMessage(summaryModules),
                         Timestamp = DateTime.UtcNow,
                         Details = new Dictionary<string, object>
                         {
                             ["collectionType"] = payload.Metadata.CollectionType,
-                            ["moduleCount"] = 1,
-                            ["modules"] = new List<string> { moduleData.ModuleId }
+                            ["moduleCount"] = summaryModules.Count,
+                            ["modules"] = summaryModules
                         }
-                    };
-                    payload.Events.Add(summaryEvent);
-                    _logger.LogDebug("Added summary event for single module: {ModuleId}", moduleData.ModuleId);
-                }
-                else
-                {
-                    _logger.LogDebug("Skipped summary event for installs module - generates its own conditional events");
+                    });
                 }
 
-                // Save the unified payload as event.json
                 await SaveUnifiedPayloadAsync(payload);
 
-                _logger.LogInformation("✓ Unified payload created for single module: {ModuleId}", moduleData.ModuleId);
+                _logger.LogInformation("Unified payload created for {ModuleCount} module(s): {Modules}",
+                    modules.Count, string.Join(", ", moduleIds));
                 return payload;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error creating unified payload for single module: {ModuleId}", moduleData.ModuleId);
+                _logger.LogError(ex, "Error creating unified payload for modules: {Modules}", string.Join(", ", moduleIds));
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Create a unified payload structure for a single module (for --run-module support).
+        /// This enables --transmit-only to work with single module collections.
+        /// </summary>
+        /// <remarks>
+        /// Delegates to <see cref="CreateUnifiedPayloadAsync"/> so the one-module and
+        /// many-module paths cannot drift apart. A one-module run still reports
+        /// CollectionType "Single", exactly as before.
+        /// </remarks>
+        public Task<UnifiedDevicePayload> CreateSingleModuleUnifiedPayloadAsync(BaseModuleData moduleData)
+        {
+            return CreateUnifiedPayloadAsync(new[] { moduleData });
         }
 
         /// <summary>
