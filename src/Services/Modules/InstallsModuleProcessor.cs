@@ -1561,20 +1561,21 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (items is null || items.Count == 0 || sessionEvents is null || sessionEvents.Count == 0)
                 return;
 
-            // Latest session id: prefer sessions.json; fall back to whatever the
-            // events stream tagged itself with so this still works when sessions
-            // failed to parse for any reason.
-            var latestSessionId = data.Cimian?.Sessions?
-                .OrderByDescending(s => s.StartTime)
-                .Select(s => s.SessionId)
-                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
+            // Latest session id: prefer the id the events themselves carry — they are
+            // what this method reads, and reports/sessions.json is flushed at the end of
+            // a run, so its newest entry can still be the previous session. Falling back
+            // to sessions.json keeps this working when the events stream is untagged.
+            var latestSessionId = sessionEvents
+                .Where(e => !string.IsNullOrWhiteSpace(e.SessionId))
+                .OrderByDescending(e => e.Timestamp)
+                .Select(e => e.SessionId)
+                .FirstOrDefault();
             if (string.IsNullOrEmpty(latestSessionId))
             {
-                latestSessionId = sessionEvents
-                    .Where(e => !string.IsNullOrWhiteSpace(e.SessionId))
-                    .OrderByDescending(e => e.Timestamp)
-                    .Select(e => e.SessionId)
-                    .FirstOrDefault();
+                latestSessionId = data.Cimian?.Sessions?
+                    .OrderByDescending(s => s.StartTime)
+                    .Select(s => s.SessionId)
+                    .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
             }
             if (string.IsNullOrEmpty(latestSessionId))
                 return;
@@ -2598,6 +2599,26 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
+        /// Shapes a run-outcome message the way MunkiReport does: name the package when
+        /// the run touched exactly one, otherwise count them. Hoisted out of
+        /// GenerateEventsAsync so the naming rule is directly testable — losing it is
+        /// what produced messages like "1 packages installed or updated", which both
+        /// reads as broken English and hides a name the payload already carried.
+        /// </summary>
+        public static string FormatActionMessage(
+            IReadOnlyList<InstallEventItem> items, string singularVerb, string pluralNoun)
+        {
+            if (items.Count == 1)
+            {
+                var only = items[0];
+                return string.IsNullOrEmpty(only.Version)
+                    ? $"{only.Name} {singularVerb}"
+                    : $"{only.Name} {only.Version} {singularVerb}";
+            }
+            return $"{items.Count} {pluralNoun} {singularVerb}";
+        }
+
+        /// <summary>
         /// Emits separate events per category for the latest Cimian run, mirroring the
         /// Mac client's generateMunkiEvents shape: success events for installs/updates/
         /// removals (each named individually when there is only one), an error event for
@@ -2613,18 +2634,42 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var sessionEvents = data.Cimian?.Events ?? new List<CimianEvent>();
                 var latestSession = data.Cimian?.Sessions?.OrderByDescending(s => s.StartTime).FirstOrDefault();
 
-                // Prefer sessions.json when available; if it's missing but events.jsonl was
-                // loaded from log files, derive the latest session id from the events stream
-                // so we can still scope per-session filtering correctly.
-                var sessionId = latestSession?.SessionId;
-                if (string.IsNullOrEmpty(sessionId))
+                // The events stream and sessions.json are written by different Cimian
+                // stages, so the newest log folder and the newest sessions.json entry are
+                // not always the same run — reports/sessions.json is flushed at the end of
+                // a session, and a collection that lands mid-run sees the previous entry.
+                // Filtering events by the sessions.json id then discards every event and
+                // forces the items.json fallback below. Pair them up instead: when the
+                // loaded events name a session that sessions.json also knows about, use
+                // that record so counters and events describe the same run.
+                var eventsSessionId = sessionEvents
+                    .Where(e => !string.IsNullOrWhiteSpace(e.SessionId))
+                    .OrderByDescending(e => e.Timestamp)
+                    .Select(e => e.SessionId)
+                    .FirstOrDefault();
+
+                if (!string.IsNullOrEmpty(eventsSessionId) &&
+                    !string.Equals(eventsSessionId, latestSession?.SessionId, StringComparison.OrdinalIgnoreCase))
                 {
-                    sessionId = sessionEvents
-                        .Where(e => !string.IsNullOrWhiteSpace(e.SessionId))
-                        .OrderByDescending(e => e.Timestamp)
-                        .Select(e => e.SessionId)
-                        .FirstOrDefault() ?? string.Empty;
+                    var pairedSession = data.Cimian?.Sessions?.FirstOrDefault(s =>
+                        string.Equals(s.SessionId, eventsSessionId, StringComparison.OrdinalIgnoreCase));
+                    if (pairedSession != null)
+                    {
+                        _logger.LogDebug(
+                            "Pairing installs events with session {EventsSession} (sessions.json newest was {ReportsSession})",
+                            eventsSessionId, latestSession?.SessionId ?? "none");
+                        latestSession = pairedSession;
+                    }
                 }
+
+                // Scope per-session filtering by the id the loaded events actually carry.
+                // That is also the id FinalizeItemsFromEvents stamps onto the items it
+                // touched, so item markers and event filtering can't drift apart. Only
+                // when no events were loaded does sessions.json supply the id, matching
+                // whatever Cimian itself wrote into items.json.
+                var sessionId = string.IsNullOrEmpty(eventsSessionId)
+                    ? latestSession?.SessionId ?? string.Empty
+                    : eventsSessionId;
 
                 // Item is in-session if it was last touched by this session id, or if we have
                 // no session id at all (legacy data without sessions.json or events log).
@@ -2766,7 +2811,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         {
                             // Mixed run with no per-event detail — fold into installedItems as
                             // the carrier for the combined event below. The flag tells the
-                            // emitter to switch to combined-message wording.
+                            // emitter to switch to combined-action wording, but the item
+                            // names are still known and must survive into the message.
                             installedItems = touched;
                             fallbackMixedActions = true;
                         }
@@ -2784,18 +2830,6 @@ namespace ReportMate.WindowsClient.Services.Modules
                         d["duration_seconds"] = latestSession.DurationSeconds;
                     }
                     return d;
-                }
-
-                static string FormatActionMessage(List<InstallEventItem> items, string singularVerb, string pluralNoun)
-                {
-                    if (items.Count == 1)
-                    {
-                        var only = items[0];
-                        return string.IsNullOrEmpty(only.Version)
-                            ? $"{only.Name} {singularVerb}"
-                            : $"{only.Name} {only.Version} {singularVerb}";
-                    }
-                    return $"{items.Count} {pluralNoun} {singularVerb}";
                 }
 
                 static List<Dictionary<string, object>> SerializeItems(IEnumerable<InstallEventItem> items, int max = 20) =>
@@ -2816,8 +2850,12 @@ namespace ReportMate.WindowsClient.Services.Modules
                         details["session_updates"] = latestSession.Updates;
                         details["session_removals"] = latestSession.Removals;
                     }
+                    // A mixed run only means we can't say *which* verb applies to each
+                    // item — it never means we don't know the items. Route through the
+                    // same formatter so a single package is still named, and so the count
+                    // form can't produce "1 packages".
                     string message = fallbackMixedActions
-                        ? $"{installedItems.Count} packages installed or updated"
+                        ? FormatActionMessage(installedItems, "installed or updated", "packages")
                         : FormatActionMessage(installedItems, "installed", "packages");
                     events.Add(CreateEvent("success", message, details));
                 }
@@ -2913,7 +2951,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             return Task.FromResult(events);
         }
 
-        private readonly record struct InstallEventItem(string Name, string? Version);
+        public readonly record struct InstallEventItem(string Name, string? Version);
 
         private void CollectPendingPackages(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, CimianInfo cimianInfo)
         {
