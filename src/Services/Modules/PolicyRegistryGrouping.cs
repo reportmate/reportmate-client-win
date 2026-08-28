@@ -162,10 +162,23 @@ namespace ReportMate.WindowsClient.Services.Modules
             return i > 0 ? rest.Substring(0, i) : rest;
         }
 
+        /// <summary>
+        /// The path segments that introduce a policy root. Order matters only in that the first
+        /// match wins; every root a query sweeps needs an entry, or its branches fall back to the
+        /// full registry path and read as unnamed profiles.
+        /// </summary>
+        private static readonly string[] PolicyRootMarkers =
+        {
+            "\\SOFTWARE\\Policies\\",
+            "\\PolicyManager\\current\\",
+            "\\CurrentVersion\\Policies\\",
+            "\\CurrentControlSet\\Policies\\",
+        };
+
         /// <summary>Branch name relative to its policy root, e.g. Google\Chrome.</summary>
         public static string GetPolicyBranchName(string branchPath)
         {
-            foreach (var marker in new[] { "\\SOFTWARE\\Policies\\", "\\PolicyManager\\current\\" })
+            foreach (var marker in PolicyRootMarkers)
             {
                 var i = branchPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
                 if (i >= 0) return branchPath.Substring(i + marker.Length);
@@ -176,6 +189,15 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// <summary>Vendor is the first segment under the policy root - derived, never enumerated.</summary>
         public static string ExtractPolicyVendor(string branchPath)
         {
+            // Windows' own policy branches live under Microsoft's key, so the owner is structural
+            // rather than something to look up. Without this the first segment of the branch name
+            // ("System", "Explorer") would be reported as though it were a vendor.
+            if (branchPath.IndexOf("\\CurrentVersion\\Policies\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                branchPath.IndexOf("\\CurrentControlSet\\Policies\\", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "Microsoft";
+            }
+
             var name = GetPolicyBranchName(branchPath);
             var i = name.IndexOf('\\');
             return i > 0 ? name.Substring(0, i) : name;
@@ -213,6 +235,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // Drop the trailing value name so a one-level branch does not read as its value.
                 var branch = segments.Length > 1 ? segments[..^1] : segments;
                 return branch.Length >= 2 ? branch[0] + " " + branch[1] : branch[0];
+            }
+
+            foreach (var marker in new[] { "\\CurrentVersion\\Policies\\", "\\CurrentControlSet\\Policies\\" })
+            {
+                var i = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (i < 0) continue;
+
+                var segments = path.Substring(i + marker.Length)
+                                   .Split('\\', StringSplitOptions.RemoveEmptyEntries);
+                // Drop the trailing value name so a one-level branch does not read as its value.
+                var branch = segments.Length > 1 ? segments[..^1] : segments;
+                return branch.Length > 0 ? "Windows " + branch[0] : "Windows";
             }
 
             return "General";

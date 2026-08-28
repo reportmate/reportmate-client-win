@@ -1379,6 +1379,9 @@ $apps -join '|'
             new("policy_registry_machine_wow6432", "Group Policy", "Device"),
             new("policy_registry_mdm_current",     "MDM",          "Device"),
             new("policy_registry_user",            "Group Policy", "User"),
+            new("policy_registry_system",          "System Policy", "Device"),
+            new("policy_registry_system_control",  "System Policy", "Device"),
+            new("policy_registry_user_system",     "System Policy", "User"),
         };
 
         /// <summary>
