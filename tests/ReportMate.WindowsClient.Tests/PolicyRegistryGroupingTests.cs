@@ -102,13 +102,13 @@ namespace ReportMate.WindowsClient.Tests
             {
                 Row($@"{Hklm}\SOFTWARE\Policies\Google\Chrome\IncognitoModeAvailability", "IncognitoModeAvailability", "2"),
                 Row($@"{Hklm}\SOFTWARE\Policies\Google\Chrome\BrowserSignin", "BrowserSignin", "0"),
-                Row($@"{Hklm}\SOFTWARE\Policies\Google\Chrome\HomepageLocation", "HomepageLocation", "https://ecuad.ca", "REG_SZ"),
+                Row($@"{Hklm}\SOFTWARE\Policies\Google\Chrome\HomepageLocation", "HomepageLocation", "https://example.edu", "REG_SZ"),
             });
 
             var profile = Assert.Single(result.ConfigurationProfiles);
             var payload = Assert.Single(profile.Payloads);
             Assert.Equal(3, payload.Settings.Count);
-            Assert.Equal("https://ecuad.ca", payload.Settings["HomepageLocation"]);
+            Assert.Equal("https://example.edu", payload.Settings["HomepageLocation"]);
             Assert.Equal(3, profile.AppliedSettings.Count);
             Assert.Equal(1, profile.PayloadCount);
         }
