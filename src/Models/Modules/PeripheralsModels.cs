@@ -127,6 +127,9 @@ namespace ReportMate.WindowsClient.Models.Modules
                         Description = t.Name,
                         Vendor = t.Vendor,
                         VendorId = t.VendorId,
+                        ProductId = t.ProductId,
+                        SerialNumber = t.SerialNumber,
+                        TabletType = t.TabletType,
                         DeviceType = t.DeviceType ?? "Graphics Tablet",
                         ConnectionType = t.ConnectionType,
                         IsBuiltIn = false
@@ -487,6 +490,28 @@ namespace ReportMate.WindowsClient.Models.Modules
         [JsonPropertyName("vendorId")]
         public string? VendorId { get; set; }
 
+        /// <summary>
+        /// USB product id. Carried so a graphics tablet folded into this flat list
+        /// keeps the same identifying detail the USB card shows.
+        /// </summary>
+        [JsonPropertyName("productId")]
+        public string? ProductId { get; set; }
+
+        /// <summary>
+        /// Hardware serial, where the device exposes one. Null for the many input
+        /// devices whose instance id is bus-derived rather than a real descriptor.
+        /// </summary>
+        [JsonPropertyName("serialNumber")]
+        public string? SerialNumber { get; set; }
+
+        /// <summary>
+        /// Pen Display / Pen Tablet / Graphics Tablet, set only for tablets. Without
+        /// it the web client renders no type badge on the tablet card, while macOS -
+        /// which keeps its tablets in a nested list - shows one.
+        /// </summary>
+        [JsonPropertyName("tabletType")]
+        public string? TabletType { get; set; }
+
         [JsonPropertyName("registryPath")]
         public string? RegistryPath { get; set; }
 
@@ -771,6 +796,15 @@ namespace ReportMate.WindowsClient.Models.Modules
 
         [JsonPropertyName("connectionType")]
         public string? ConnectionType { get; set; }
+
+        /// <summary>
+        /// Hardware serial, carried over from the tablet's USB node when it exposes an
+        /// iSerialNumber descriptor. A pen display is a tracked asset, so this is the
+        /// field that lets one be identified rather than merely counted. Older models
+        /// expose no descriptor and leave this null.
+        /// </summary>
+        [JsonPropertyName("serialNumber")]
+        public string? SerialNumber { get; set; }
 
         [JsonPropertyName("tabletType")]
         public string? TabletType { get; set; }
