@@ -157,12 +157,21 @@ function Write-Header { Write-ColorOutput Magenta "🚀 $($args -join ' ')" }
 function Write-Step { Write-ColorOutput Yellow "🔄 $($args -join ' ')" }
 
 # ──────────────────────────  SIGNING FUNCTIONS  ──────────────────────────
-# Friendly name (CN) of the enterprise code-signing certificate you push with Intune
-$Global:EnterpriseCertCN = 'Enterprise Code Signing Certificate'
+# Friendly name (CN) of the enterprise code-signing certificate you push with Intune.
+# Site-specific, so it comes from the environment; signing is skipped when unset.
+$Global:EnterpriseCertCN = $env:ENTERPRISE_CERT_CN
 
 function Get-SigningCertThumbprint {
     [OutputType([string])]
     param()
+
+    # Without a configured CN the -like filter below would collapse to "*CN=*"
+    # and match any certificate in the store, so refuse rather than sign with
+    # whatever happens to be first.
+    if ([string]::IsNullOrWhiteSpace($Global:EnterpriseCertCN)) {
+        Write-Error "ENTERPRISE_CERT_CN is not set; cannot select a signing certificate."
+        return $null
+    }
 
     Get-ChildItem Cert:\CurrentUser\My |
         Where-Object {
