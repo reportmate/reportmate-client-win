@@ -4,7 +4,7 @@
 
 You're working in **`<cimian-repo>\packages\CimianTools`** (the `windowsadmins/cimian` repo, mirrored to Azure DevOps).
 
-LoopGuard correctly detects when a package is in an install loop and suppresses further attempts. But the suppression is invisible to downstream consumers: `items.json` reports `current_status="Installed"` for suppressed items, so the ReportMate dashboard at `C:\Users\<user>\Developer\AzDevOps\Devices\ReportMate` shows them as healthy. Operators have no signal that a package is broken and the loop guard is the only thing preventing constant retries.
+LoopGuard correctly detects when a package is in an install loop and suppresses further attempts. But the suppression is invisible to downstream consumers: `items.json` reports `current_status="Installed"` for suppressed items, so the ReportMate dashboard at the ReportMate dashboard shows them as healthy. Operators have no signal that a package is broken and the loop guard is the only thing preventing constant retries.
 
 The LoopGuard design spec already anticipates this: `packages/CimianTools/wiki/munki-loopguard-spec.md` line 74 calls for a `LoopSuppressedItems` key in the report. It's never been implemented.
 
@@ -12,7 +12,7 @@ This is a sibling problem to `CIMIAN_ITEMS_JSON_FINALIZATION.md` (Bug A: pre-ins
 
 ### Symptom that motivates this work
 
-A run on serial `3GY7PY2` produced this log fragment:
+A run on a render node produced this log fragment:
 
 ```
 [2026-05-06 15:32:22] DEBUG CheckStatus starting item: WinAdminsAccount installType: install OnDemand: false
