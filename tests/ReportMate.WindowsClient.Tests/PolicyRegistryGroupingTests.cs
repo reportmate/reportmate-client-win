@@ -29,6 +29,9 @@ namespace ReportMate.WindowsClient.Tests
             new("policy_registry_machine_wow6432", "Group Policy", "Device"),
             new("policy_registry_mdm_current",     "MDM",          "Device"),
             new("policy_registry_user",            "Group Policy", "User"),
+            new("policy_registry_system",          "System Policy", "Device"),
+            new("policy_registry_system_control",  "System Policy", "Device"),
+            new("policy_registry_user_system",     "System Policy", "User"),
         };
 
         private static Dictionary<string, object> Row(string path, string name, string data, string type = "REG_DWORD")
@@ -38,10 +41,16 @@ namespace ReportMate.WindowsClient.Tests
             IEnumerable<Dictionary<string, object>>? machine = null,
             IEnumerable<Dictionary<string, object>>? wow = null,
             IEnumerable<Dictionary<string, object>>? mdm = null,
-            IEnumerable<Dictionary<string, object>>? user = null)
+            IEnumerable<Dictionary<string, object>>? user = null,
+            IEnumerable<Dictionary<string, object>>? system = null,
+            IEnumerable<Dictionary<string, object>>? systemControl = null,
+            IEnumerable<Dictionary<string, object>>? userSystem = null)
         {
             var results = new Dictionary<string, List<Dictionary<string, object>>>
             {
+                ["policy_registry_system"] = (system ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
+                ["policy_registry_system_control"] = (systemControl ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
+                ["policy_registry_user_system"] = (userSystem ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
                 ["policy_registry_machine"] = (machine ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
                 ["policy_registry_machine_wow6432"] = (wow ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
                 ["policy_registry_mdm_current"] = (mdm ?? Enumerable.Empty<Dictionary<string, object>>()).ToList(),
@@ -211,6 +220,77 @@ namespace ReportMate.WindowsClient.Tests
             Assert.Equal(2, result.RegistryPolicies.Count);
             Assert.Equal(new[] { "Device", "User" },
                 result.ConfigurationProfiles.Select(p => p.Type).OrderBy(t => t));
+        }
+
+        [Fact]
+        public void System_policy_outside_the_software_policies_root_is_collected()
+        {
+            // UAC and Explorer restrictions live under CurrentVersion\Policies, nowhere near
+            // SOFTWARE\Policies. Sweeping only the latter reports a machine as having no system
+            // policy at all while it is in fact locked down.
+            var result = GroupFixture(system: new[]
+            {
+                Row($@"{Hklm}\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\ConsentPromptBehaviorAdmin", "ConsentPromptBehaviorAdmin", "5"),
+                Row($@"{Hklm}\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\EnableLUA", "EnableLUA", "1"),
+                Row($@"{Hklm}\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Attachments\ScanWithAntiVirus", "ScanWithAntiVirus", "3"),
+            });
+
+            Assert.Equal(3, result.RegistryPolicies.Count);
+            Assert.Equal(2, result.ConfigurationProfiles.Count);
+
+            var system = result.ConfigurationProfiles.Single(p => p.ProfileName == "System");
+            Assert.Equal("Windows System", system.Category);
+            Assert.Equal("System Policy", system.Source);
+            Assert.Equal("5", system.Payloads.Single().Settings["ConsentPromptBehaviorAdmin"]);
+
+            var attachments = result.ConfigurationProfiles.Single(p => p.ProfileName == "Attachments");
+            Assert.Equal("Windows Attachments", attachments.Category);
+        }
+
+        [Fact]
+        public void System_policy_is_attributed_to_microsoft_not_to_its_first_path_segment()
+        {
+            // "System" and "Explorer" are branch names, not vendors. Ownership here is structural:
+            // these branches are Windows' own, so deriving the vendor from the path segment the
+            // way a SOFTWARE\Policies branch does would report a vendor called "System".
+            var result = GroupFixture(
+                system: new[] { Row($@"{Hklm}\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer\NoActiveDesktop", "NoActiveDesktop", "1") },
+                systemControl: new[] { Row($@"{Hklm}\SYSTEM\CurrentControlSet\Policies\Microsoft\FVE\UseAdvancedStartup", "UseAdvancedStartup", "1") });
+
+            Assert.All(result.ConfigurationProfiles, p => Assert.Equal("Microsoft", p.Organization));
+        }
+
+        [Fact]
+        public void System_policy_in_a_user_hive_is_marked_user_scope()
+        {
+            var result = GroupFixture(userSystem: new[]
+            {
+                Row(@"HKEY_USERS\S-1-5-21-1-2-3-1001\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer\NoDriveTypeAutoRun", "NoDriveTypeAutoRun", "255"),
+            });
+
+            var profile = Assert.Single(result.ConfigurationProfiles);
+            Assert.Equal("User", profile.Type);
+            Assert.Equal("Explorer", profile.ProfileName);
+            Assert.Equal("Windows Explorer", profile.Category);
+            Assert.Contains("S-1-5-21-1-2-3-1001", profile.Description);
+        }
+
+        [Fact]
+        public void Every_declared_root_is_named_rather_than_falling_back_to_a_raw_path()
+        {
+            // A root whose marker is missing from PolicyRootMarkers still collects, but its
+            // profiles carry the full registry path as their name and read as unnamed entries.
+            // This pins the naming for one branch from each declared root.
+            var result = GroupFixture(
+                machine: new[] { Row($@"{Hklm}\SOFTWARE\Policies\Google\Chrome\A", "A", "1") },
+                mdm: new[] { Row($@"{Hklm}\SOFTWARE\Microsoft\PolicyManager\current\device\Browser\B", "B", "1") },
+                user: new[] { Row(@"HKEY_USERS\S-1-5-21-1-2-3-1001\SOFTWARE\Policies\Contoso\C", "C", "1") },
+                system: new[] { Row($@"{Hklm}\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\D", "D", "1") },
+                systemControl: new[] { Row($@"{Hklm}\SYSTEM\CurrentControlSet\Policies\Microsoft\E", "E", "1") });
+
+            Assert.All(result.ConfigurationProfiles,
+                p => Assert.DoesNotContain("HKEY_", p.ProfileName));
+            Assert.Equal(5, result.ConfigurationProfiles.Count);
         }
     }
 }
