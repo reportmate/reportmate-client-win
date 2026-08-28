@@ -456,7 +456,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             foreach (var usb in data.UsbDevices?.ConnectedDevices ?? new List<PeripheralUsbDevice>())
             {
                 if (!IsGraphicsTablet(usb)) continue;
-                AddGraphicsTabletIfNew(data, usb.Name ?? usb.Model ?? "", usb.VendorId, usb.ModelId);
+                AddGraphicsTabletIfNew(data, usb.Name ?? usb.Model ?? "", usb.VendorId, usb.ModelId, usb.SerialNumber);
             }
 
             // WMI/PnP fallback: the osquery registry queries above return 0 rows under
@@ -1545,15 +1545,10 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// Add a graphics tablet, ignoring one already recorded under the same
         /// name and vendor id -- the HID and USB passes can both see the same device.
         /// </summary>
-        private void AddGraphicsTabletIfNew(PeripheralsModuleData data, string name, string? vendorId, string? productId)
+        private void AddGraphicsTabletIfNew(PeripheralsModuleData data, string name, string? vendorId, string? productId, string? serialNumber = null)
         {
             if (string.IsNullOrWhiteSpace(name)) return;
             if (data.InputDevices?.Tablets == null) return;
-
-            if (data.InputDevices.Tablets.Any(t =>
-                    string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(t.VendorId ?? "", vendorId ?? "", StringComparison.OrdinalIgnoreCase)))
-                return;
 
             var lowerName = name.ToLowerInvariant();
 
@@ -1569,16 +1564,48 @@ namespace ReportMate.WindowsClient.Services.Modules
             else if (lowerName.Contains("intuos") || lowerName.Contains("bamboo"))
                 tabletType = "Pen Tablet";
 
+            // Older pen displays enumerate under a generic Windows name -- an in-field
+            // model reports "USB Input Device" with no better-named node anywhere on
+            // the bus. Classification still works from the vendor id, but the card
+            // would read "USB Input Device" under Graphics Tablets. Name it for the
+            // vendor we resolved instead; keep the reported name when it says anything.
+            var displayName = IsGenericDeviceName(name) && !string.IsNullOrEmpty(vendor)
+                ? $"{vendor} Tablet"
+                : name;
+
+            // Dedupe on the vendor/product pair where the device gave us one -- the HID
+            // and USB passes can see the same tablet under different names, and the
+            // rename above means comparing the incoming name would miss that.
+            var alreadyRecorded = data.InputDevices.Tablets.Any(t =>
+                (!string.IsNullOrEmpty(vendorId) && !string.IsNullOrEmpty(productId))
+                    ? string.Equals(t.VendorId ?? "", vendorId, StringComparison.OrdinalIgnoreCase) &&
+                      string.Equals(t.ProductId ?? "", productId, StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(t.Name, displayName, StringComparison.OrdinalIgnoreCase) &&
+                      string.Equals(t.VendorId ?? "", vendorId ?? "", StringComparison.OrdinalIgnoreCase));
+            if (alreadyRecorded) return;
+
             data.InputDevices.Tablets.Add(new GraphicsTablet
             {
-                Name = name,
+                Name = displayName,
                 Vendor = vendor,
                 VendorId = vendorId,
                 ProductId = productId,
+                SerialNumber = serialNumber,
                 ConnectionType = "USB",
                 TabletType = tabletType,
                 DeviceType = "Graphics Tablet"
             });
+        }
+
+        /// <summary>
+        /// Whether a device name is one of Windows' placeholder descriptions, which
+        /// identify a bus role rather than a product.
+        /// </summary>
+        public static bool IsGenericDeviceName(string name)
+        {
+            var n = name.Trim().ToLowerInvariant();
+            return n is "usb input device" or "usb composite device" or "usb device"
+                or "hid-compliant device" or "unknown device" or "unknown usb device";
         }
 
         /// <summary>
