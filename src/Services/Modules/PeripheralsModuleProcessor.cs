@@ -381,6 +381,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                         RegistryPath = GetStringValue(keyboard, "registry_path"),
                         DeviceType = "Keyboard",
                         HidDeviceId = GetStringValue(keyboard, "hid_device_id"),
+                        VendorId = ExtractIdFromPath(GetStringValue(keyboard, "hid_device_id"), "VID_"),
+                        ProductId = ExtractIdFromPath(GetStringValue(keyboard, "hid_device_id"), "PID_"),
+                        SerialNumber = FindUsbSerialFor(data,
+                            ExtractIdFromPath(GetStringValue(keyboard, "hid_device_id"), "VID_"),
+                            ExtractIdFromPath(GetStringValue(keyboard, "hid_device_id"), "PID_")),
                         IsBuiltIn = isBuiltIn,
                         ConnectionType = connectionType
                     });
@@ -402,6 +407,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                         RegistryPath = GetStringValue(mouse, "registry_path"),
                         DeviceType = "Mouse",
                         HidDeviceId = GetStringValue(mouse, "hid_device_id"),
+                        VendorId = ExtractIdFromPath(GetStringValue(mouse, "hid_device_id"), "VID_"),
+                        ProductId = ExtractIdFromPath(GetStringValue(mouse, "hid_device_id"), "PID_"),
+                        SerialNumber = FindUsbSerialFor(data,
+                            ExtractIdFromPath(GetStringValue(mouse, "hid_device_id"), "VID_"),
+                            ExtractIdFromPath(GetStringValue(mouse, "hid_device_id"), "PID_")),
                         IsBuiltIn = false,
                         ConnectionType = connectionType
                     });
@@ -424,6 +434,11 @@ namespace ReportMate.WindowsClient.Services.Modules
                         RegistryPath = GetStringValue(trackpad, "registry_path"),
                         DeviceType = "Trackpad",
                         HidDeviceId = GetStringValue(trackpad, "hid_device_id"),
+                        VendorId = ExtractIdFromPath(GetStringValue(trackpad, "hid_device_id"), "VID_"),
+                        ProductId = ExtractIdFromPath(GetStringValue(trackpad, "hid_device_id"), "PID_"),
+                        SerialNumber = FindUsbSerialFor(data,
+                            ExtractIdFromPath(GetStringValue(trackpad, "hid_device_id"), "VID_"),
+                            ExtractIdFromPath(GetStringValue(trackpad, "hid_device_id"), "PID_")),
                         IsBuiltIn = isBuiltIn,
                         ConnectionType = isBuiltIn ? "Built-in" : "USB"
                     });
@@ -508,12 +523,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                         // package's publisher -- "(Standard keyboards)", "Microsoft" --
                         // which names nobody. Prefer the vendor the hardware id declares.
                         var inputVendorId = ExtractIdFromPath(deviceId, "VID_");
+                        var inputProductId = ExtractIdFromPath(deviceId, "PID_");
                         var dev = new InputDevice
                         {
                             Name = name,
                             Description = name,
                             Vendor = ResolveUsbVendor(inputVendorId, GetStringValue(row, "Manufacturer")),
                             VendorId = inputVendorId,
+                            ProductId = inputProductId,
+                            // The HID node's own tail is a bus address, so take the serial
+                            // from the USB node this device enumerates under.
+                            SerialNumber = ExtractUsbSerialNumber(deviceId)
+                                ?? FindUsbSerialFor(data, inputVendorId, inputProductId),
                             HidDeviceId = deviceId,
                             IsBuiltIn = isBuiltIn,
                             ConnectionType = connectionType
@@ -1595,6 +1616,35 @@ namespace ReportMate.WindowsClient.Services.Modules
                 TabletType = tabletType,
                 DeviceType = "Graphics Tablet"
             });
+        }
+
+        /// <summary>
+        /// Find the hardware serial for an input device by matching it to its parent
+        /// USB node on vendor and product id.
+        ///
+        /// A HID device instance path is bus-derived -- "HID\VID_413C&amp;PID_2113&amp;MI_00\
+        /// 7&amp;18B0BF6&amp;0&amp;0000" -- so it carries no serial of its own. The USB node the
+        /// same physical device enumerates under does, when the device exposes an
+        /// iSerialNumber descriptor.
+        ///
+        /// Only answers when exactly one non-composite USB node matches: two identical
+        /// keyboards on one machine share a vendor/product pair, and guessing which
+        /// serial belongs to which would invent an identity rather than report one.
+        /// </summary>
+        public static string? FindUsbSerialFor(PeripheralsModuleData data, string? vendorId, string? productId)
+        {
+            if (string.IsNullOrEmpty(vendorId) || string.IsNullOrEmpty(productId)) return null;
+
+            var matches = (data.UsbDevices?.ConnectedDevices ?? new List<PeripheralUsbDevice>())
+                .Where(u => !u.IsCompositeChild
+                            && !string.IsNullOrEmpty(u.SerialNumber)
+                            && string.Equals(u.VendorId ?? "", vendorId, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(u.ModelId ?? "", productId, StringComparison.OrdinalIgnoreCase))
+                .Select(u => u.SerialNumber)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return matches.Count == 1 ? matches[0] : null;
         }
 
         /// <summary>
