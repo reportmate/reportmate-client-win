@@ -382,6 +382,15 @@ namespace ReportMate.WindowsClient.Models.Modules
 
     public class PeripheralUsbDevice
     {
+        /// <summary>
+        /// Friendly device name as Windows presents it (Win32_PnPEntity Name, or the
+        /// USB node's DeviceDesc). The web client titles USB cards on this field and
+        /// the macOS client has always emitted it; without it every Windows USB
+        /// device renders as "Unknown USB Device".
+        /// </summary>
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
         [JsonPropertyName("vendor")]
         public string? Vendor { get; set; }
 
