@@ -2945,7 +2945,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                     events.Add(CreateEvent("warning", message, details));
                 }
 
-                if (!events.Any() && data.Cimian?.IsInstalled != true)
+                // "Not available" means Cimian is genuinely absent. IsInstalled comes
+                // from the service and task probes, which can miss on a machine whose
+                // items.json and sessions prove Cimian just ran; those count as
+                // installed, or a working device reports itself as unmanaged.
+                var cimianEvident = data.Cimian?.IsInstalled == true ||
+                                    (data.Cimian?.Items?.Count ?? 0) > 0 ||
+                                    (data.Cimian?.Sessions?.Count ?? 0) > 0 ||
+                                    !string.IsNullOrEmpty(data.Cimian?.Version);
+                if (!events.Any() && !cimianEvident)
                 {
                     events.Add(CreateEvent("warning", "Installs system not available",
                         new Dictionary<string, object>
