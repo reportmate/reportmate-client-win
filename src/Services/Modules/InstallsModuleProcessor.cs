@@ -1687,15 +1687,31 @@ namespace ReportMate.WindowsClient.Services.Modules
                 if (success)
                 {
                     succeeded++;
-                    item.CurrentStatus = isRemoval ? "Removed" : "Installed";
-                    item.MappedStatus = isRemoval ? "Removed" : "Installed";
-                    item.LastAttemptStatus = item.CurrentStatus;
+                    // A postinstall CIMIAN-WARNING or a LoopGuard suppression leaves the
+                    // install itself completed but the item marked Warning by Cimian, with
+                    // the reason in last_warning. That verdict is this run's, not a stale
+                    // one, so it survives the rewrite; only a clean success clears it.
+                    var cimianWarned = !isRemoval &&
+                        item.CurrentStatus.Equals("Warning", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrEmpty(item.LastWarning);
+                    if (cimianWarned)
+                    {
+                        item.MappedStatus = "Warning";
+                        item.LastAttemptStatus = "Warning";
+                        item.WarningCount = Math.Max(item.WarningCount, 1);
+                    }
+                    else
+                    {
+                        item.CurrentStatus = isRemoval ? "Removed" : "Installed";
+                        item.MappedStatus = isRemoval ? "Removed" : "Installed";
+                        item.LastAttemptStatus = item.CurrentStatus;
+                        // Clear error/warning text from prior failed runs — this is a
+                        // per-run rewrite and stale messages would otherwise leak into
+                        // the success view.
+                        item.LastWarning = string.Empty;
+                    }
                     if (!isRemoval) item.LastSuccessfulTime = item.LastAttemptTime;
-                    // Clear error/warning text from prior failed runs — this is a
-                    // per-run rewrite and stale messages would otherwise leak into
-                    // the success view.
                     item.LastError = string.Empty;
-                    item.LastWarning = string.Empty;
                 }
                 else
                 {
@@ -2684,7 +2700,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         (i.MappedStatus?.Equals("Failed", StringComparison.OrdinalIgnoreCase) == true)))
                     .Where(i => !string.IsNullOrEmpty(i.ItemName) && InSession(i))
                     .GroupBy(i => i.ItemName, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion));
+                    .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion, g.First().LastError));
 
                 // Cimian's items.json doesn't reliably mark items as Failed when an
                 // install attempt fails — its `current_status` snapshot lags. Pull
@@ -2705,7 +2721,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                         e.EventType.Equals("update", StringComparison.OrdinalIgnoreCase) ||
                         e.EventType.Equals("remove", StringComparison.OrdinalIgnoreCase))
                     .GroupBy(e => e.Package, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => new InstallEventItem(g.Key, g.First().Version));
+                    .Select(g => new InstallEventItem(g.Key, g.First().Version,
+                        !string.IsNullOrEmpty(g.First().Error) ? g.First().Error : g.First().Message));
 
                 var failedItems = failedItemsFromCatalog
                     .Concat(failedItemsFromEvents)
@@ -2721,7 +2738,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                         (i.MappedStatus?.Equals("Warning", StringComparison.OrdinalIgnoreCase) == true)))
                     .Where(i => !string.IsNullOrEmpty(i.ItemName) && !failedItemNames.Contains(i.ItemName) && InSession(i))
                     .GroupBy(i => i.ItemName, StringComparer.OrdinalIgnoreCase)
-                    .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion))
+                    .Select(g => new InstallEventItem(g.Key, g.First().LatestVersion, g.First().LastWarning))
                     .ToList();
 
                 var knownItemNames = allItems.Select(i => i.ItemName).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -2832,11 +2849,18 @@ namespace ReportMate.WindowsClient.Services.Modules
                     return d;
                 }
 
+                // The message is what makes a warning or failure actionable on the
+                // dashboard; Munki sends its text and Cimian's must arrive the same way.
                 static List<Dictionary<string, object>> SerializeItems(IEnumerable<InstallEventItem> items, int max = 20) =>
-                    items.Take(max).Select(i => new Dictionary<string, object>
+                    items.Take(max).Select(i =>
                     {
-                        ["name"] = i.Name,
-                        ["version"] = i.Version ?? string.Empty
+                        var d = new Dictionary<string, object>
+                        {
+                            ["name"] = i.Name,
+                            ["version"] = i.Version ?? string.Empty
+                        };
+                        if (!string.IsNullOrWhiteSpace(i.Message)) d["message"] = i.Message.Trim();
+                        return d;
                     }).ToList();
 
                 if (installedItems.Any())
@@ -2921,7 +2945,15 @@ namespace ReportMate.WindowsClient.Services.Modules
                     events.Add(CreateEvent("warning", message, details));
                 }
 
-                if (!events.Any() && data.Cimian?.IsInstalled != true)
+                // "Not available" means Cimian is genuinely absent. IsInstalled comes
+                // from the service and task probes, which can miss on a machine whose
+                // items.json and sessions prove Cimian just ran; those count as
+                // installed, or a working device reports itself as unmanaged.
+                var cimianEvident = data.Cimian?.IsInstalled == true ||
+                                    (data.Cimian?.Items?.Count ?? 0) > 0 ||
+                                    (data.Cimian?.Sessions?.Count ?? 0) > 0 ||
+                                    !string.IsNullOrEmpty(data.Cimian?.Version);
+                if (!events.Any() && !cimianEvident)
                 {
                     events.Add(CreateEvent("warning", "Installs system not available",
                         new Dictionary<string, object>
@@ -2951,7 +2983,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             return Task.FromResult(events);
         }
 
-        public readonly record struct InstallEventItem(string Name, string? Version);
+        public readonly record struct InstallEventItem(string Name, string? Version, string? Message = null);
 
         private void CollectPendingPackages(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, CimianInfo cimianInfo)
         {
