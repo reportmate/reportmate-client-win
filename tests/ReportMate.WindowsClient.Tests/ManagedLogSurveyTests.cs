@@ -1,0 +1,134 @@
+#nullable enable
+using System;
+using System.IO;
+using System.Linq;
+using ReportMate.WindowsClient.Services.Modules;
+using Xunit;
+
+namespace ReportMate.WindowsClient.Tests
+{
+    /// <summary>
+    /// The logs module reads whatever the management tools left under Managed*\logs,
+    /// so these pin the two layouts it must understand: Cimian-style session
+    /// directories with a session.json, and a flat directory of rolling logs.
+    /// </summary>
+    public class ManagedLogSurveyTests : IDisposable
+    {
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "rm-logs-" + Guid.NewGuid().ToString("N"));
+
+        public ManagedLogSurveyTests()
+        {
+            Directory.CreateDirectory(_root);
+        }
+
+        public void Dispose()
+        {
+            try { Directory.Delete(_root, recursive: true); } catch { }
+        }
+
+        [Theory]
+        [InlineData("ManagedInstalls", "installs")]
+        [InlineData("Managed Installs", "installs")]
+        [InlineData("ManagedBootstrap", "bootstrap")]
+        [InlineData("ManagedEncryption", "encryption")]
+        public void ToolKeyStripsThePrefix(string directory, string expected)
+        {
+            Assert.Equal(expected, ManagedLogSurvey.ToolKey(directory));
+        }
+
+        [Fact]
+        public void DisplayNameMatchesTheMacDirectoryName()
+        {
+            Assert.Equal("Managed Installs", ManagedLogSurvey.DisplayName("ManagedInstalls"));
+            Assert.Equal("Managed Installs", ManagedLogSurvey.DisplayName("Managed Installs"));
+        }
+
+        [Fact]
+        public void SessionLayoutReportsTheNewestSessionAndItsRunLog()
+        {
+            var rootDir = Path.Combine(_root, "ManagedInstalls");
+            var logsDir = Path.Combine(rootDir, "logs");
+            var older = Path.Combine(logsDir, "2026-08-31", "2300");
+            var newer = Path.Combine(logsDir, "2026-09-01", "1315");
+            Directory.CreateDirectory(older);
+            Directory.CreateDirectory(newer);
+            Directory.CreateDirectory(Path.Combine(logsDir, "tmp"));
+            File.WriteAllText(Path.Combine(older, "run.log"), "[2026-08-31 23:00:00] INFO  old\n");
+            File.WriteAllText(Path.Combine(newer, "run.log"), "[2026-09-01 13:15:14] INFO  Session started\n[2026-09-01 13:15:20] WARN  slow\n[2026-09-01 13:16:40] ERROR postinstall returned 1\n");
+            File.WriteAllText(Path.Combine(newer, "session.json"),
+                "{\"session_id\":\"2026-09-01-1315\",\"status\":\"partial_failure\",\"run_type\":\"auto\",\"start_time\":\"2026-09-01T13:15:14-07:00\",\"duration_seconds\":86,\"summary\":{\"errors\":1,\"warnings\":1}}");
+            File.WriteAllText(Path.Combine(logsDir, "ManagedSoftwareUpdate.log"), "flat\n");
+
+            var root = ManagedLogSurvey.Survey(rootDir, logsDir);
+
+            Assert.NotNull(root);
+            Assert.Equal("installs", root!.Tool);
+            Assert.Equal("sessions", root.Layout);
+            Assert.Equal("2026-09-01/1315/run.log", root.PrimaryLog);
+            Assert.Equal("2026-09-01-1315", root.LatestSession!.SessionId);
+            Assert.Equal("partial_failure", root.LatestSession.Status);
+            Assert.Equal(86, root.LatestSession.DurationSeconds);
+            Assert.Equal(1, root.LatestSession.Errors);
+            Assert.Equal(1, root.ErrorCount);
+            Assert.Equal(1, root.WarningCount);
+            Assert.Equal("2026-09-01/1315/run.log", root.Tails[0].File);
+            Assert.Equal(3, root.Tails[0].Lines.Count);
+            Assert.False(root.Tails[0].Truncated);
+            Assert.Contains(root.Tails, t => t.File == "ManagedSoftwareUpdate.log");
+            Assert.DoesNotContain(root.Tails, t => t.File.EndsWith("session.json"));
+            Assert.Equal(4, root.FileCount);
+            Assert.Contains(root.Files, f => f.Path == "ManagedSoftwareUpdate.log");
+            Assert.Contains(root.Files, f => f.Path == "2026-09-01/1315/session.json");
+        }
+
+        [Fact]
+        public void FlatLayoutPrefersTheNewestNonErrorLog()
+        {
+            var rootDir = Path.Combine(_root, "ManagedReports");
+            var logsDir = Path.Combine(rootDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            File.WriteAllText(Path.Combine(logsDir, "reportmate-20260830.log"), "old\n");
+            File.SetLastWriteTimeUtc(Path.Combine(logsDir, "reportmate-20260830.log"), DateTime.UtcNow.AddDays(-2));
+            File.WriteAllText(Path.Combine(logsDir, "reportmate-20260901.log"), "new\n");
+            File.WriteAllText(Path.Combine(logsDir, "reportmate.error.log"), "stderr\n");
+            File.SetLastWriteTimeUtc(Path.Combine(logsDir, "reportmate.error.log"), DateTime.UtcNow.AddDays(1));
+
+            var root = ManagedLogSurvey.Survey(rootDir, logsDir);
+
+            Assert.Equal("flat", root!.Layout);
+            Assert.Null(root.LatestSession);
+            Assert.Equal("reportmate-20260901.log", root.PrimaryLog);
+            Assert.Equal(new[] { "new" }, root.Tails[0].Lines);
+            Assert.Equal(3, root.Tails.Count);
+        }
+
+        [Fact]
+        public void TailIsCappedAndMarkedTruncated()
+        {
+            var rootDir = Path.Combine(_root, "ManagedState");
+            var logsDir = Path.Combine(rootDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            var lines = Enumerable.Range(1, ManagedLogSurvey.TailLines + 50).Select(i => $"[2026-09-01 00:00:00] INFO  line {i}");
+            File.WriteAllLines(Path.Combine(logsDir, "startset.log"), lines);
+
+            var root = ManagedLogSurvey.Survey(rootDir, logsDir);
+
+            Assert.Equal(ManagedLogSurvey.TailLines, root!.Tails[0].Lines.Count);
+            Assert.True(root.Tails[0].Truncated);
+            Assert.EndsWith("line 200", root.Tails[0].Lines[^1]);
+        }
+
+        [Fact]
+        public void RootsWithoutALogsDirectoryAreSkipped()
+        {
+            Directory.CreateDirectory(Path.Combine(_root, "ManagedFrameworks"));
+            Directory.CreateDirectory(Path.Combine(_root, "ManagedBootstrap", "logs"));
+            Directory.CreateDirectory(Path.Combine(_root, "Other", "logs"));
+
+            var roots = ManagedLogSurvey.SurveyAll(_root);
+
+            Assert.Single(roots);
+            Assert.Equal("bootstrap", roots[0].Tool);
+        }
+    }
+}

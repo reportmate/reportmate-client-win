@@ -326,6 +326,7 @@ public class DataCollectionService : IDataCollectionService
         if (modularPayload.Inventory != null) osQueryDict["inventory"] = modularPayload.Inventory;
         if (modularPayload.Installs != null) osQueryDict["installs"] = modularPayload.Installs;
         if (modularPayload.Peripherals != null) osQueryDict["peripherals"] = modularPayload.Peripherals;
+        if (modularPayload.Logs != null) osQueryDict["logs"] = modularPayload.Logs;
         
         payload.OsQuery = osQueryDict;
 

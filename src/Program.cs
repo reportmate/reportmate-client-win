@@ -511,6 +511,7 @@ public class Program
         services.AddScoped<InventoryModuleProcessor>();
         services.AddScoped<InstallsModuleProcessor>();
         services.AddScoped<ManagementModuleProcessor>();
+        services.AddScoped<LogsModuleProcessor>();
         services.AddScoped<NetworkModuleProcessor>();
         services.AddScoped<PeripheralsModuleProcessor>();
         services.AddScoped<SecurityModuleProcessor>();

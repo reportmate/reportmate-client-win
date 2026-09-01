@@ -63,7 +63,8 @@ namespace ReportMate.WindowsClient.Services
                 ["network"] = typeof(NetworkModuleProcessor),
                 ["peripherals"] = typeof(PeripheralsModuleProcessor),
                 ["security"] = typeof(SecurityModuleProcessor),
-                ["system"] = typeof(SystemModuleProcessor)
+                ["system"] = typeof(SystemModuleProcessor),
+                ["logs"] = typeof(LogsModuleProcessor)
             };
 
             // Register data type to processor type mappings
@@ -78,6 +79,7 @@ namespace ReportMate.WindowsClient.Services
                 [typeof(NetworkData)] = typeof(NetworkModuleProcessor),
                 [typeof(PeripheralsModuleData)] = typeof(PeripheralsModuleProcessor),
                 [typeof(SecurityData)] = typeof(SecurityModuleProcessor),
+                [typeof(LogsData)] = typeof(LogsModuleProcessor),
                 [typeof(SystemData)] = typeof(SystemModuleProcessor)
             };
         }
@@ -151,7 +153,8 @@ namespace ReportMate.WindowsClient.Services
                 "network",
                 "peripherals",
                 "security",
-                "system"
+                "system",
+                "logs"
             };
 
             return enabledModules
