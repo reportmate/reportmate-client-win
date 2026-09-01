@@ -71,8 +71,8 @@ namespace ReportMate.WindowsClient.Services.Modules
         public const int MaxRoots = 20;
         /// <summary>Files listed per root (root-level files plus the latest session's files).</summary>
         public const int MaxFiles = 50;
-        /// <summary>Logs tailed per root: the primary log plus the next most recent ones.</summary>
-        public const int MaxTails = 5;
+        /// <summary>Logs tailed per root: the primary log plus the next most recent ones (session.json included).</summary>
+        public const int MaxTails = 6;
         /// <summary>
         /// Entries visited while sizing a root. A logs directory can hold tens of
         /// thousands of per-run subdirectories when a tool's retention has failed;
@@ -258,6 +258,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             return name.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
                 || name.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
                 || name.EndsWith(".txt", StringComparison.OrdinalIgnoreCase);
         }
 

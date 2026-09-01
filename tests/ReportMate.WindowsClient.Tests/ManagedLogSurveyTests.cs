@@ -75,7 +75,7 @@ namespace ReportMate.WindowsClient.Tests
             Assert.Equal(3, root.Tails[0].Lines.Count);
             Assert.False(root.Tails[0].Truncated);
             Assert.Contains(root.Tails, t => t.File == "ManagedSoftwareUpdate.log");
-            Assert.DoesNotContain(root.Tails, t => t.File.EndsWith("session.json"));
+            Assert.Contains(root.Tails, t => t.File.EndsWith("session.json"));
             Assert.Equal(4, root.FileCount);
             Assert.Contains(root.Files, f => f.Path == "ManagedSoftwareUpdate.log");
             Assert.Contains(root.Files, f => f.Path == "2026-09-01/1315/session.json");
