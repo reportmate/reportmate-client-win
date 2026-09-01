@@ -468,7 +468,9 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
                 var lines = text.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
                 while (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
-                if (lines.Count > TailLines)
+                // A .json file is one document: keep every line within the byte cap so it still parses.
+                var wholeDocument = relativePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+                if (!wholeDocument && lines.Count > TailLines)
                 {
                     lines = lines.Skip(lines.Count - TailLines).ToList();
                     truncated = true;
