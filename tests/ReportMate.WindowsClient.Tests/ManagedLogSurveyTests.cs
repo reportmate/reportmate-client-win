@@ -82,6 +82,22 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Fact]
+        public void CimianSummaryFailuresCountAsErrors()
+        {
+            var rootDir = Path.Combine(_root, "ManagedInstalls");
+            var session = Path.Combine(rootDir, "logs", "2026-09-01", "1400");
+            Directory.CreateDirectory(session);
+            File.WriteAllText(Path.Combine(session, "run.log"), "[2026-09-01 14:00:00] INFO  Session started\n");
+            File.WriteAllText(Path.Combine(session, "session.json"),
+                "{\"session_id\":\"2026-09-01-1400\",\"status\":\"completed\",\"summary\":{\"total_actions\":3,\"successes\":2,\"failures\":1}}");
+
+            var root = ManagedLogSurvey.Survey(rootDir, Path.Combine(rootDir, "logs"));
+
+            Assert.Equal(1, root!.LatestSession!.Errors);
+            Assert.Null(root.LatestSession.Warnings);
+        }
+
+        [Fact]
         public void FlatLayoutPrefersTheNewestNonErrorLog()
         {
             var rootDir = Path.Combine(_root, "ManagedReports");
