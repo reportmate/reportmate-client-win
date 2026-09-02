@@ -124,14 +124,70 @@ namespace ReportMate.WindowsClient.Tests
             var rootDir = Path.Combine(_root, "ManagedState");
             var logsDir = Path.Combine(rootDir, "logs");
             Directory.CreateDirectory(logsDir);
+            // Not the primary log, so it takes the smaller cap.
             var lines = Enumerable.Range(1, ManagedLogSurvey.TailLines + 50).Select(i => $"[2026-09-01 00:00:00] INFO  line {i}");
             File.WriteAllLines(Path.Combine(logsDir, "startset.log"), lines);
+            File.WriteAllLines(Path.Combine(logsDir, "run.log"), new[] { "[2026-09-01 00:00:00] INFO  primary" });
 
             var root = ManagedLogSurvey.Survey(rootDir, logsDir);
 
-            Assert.Equal(ManagedLogSurvey.TailLines, root!.Tails[0].Lines.Count);
-            Assert.True(root.Tails[0].Truncated);
-            Assert.EndsWith("line 200", root.Tails[0].Lines[^1]);
+            var secondary = root!.Tails.Single(t => t.File == "startset.log");
+            Assert.Equal(ManagedLogSurvey.TailLines, secondary.Lines.Count);
+            Assert.True(secondary.Truncated);
+            Assert.EndsWith("line 200", secondary.Lines[^1]);
+        }
+
+        [Fact]
+        public void ThePrimaryLogKeepsAWholeRunWhereTheOtherTailsDoNot()
+        {
+            // The regression: a 400-600 line run.log tailed at 150 lines opened mid-run,
+            // so the start of the session was never visible in the viewer.
+            var rootDir = Path.Combine(_root, "ManagedInstalls");
+            var logsDir = Path.Combine(rootDir, "logs");
+            Directory.CreateDirectory(logsDir);
+            var lines = Enumerable.Range(1, 600).Select(i => $"[2026-09-01 00:00:00] INFO  line {i}");
+            File.WriteAllLines(Path.Combine(logsDir, "run.log"), lines);
+
+            var root = ManagedLogSurvey.Survey(rootDir, logsDir);
+
+            var primary = root!.Tails[0];
+            Assert.Equal("run.log", primary.File);
+            Assert.Equal(600, primary.Lines.Count);
+            Assert.False(primary.Truncated);
+            Assert.EndsWith("line 1", primary.Lines[0]);
+        }
+
+        [Fact]
+        public void TheIntuneRootIsReportedWithCmTraceSeverityCounts()
+        {
+            var logsDir = Path.Combine(_root, @"Microsoft\IntuneManagementExtension\Logs");
+            Directory.CreateDirectory(logsDir);
+            var line = "<![LOG[{0}]LOG]!><time=\"10:11:12.1234567\" date=\"9-2-2026\" component=\"IME\" context=\"\" type=\"{1}\" thread=\"7\" file=\"x.cs\">";
+            File.WriteAllLines(Path.Combine(logsDir, "IntuneManagementExtension.log"), new[]
+            {
+                string.Format(line, "starting", 1),
+                string.Format(line, "a warning", 2),
+                string.Format(line, "a failure", 3),
+                string.Format(line, "another failure", 3)
+            });
+            // A newer sibling must not steal the primary slot from the named log.
+            File.WriteAllLines(Path.Combine(logsDir, "AgentExecutor.log"), new[] { string.Format(line, "noise", 3) });
+
+            var root = ManagedLogSurvey.SurveyAll(_root).Single(r => r.Tool == "mdm");
+
+            Assert.Equal("Intune", root.Name);
+            Assert.Equal("flat", root.Layout);
+            Assert.Equal("IntuneManagementExtension.log", root.PrimaryLog);
+            Assert.Equal(2, root.ErrorCount);
+            Assert.Equal(1, root.WarningCount);
+        }
+
+        [Fact]
+        public void TheIntuneRootIsAbsentWhenTheDirectoryIsNot()
+        {
+            Directory.CreateDirectory(Path.Combine(_root, "ManagedInstalls", "logs"));
+
+            Assert.DoesNotContain(ManagedLogSurvey.SurveyAll(_root), r => r.Tool == "mdm");
         }
 
         [Fact]
