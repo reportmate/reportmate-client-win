@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Models.Modules
@@ -67,7 +68,16 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string Interface { get; set; } = string.Empty; // SATA, PCIe, etc.
         public string Health { get; set; } = string.Empty;
         public bool IsInternal { get; set; } = true; // Internal vs external/removable drive
-        
+
+        /// <summary>
+        /// Drive letters of the volumes carved out of this physical disk ("C", "D"),
+        /// from the partition map. Working state used to find the disk that hosts the
+        /// system volume - the reported Name is a hardware model and cannot identify it.
+        /// Not serialized: the wire shape stays identical for both platforms.
+        /// </summary>
+        [JsonIgnore]
+        public List<string> VolumeLetters { get; set; } = new();
+
         // Storage Management - Directory-level analysis
         public List<DirectoryInformation> RootDirectories { get; set; } = new();
         public DateTime? LastAnalyzed { get; set; }
