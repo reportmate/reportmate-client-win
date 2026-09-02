@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
@@ -40,6 +41,65 @@ namespace ReportMate.WindowsClient.Services.Modules
         private readonly string _storageAnalysisCachePath;
         /// <summary>Cache validity period (24 hours in seconds)</summary>
         private const int CacheValiditySeconds = 24 * 60 * 60;
+        /// <summary>Deadline for a single PowerShell helper script (5 minutes)</summary>
+        private const int DefaultScriptTimeoutMs = 5 * 60 * 1000;
+
+        /// <summary>Deadline for a script that walks a whole directory tree (15 minutes)</summary>
+        private const int TreeWalkScriptTimeoutMs = 15 * 60 * 1000;
+
+        /// <summary>
+        /// PowerShell helper prepended to the directory-analysis scripts.
+        ///
+        /// It walks a tree once with an explicit stack and adds up file lengths as it goes,
+        /// instead of piping every FileInfo into Measure-Object. The pipeline form holds the
+        /// whole file list in memory, so a profile with a large AppData could push the child
+        /// past a gigabyte on exactly the machines that are already short of disk - and the
+        /// per-folder breakdown re-walked the same subtrees a second time.
+        ///
+        /// Returns the total plus a per-top-level-folder tally, so one walk answers both.
+        /// Directory reparse points are skipped rather than descended into, which also keeps
+        /// the AppData junction loops out of the walk.
+        /// </summary>
+        private const string FolderFootprintFunction = @"
+function Get-FolderFootprint {
+    param([string]$Root)
+
+    $sizes = @{}
+    $total = [long]0
+    $stack = New-Object System.Collections.Stack
+    $stack.Push(@($Root, ''))
+
+    while ($stack.Count -gt 0) {
+        $node = $stack.Pop()
+        $dir = $node[0]
+        $bucket = $node[1]
+
+        try { $files = [System.IO.Directory]::GetFiles($dir) } catch { $files = @() }
+        foreach ($file in $files) {
+            try {
+                $info = New-Object System.IO.FileInfo($file)
+                if (-not ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    $total += $info.Length
+                    if ($bucket) { $sizes[$bucket] = [long]$sizes[$bucket] + $info.Length }
+                }
+            } catch { }
+        }
+
+        try { $subdirs = [System.IO.Directory]::GetDirectories($dir) } catch { $subdirs = @() }
+        foreach ($subdir in $subdirs) {
+            try {
+                $info = New-Object System.IO.DirectoryInfo($subdir)
+                if (-not ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    if ($bucket) { $childBucket = $bucket } else { $childBucket = $info.Name }
+                    $stack.Push(@($subdir, $childBucket))
+                }
+            } catch { }
+        }
+    }
+
+    New-Object PSObject -Property @{ Total = $total; Sizes = $sizes }
+}
+";
         
         /// <summary>Current storage mode (set from configuration or command line)</summary>
         public StorageAnalysisMode StorageMode { get; set; } = StorageAnalysisMode.Auto;
@@ -640,6 +700,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                                 if (driveLetterToDisk.TryGetValue(letter, out var mappedDisk) && mappedDisk == diskIndex)
                                 {
                                     storage.FreeSpace += kvp.Value;
+                                    storage.VolumeLetters.Add(letter);
                                 }
                             }
                         }
@@ -685,7 +746,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                             Capacity = size,
                             FreeSpace = freeSpace,
                             Interface = "Logical Drive",
-                            Health = freeSpace > 0 ? "Good" : "Unknown"
+                            Health = freeSpace > 0 ? "Good" : "Unknown",
+                            VolumeLetters = { driveId.TrimEnd(':', '\\').ToUpperInvariant() }
                         });
 
                         _logger.LogDebug("Added storage from logical drives (fallback) - Drive: {Drive}, Size: {Size}, Free: {Free}",
@@ -3600,11 +3662,56 @@ try {
         #endregion
 
         /// <summary>
+        /// Find the storage device that hosts the system volume, which is the disk the
+        /// directory analysis describes.
+        ///
+        /// This cannot match on Name: physical disks are the authoritative source, so Name
+        /// carries the hardware model ("SSDPEMKF010T8 NVMe INTEL 1024GB") and Interface the
+        /// bus type ("NVMe"). The old predicate looked for "C:" in the name and an interface
+        /// of "Logical Drive" - values only the count == 0 fallback branch ever produces - so
+        /// it returned null on every machine with a real disk and the whole analysis was
+        /// skipped fleet-wide.
+        ///
+        /// The partition map gives the real answer. Machines where it was unavailable fall
+        /// back to the sole internal disk, which by definition holds the system volume.
+        /// </summary>
+        private StorageDevice? FindSystemVolumeStorage(HardwareData data)
+        {
+            var systemLetter = Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.Windows))
+                ?.TrimEnd(':', '\\')
+                .ToUpperInvariant();
+
+            if (!string.IsNullOrEmpty(systemLetter))
+            {
+                var hosting = data.Storage.FirstOrDefault(s => s.VolumeLetters.Contains(systemLetter));
+                if (hosting != null)
+                {
+                    _logger.LogDebug("Directory analysis target: {Name} (hosts {Letter}:)", hosting.Name, systemLetter);
+                    return hosting;
+                }
+            }
+
+            var internalDisks = data.Storage.Where(s => s.IsInternal && s.Capacity > 0).ToList();
+            if (internalDisks.Count > 0)
+            {
+                var fallback = internalDisks.Count == 1
+                    ? internalDisks[0]
+                    : internalDisks.OrderByDescending(s => s.Capacity).First();
+                _logger.LogDebug(
+                    "Partition map did not attribute {Letter}: to a disk - analysing {Name} as the system disk",
+                    systemLetter, fallback.Name);
+                return fallback;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// Process storage analysis with mode support (quick/deep/auto)
         /// </summary>
         private async Task ProcessStorageAnalysisWithMode(Dictionary<string, List<Dictionary<string, object>>> osqueryResults, HardwareData data)
         {
-            var primaryStorage = data.Storage.FirstOrDefault(s => s.Name.Contains("C:") || s.Interface == "Logical Drive");
+            var primaryStorage = FindSystemVolumeStorage(data);
             if (primaryStorage == null)
             {
                 _logger.LogWarning("No primary storage device found for directory analysis");
@@ -3650,7 +3757,7 @@ try {
             _logger.LogInformation("Starting hierarchical directory storage analysis...");
 
             // Find the primary C: drive storage device to add directory analysis to
-            var primaryStorage = data.Storage.FirstOrDefault(s => s.Name.Contains("C:") || s.Interface == "Logical Drive");
+            var primaryStorage = FindSystemVolumeStorage(data);
             if (primaryStorage == null)
             {
                 _logger.LogWarning("No primary storage device found for directory analysis");
@@ -3947,16 +4054,11 @@ try {
                 // 1. Excludes junction points and symbolic links (ReparsePoint attribute)
                 // 2. Uses -Force for Users directories to include hidden files
                 // 3. Handles errors gracefully
-                var script = $@"
+                var script = FolderFootprintFunction + $@"
                     try {{
                         $path = '{directoryPath.Replace("'", "''")}'
                         if (Test-Path $path) {{
-                            # Get all files recursively, excluding junction points and symbolic links
-                            $files = Get-ChildItem -Path $path -Recurse -File {forceParameter}-ErrorAction SilentlyContinue | 
-                                Where-Object {{ -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }}
-                            $size = ($files | Measure-Object -Property Length -Sum).Sum
-                            if ($size -eq $null) {{ $size = 0 }}
-                            Write-Output $size
+                            Write-Output (Get-FolderFootprint -Root $path).Total
                         }} else {{
                             Write-Output 0
                         }}
@@ -4293,7 +4395,16 @@ try {
             return -1;
         }
 
-        private async Task<string> ExecutePowerShellScriptAsync(string script)
+        /// <summary>
+        /// Run a PowerShell script and return its standard output.
+        ///
+        /// The storage scripts walk whole directory trees, so a run that never returns is a
+        /// realistic outcome rather than a theoretical one: without a deadline a single wedged
+        /// child holds up the whole hardware module on every collection. Both pipes are drained
+        /// concurrently because reading one to completion first deadlocks as soon as the child
+        /// fills the pipe nobody is reading.
+        /// </summary>
+        private async Task<string> ExecutePowerShellScriptAsync(string script, int timeoutMs = DefaultScriptTimeoutMs)
         {
             try
             {
@@ -4304,14 +4415,31 @@ try {
                 process.StartInfo.RedirectStandardOutput = true;
                 process.StartInfo.RedirectStandardError = true;
                 process.StartInfo.CreateNoWindow = true;
-                
+
                 process.Start();
-                
-                var output = await process.StandardOutput.ReadToEndAsync();
-                var error = await process.StandardError.ReadToEndAsync();
-                
-                await process.WaitForExitAsync();
-                
+
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
+
+                using var timeout = new CancellationTokenSource(timeoutMs);
+                try
+                {
+                    await process.WaitForExitAsync(timeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("PowerShell script exceeded {TimeoutMs}ms - terminating", timeoutMs);
+                    try { process.Kill(entireProcessTree: true); } catch { }
+
+                    // Keep whatever the script already emitted: these scripts write one record
+                    // per directory, so a truncated run still carries usable rows.
+                    var partial = await outputTask;
+                    return partial.Trim();
+                }
+
+                var output = await outputTask;
+                var error = await errorTask;
+
                 if (!string.IsNullOrEmpty(error))
                 {
                     _logger.LogDebug("PowerShell script error: {Error}", error);
@@ -4340,7 +4468,7 @@ try {
                 // 1. Known directories (Program Files, Users, Windows, ProgramData)
                 // 2. Junction points and symbolic links (ReparsePoint attribute)
                 // 3. Directories smaller than 10MB
-                var script = @"
+                var script = FolderFootprintFunction + @"
                     $excludedDirs = @('Program Files', 'Program Files (x86)', 'Users', 'Windows', 'ProgramData', '$Recycle.Bin', 'System Volume Information')
                     Get-ChildItem -Path 'C:\' -Directory -Force -ErrorAction SilentlyContinue | 
                         Where-Object { 
@@ -4349,11 +4477,7 @@ try {
                         } | 
                         ForEach-Object {
                             try {
-                                # Exclude junction points and symbolic links when calculating size
-                                $files = Get-ChildItem -Path $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue | 
-                                    Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
-                                $size = ($files | Measure-Object -Property Length -Sum).Sum
-                                if ($size -eq $null) { $size = 0 }
+                                $size = (Get-FolderFootprint -Root $_.FullName).Total
                                 if ($size -gt 10485760) {
                                     Write-Output ($_.Name + '|' + $_.FullName + '|' + $size)
                                 }
@@ -4468,7 +4592,7 @@ try {
             {
                 _logger.LogDebug("Starting PowerShell-based ProgramData subdirectory analysis...");
 
-                var powershellScript = @"
+                var powershellScript = FolderFootprintFunction + @"
                 try {
                     $programDataPath = 'C:\ProgramData'
                     
@@ -4478,27 +4602,8 @@ try {
                         Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } |
                         ForEach-Object {
                         try {
-                            # Calculate directory size with timeout, excluding junction points
-                            $job = Start-Job -ScriptBlock {
-                                param($path)
-                                $files = Get-ChildItem -Path $path -Recurse -File -Force -ErrorAction SilentlyContinue | 
-                                    Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
-                                $size = ($files | Measure-Object -Property Length -Sum).Sum
-                                if ($size -eq $null) { $size = 0 }
-                                return $size
-                            } -ArgumentList $_.FullName
-                            
-                            # Wait for job with timeout
-                            $completed = Wait-Job -Job $job -Timeout 30
-                            if ($completed) {
-                                $size = Receive-Job -Job $job
-                            } else {
-                                # Job timed out, stop it and set size to 0
-                                Stop-Job -Job $job -Force
-                                $size = 0
-                            }
-                            Remove-Job -Job $job -Force
-                            
+                            $size = (Get-FolderFootprint -Root $_.FullName).Total
+
                             # Only include directories larger than 10MB (10485760 bytes)
                             if ($size -gt 10485760) {
                                 [PSCustomObject]@{
@@ -4522,7 +4627,7 @@ try {
                     Write-Error ""ProgramData analysis failed: $($_.Exception.Message)""
                 }";
 
-                var powershellOutput = await ExecutePowerShellScriptAsync(powershellScript);
+                var powershellOutput = await ExecutePowerShellScriptAsync(powershellScript, TreeWalkScriptTimeoutMs);
 
                 if (string.IsNullOrWhiteSpace(powershellOutput))
                 {
@@ -4626,102 +4731,63 @@ try {
                 // 1. Get all user profile folders
                 // 2. For each user, get sizes of standard folders (Desktop, Documents, Downloads, Pictures, Videos, Music, etc.)
                 // 3. Exclude junction points and symbolic links
-                var powershellScript = @"
+                var powershellScript = FolderFootprintFunction + @"
                 try {
                     $usersPath = 'C:\Users'
-                    $results = @()
-                    
-                    # Standard Windows user folders to analyze
+
+                    # Standard Windows user folders to report individually
                     $standardFolders = @('Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music', 'AppData', 'OneDrive', 'Favorites', 'Saved Games', '.nuget', '.vscode')
-                    
+
+                    # Large hidden caches worth calling out separately
+                    $hiddenFolders = @('.cache', '.npm', '.cargo', '.gradle', '.m2', '.docker', '.local')
+
                     # Exclude system users and junction points
                     $excludedUsers = @('Default', 'Default User', 'Public', 'All Users')
-                    
-                    # Get all user directories
-                    $userDirs = Get-ChildItem -Path $usersPath -Directory -Force -ErrorAction SilentlyContinue | 
-                        Where-Object { 
-                            $_.Name -notin $excludedUsers -and 
+
+                    $userDirs = Get-ChildItem -Path $usersPath -Directory -Force -ErrorAction SilentlyContinue |
+                        Where-Object {
+                            $_.Name -notin $excludedUsers -and
                             -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
                             -not $_.Name.StartsWith('.')
                         }
-                    
+
                     foreach ($userDir in $userDirs) {
                         $userName = $userDir.Name
                         $userPath = $userDir.FullName
-                        
-                        # Calculate total user folder size first
-                        $totalUserSize = 0
-                        try {
-                            $files = Get-ChildItem -Path $userPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
-                                Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
-                            $totalUserSize = ($files | Measure-Object -Property Length -Sum).Sum
-                            if ($totalUserSize -eq $null) { $totalUserSize = 0 }
-                        } catch { }
-                        
-                        # Output user entry marker
-                        ""USER|$userName|$userPath|$totalUserSize""
-                        
-                        # Get sizes for each standard folder
+
+                        # One walk yields the profile total and every top-level folder within it
+                        $footprint = Get-FolderFootprint -Root $userPath
+
+                        ""USER|$userName|$userPath|$($footprint.Total)""
+
                         foreach ($folderName in $standardFolders) {
-                            $folderPath = Join-Path -Path $userPath -ChildPath $folderName
-                            
-                            if (Test-Path -Path $folderPath -PathType Container) {
-                                # Skip if it's a junction point
-                                $folderItem = Get-Item -Path $folderPath -Force -ErrorAction SilentlyContinue
-                                if ($folderItem -and -not ($folderItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                                    try {
-                                        $files = Get-ChildItem -Path $folderPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
-                                            Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
-                                        $size = ($files | Measure-Object -Property Length -Sum).Sum
-                                        if ($size -eq $null) { $size = 0 }
-                                        
-                                        # Only include if size > 1MB
-                                        if ($size -gt 1048576) {
-                                            ""FOLDER|$userName|$folderName|$folderPath|$size""
-                                        }
-                                    } catch { }
-                                }
+                            $size = [long]$footprint.Sizes[$folderName]
+                            if ($size -gt 1048576) {
+                                $folderPath = Join-Path -Path $userPath -ChildPath $folderName
+                                ""FOLDER|$userName|$folderName|$folderPath|$size""
                             }
                         }
-                        
-                        # Also check for large hidden folders like .cache, .npm, .cargo
-                        $hiddenFolders = @('.cache', '.npm', '.cargo', '.gradle', '.m2', '.docker', '.local')
+
                         foreach ($folderName in $hiddenFolders) {
-                            $folderPath = Join-Path -Path $userPath -ChildPath $folderName
-                            
-                            if (Test-Path -Path $folderPath -PathType Container) {
-                                try {
-                                    $files = Get-ChildItem -Path $folderPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
-                                        Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
-                                    $size = ($files | Measure-Object -Property Length -Sum).Sum
-                                    if ($size -eq $null) { $size = 0 }
-                                    
-                                    # Only include if size > 100MB (hidden folders with significant cache)
-                                    if ($size -gt 104857600) {
-                                        $displayName = $folderName.TrimStart('.')
-                                        ""FOLDER|$userName|$displayName (cache)|$folderPath|$size""
-                                    }
-                                } catch { }
+                            $size = [long]$footprint.Sizes[$folderName]
+                            if ($size -gt 104857600) {
+                                $folderPath = Join-Path -Path $userPath -ChildPath $folderName
+                                $displayName = $folderName.TrimStart('.')
+                                ""FOLDER|$userName|$displayName (cache)|$folderPath|$size""
                             }
                         }
                     }
-                    
-                    # Also get Public folder size
+
                     $publicPath = 'C:\Users\Public'
                     if (Test-Path -Path $publicPath) {
-                        try {
-                            $files = Get-ChildItem -Path $publicPath -Recurse -File -Force -ErrorAction SilentlyContinue | 
-                                Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) }
-                            $size = ($files | Measure-Object -Property Length -Sum).Sum
-                            if ($size -eq $null) { $size = 0 }
-                            ""USER|Public|$publicPath|$size""
-                        } catch { }
+                        $publicSize = (Get-FolderFootprint -Root $publicPath).Total
+                        ""USER|Public|$publicPath|$publicSize""
                     }
                 } catch {
                     Write-Error ""Users analysis failed: $($_.Exception.Message)""
                 }";
 
-                var powershellOutput = await ExecutePowerShellScriptAsync(powershellScript);
+                var powershellOutput = await ExecutePowerShellScriptAsync(powershellScript, TreeWalkScriptTimeoutMs);
 
                 if (string.IsNullOrWhiteSpace(powershellOutput))
                 {
