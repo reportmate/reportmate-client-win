@@ -1334,7 +1334,13 @@ namespace ReportMate.WindowsClient.Services
                 return new List<DailyUsageSummary>();
 
             var summaries = sessions
-                .GroupBy(s => new { Date = s.StartTime.ToString("yyyy-MM-dd"), s.Name })
+                // Local day, not UTC: usagetracker keys its foreground/active
+                // counters on the local date (Program.cs), and the merge joins
+                // the two on (Date, AppName). Keying summaries on the UTC day
+                // put every evening's launches on the next calendar day and on
+                // a different row than its foreground seconds. The macOS client
+                // also reports device-local days.
+                .GroupBy(s => new { Date = s.StartTime.ToLocalTime().ToString("yyyy-MM-dd"), s.Name })
                 .Where(g => !string.IsNullOrEmpty(g.Key.Name))
                 .Select(g =>
                 {

@@ -140,6 +140,37 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Fact]
+        public void Daily_summaries_key_on_the_local_day_like_the_tracker_does()
+        {
+            // usagetracker keys foreground/active counters on the local date
+            // and the merge joins on (Date, AppName); keying summaries on the
+            // UTC day split every evening's usage across two rows. On a runner
+            // whose local zone is UTC the two spellings coincide and this
+            // degenerates to the tautology; anywhere else it pins the choice.
+            var service = new ApplicationUsageService(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ApplicationUsageService>.Instance);
+
+            // 02:00 UTC: still the previous calendar day in any zone west of
+            // UTC-2, already the next in any zone east of UTC+22.
+            var lateEvening = new DateTime(2026, 8, 28, 2, 0, 0, DateTimeKind.Utc);
+            var sessions = new List<ApplicationUsageSession>
+            {
+                new()
+                {
+                    Name = "Google Chrome",
+                    User = "alice",
+                    StartTime = lateEvening,
+                    EndTime = lateEvening.AddMinutes(30),
+                    DurationSeconds = 1800,
+                }
+            };
+
+            var summary = Assert.Single(service.BuildDailySummaries(sessions));
+
+            Assert.Equal(lateEvening.ToLocalTime().ToString("yyyy-MM-dd"), summary.Date);
+        }
+
+        [Fact]
         public void Daily_summaries_report_activations_and_leave_seconds_alone()
         {
             var service = new ApplicationUsageService(
