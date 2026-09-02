@@ -44,18 +44,80 @@ namespace ReportMate.WindowsClient.Services
         public const int WalkBudget = 5_000;
         public const int TailLines = 150;
         public const int TailBytes = 32 * 1024;
+        /// <summary>
+        /// The primary log gets a larger cap than the other tails. A Cimian or Munki
+        /// run.log is routinely 400-600 lines, so 150 started the viewer mid-run and the
+        /// beginning of the session - the part that says what the run set out to do -
+        /// was never visible.
+        /// </summary>
+        public const int PrimaryTailLines = 2_000;
+        public const int PrimaryTailBytes = 256 * 1024;
 
         private static readonly Regex DayPattern = new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled);
         private static readonly Regex SessionPattern = new(@"^\d{4}(_\d)?$", RegexOptions.Compiled);
         private static readonly Regex ErrorPattern = new(@"\b(ERROR|ERR|FAULT|CRITICAL|FATAL)\b", RegexOptions.Compiled);
         private static readonly Regex WarningPattern = new(@"\b(WARN|WARNING|WRN)\b", RegexOptions.Compiled);
+        /// <summary>
+        /// CMTrace severity, as written by the Intune Management Extension:
+        /// <c>... type="3" thread="..."</c>. 3 is an error, 2 a warning, 1 informational.
+        /// The word-based patterns above find neither, because a CMTrace line carries its
+        /// severity as an attribute rather than as a word in the message.
+        /// </summary>
+        private static readonly Regex CmTraceTypePattern = new(@"\stype=""(\d)""", RegexOptions.Compiled);
         private static readonly string[] PreferredSessionLogs = { "run.log", "install.log", "startset.log", "bootstrap.log" };
 
-        /// <summary>Every Managed* directory under <paramref name="programData"/> that has a logs subdirectory.</summary>
+        /// <summary>
+        /// A log directory that does not follow the Managed* convention because we do not
+        /// own the tool that writes it. Detection is directory existence, so a device
+        /// without the tool simply reports no such root.
+        /// </summary>
+        public sealed class KnownRoot
+        {
+            public required string Tool { get; init; }
+            public required string Name { get; init; }
+            /// <summary>Relative to ProgramData, so the survey stays testable against a temporary root.</summary>
+            public required string RelativePath { get; init; }
+            /// <summary>Count severity from CMTrace <c>type</c> attributes rather than words in the message.</summary>
+            public bool CmTrace { get; init; }
+            /// <summary>File name the tail viewer opens first, when the newest log is not the useful one.</summary>
+            public string? PrimaryLog { get; init; }
+        }
+
+        /// <summary>
+        /// Log roots belonging to management tools we do not write. Surveyed before the
+        /// Managed* roots so the MDM sits at the top of the card, which is the order the
+        /// web app renders. Intune is the only Windows entry today; the table exists so
+        /// another MDM is a row rather than a code change.
+        /// </summary>
+        public static readonly KnownRoot[] KnownRoots =
+        {
+            new()
+            {
+                Tool = "mdm",
+                Name = "Intune",
+                RelativePath = @"Microsoft\IntuneManagementExtension\Logs",
+                CmTrace = true,
+                PrimaryLog = "IntuneManagementExtension.log"
+            }
+        };
+
+        /// <summary>
+        /// The known roots, then every Managed* directory under
+        /// <paramref name="programData"/> that has a logs subdirectory.
+        /// </summary>
         public static List<LogRoot> SurveyAll(string programData)
         {
             var roots = new List<LogRoot>();
             if (!Directory.Exists(programData)) return roots;
+
+            foreach (var known in KnownRoots)
+            {
+                var dir = Path.Combine(programData, known.RelativePath);
+                if (!Directory.Exists(dir)) continue;
+                var root = Survey(dir, dir, known);
+                if (root != null) roots.Add(root);
+                if (roots.Count >= MaxRoots) return roots;
+            }
 
             foreach (var rootDir in Directory.EnumerateDirectories(programData, "Managed*").OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
             {
@@ -81,10 +143,12 @@ namespace ReportMate.WindowsClient.Services
             return actual ?? candidate;
         }
 
-        public static LogRoot? Survey(string rootDir, string logsDir)
+        public static LogRoot? Survey(string rootDir, string logsDir) => Survey(rootDir, logsDir, null);
+
+        public static LogRoot? Survey(string rootDir, string logsDir, KnownRoot? known)
         {
             var dirName = Path.GetFileName(rootDir.TrimEnd(Path.DirectorySeparatorChar));
-            var tool = ToolKey(dirName);
+            var tool = known?.Tool ?? ToolKey(dirName);
             if (string.IsNullOrEmpty(tool)) return null;
 
             // Session layout: logs\YYYY-MM-DD\HHMM\
@@ -142,12 +206,12 @@ namespace ReportMate.WindowsClient.Services
             }
 
             // Tails: the primary log first, then the next most recent logs in the root.
-            var primary = PrimaryLog(logsDir, latestSessionDir);
+            var primary = PrimaryLog(logsDir, latestSessionDir, known);
             var tails = new List<LogTail>();
             int errors = 0, warnings = 0;
             foreach (var relative in TailCandidates(primary, files))
             {
-                var tail = ReadTail(Path.Combine(logsDir, relative.Replace('/', Path.DirectorySeparatorChar)), relative);
+                var tail = ReadTail(Path.Combine(logsDir, relative.Replace('/', Path.DirectorySeparatorChar)), relative, relative == primary);
                 if (tail.Lines.Count == 0 && relative != primary) continue;
                 tails.Add(tail);
                 if (tails.Count >= MaxTails) break;
@@ -156,7 +220,14 @@ namespace ReportMate.WindowsClient.Services
             {
                 foreach (var line in tails[0].Lines)
                 {
-                    if (ErrorPattern.IsMatch(line)) errors++;
+                    if (known?.CmTrace == true)
+                    {
+                        var severity = CmTraceTypePattern.Match(line);
+                        if (!severity.Success) continue;
+                        if (severity.Groups[1].Value == "3") errors++;
+                        else if (severity.Groups[1].Value == "2") warnings++;
+                    }
+                    else if (ErrorPattern.IsMatch(line)) errors++;
                     else if (WarningPattern.IsMatch(line)) warnings++;
                 }
             }
@@ -164,7 +235,7 @@ namespace ReportMate.WindowsClient.Services
             return new LogRoot
             {
                 Tool = tool,
-                Name = DisplayName(dirName),
+                Name = known?.Name ?? DisplayName(dirName),
                 Path = logsDir,
                 Layout = latestSessionDir == null ? "flat" : "sessions",
                 FileCount = fileCount,
@@ -230,8 +301,15 @@ namespace ReportMate.WindowsClient.Services
             return Path.GetRelativePath(basePath, path).Replace(Path.DirectorySeparatorChar, '/');
         }
 
-        public static string? PrimaryLog(string logsDir, string? sessionDir)
+        public static string? PrimaryLog(string logsDir, string? sessionDir) => PrimaryLog(logsDir, sessionDir, null);
+
+        public static string? PrimaryLog(string logsDir, string? sessionDir, KnownRoot? known)
         {
+            if (known?.PrimaryLog != null)
+            {
+                var named = Path.Combine(logsDir, known.PrimaryLog);
+                if (File.Exists(named)) return known.PrimaryLog;
+            }
             if (sessionDir != null)
             {
                 var rel = RelativePath(sessionDir, logsDir);
@@ -405,15 +483,24 @@ namespace ReportMate.WindowsClient.Services
         }
 
         /// <summary>Last <see cref="TailBytes"/> of the file, split into at most <see cref="TailLines"/> lines.</summary>
-        public static LogTail ReadTail(string fullPath, string relativePath)
+        public static LogTail ReadTail(string fullPath, string relativePath) => ReadTail(fullPath, relativePath, false);
+
+        /// <summary>
+        /// Reads the tail of one log. <paramref name="isPrimary"/> raises the caps to
+        /// <see cref="PrimaryTailLines"/> and <see cref="PrimaryTailBytes"/> so a whole
+        /// run fits; the other tails stay small because a root reports up to six of them.
+        /// </summary>
+        public static LogTail ReadTail(string fullPath, string relativePath, bool isPrimary)
         {
+            var maxLines = isPrimary ? PrimaryTailLines : TailLines;
+            var maxBytes = isPrimary ? PrimaryTailBytes : TailBytes;
             var tail = new LogTail { File = relativePath };
             try
             {
                 // FileShare.ReadWrite: the tool may still be writing the log.
                 using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 var length = stream.Length;
-                var start = length > TailBytes ? length - TailBytes : 0;
+                var start = length > maxBytes ? length - maxBytes : 0;
                 stream.Seek(start, SeekOrigin.Begin);
                 var buffer = new byte[length - start];
                 var read = 0;
@@ -435,9 +522,9 @@ namespace ReportMate.WindowsClient.Services
                 while (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
                 // A .json file is one document: keep every line within the byte cap so it still parses.
                 var wholeDocument = relativePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
-                if (!wholeDocument && lines.Count > TailLines)
+                if (!wholeDocument && lines.Count > maxLines)
                 {
-                    lines = lines.Skip(lines.Count - TailLines).ToList();
+                    lines = lines.Skip(lines.Count - maxLines).ToList();
                     truncated = true;
                 }
                 tail.Lines = lines;

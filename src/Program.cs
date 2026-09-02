@@ -494,7 +494,6 @@ public class Program
         
         // Register diagnostic services
         services.AddScoped<MdmDiagnosticsService>();
-        services.AddScoped<IntuneLogsService>();
 
         // Register modular services
         services.AddScoped<ModularOsQueryService>();

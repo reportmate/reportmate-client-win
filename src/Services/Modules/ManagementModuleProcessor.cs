@@ -20,20 +20,17 @@ namespace ReportMate.WindowsClient.Services.Modules
         private readonly ILogger<ManagementModuleProcessor> _logger;
         private readonly IWmiHelperService _wmiHelperService;
         private readonly MdmDiagnosticsService _mdmDiagnosticsService;
-        private readonly IntuneLogsService _intuneLogsService;
 
         public override string ModuleId => "management";
 
         public ManagementModuleProcessor(
             ILogger<ManagementModuleProcessor> logger,
             IWmiHelperService wmiHelperService,
-            MdmDiagnosticsService mdmDiagnosticsService,
-            IntuneLogsService intuneLogsService)
+            MdmDiagnosticsService mdmDiagnosticsService)
         {
             _logger = logger;
             _wmiHelperService = wmiHelperService;
             _mdmDiagnosticsService = mdmDiagnosticsService;
-            _intuneLogsService = intuneLogsService;
         }
 
         public override async Task<ManagementData> ProcessModuleAsync(
@@ -94,16 +91,6 @@ namespace ReportMate.WindowsClient.Services.Modules
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "MDM diagnostics collection failed");
-            }
-
-            // Collect recent Intune Management Extension logs
-            try
-            {
-                data.RecentIntuneLogs = await _intuneLogsService.GetRecentLogsAsync(maxLines: 50);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Intune logs collection failed");
             }
 
             // Survey our own management tools' log roots under ProgramData

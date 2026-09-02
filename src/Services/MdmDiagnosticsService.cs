@@ -614,5 +614,21 @@ if (Test-Path $toolPath) {
         public string? ErrorMessage { get; set; }
     }
 
+    /// <summary>
+    /// One parsed Intune Management Extension log line, as surfaced under
+    /// <c>management.mdmDiagnostics.recentIntuneLogs</c>. Lived in IntuneLogsService
+    /// until that service was replaced by the mdm log root; this diagnostics view is a
+    /// separate consumer and keeps its own copy of the shape.
+    /// </summary>
+    public class IntuneLogEntry
+    {
+        public DateTime Timestamp { get; set; }
+        public string LogLevel { get; set; } = "Info";
+        public string Message { get; set; } = string.Empty;
+        public string Component { get; set; } = string.Empty;
+        public string ThreadId { get; set; } = string.Empty;
+        public string Category { get; set; } = "General";
+    }
+
     #endregion
 }

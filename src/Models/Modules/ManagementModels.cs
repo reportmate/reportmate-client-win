@@ -33,9 +33,6 @@ namespace ReportMate.WindowsClient.Models.Modules
         // MDM diagnostics (health attestation, co-management, policy details)
         public MdmDiagnosticsData? MdmDiagnostics { get; set; }
 
-        // Recent Intune Management Extension logs
-        public IntuneLogsResponse? RecentIntuneLogs { get; set; }
-
         /// <summary>
         /// Survey of the management tools' own log roots under C:\ProgramData\Managed*\logs.
         /// Null when the survey failed; the management module is never sunk by it.
