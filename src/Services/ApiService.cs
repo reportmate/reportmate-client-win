@@ -508,6 +508,13 @@ public class ApiService : IApiService
                 _configuration["ReportMate:CompressPayload"], "false",
                 StringComparison.OrdinalIgnoreCase);
 
+            // One key per collection, identical across the retry attempts
+            // below: usage rows accumulate on conflict server-side, so a retry
+            // after a timeout the server actually processed would double-count
+            // the whole payload without it.
+            var idempotencyKey = IdempotencyKey.Create(
+                deviceSerial ?? string.Empty, "unified", payload.Metadata.CollectedAt);
+
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
                 try
@@ -545,7 +552,8 @@ public class ApiService : IApiService
                         deviceId,
                         payload.Metadata.Additional.TryGetValue("deviceName", out var unifiedName) ? unifiedName?.ToString() : null,
                         payload.Metadata.ClientVersion,
-                        payload.Metadata.Platform);
+                        payload.Metadata.Platform,
+                        idempotencyKey);
                     _logger.LogInformation("API Response: {StatusCode} {ReasonPhrase}", response.StatusCode, response.ReasonPhrase);
 
                     if (response.IsSuccessStatusCode)
@@ -1018,7 +1026,8 @@ public class ApiService : IApiService
         string? deviceUuid,
         string? deviceName,
         string? clientVersion,
-        string? platform = "Windows")
+        string? platform = "Windows",
+        string? idempotencyKey = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
         AddIdentityHeader(request, "X-Device-Serial", serialNumber);
@@ -1026,6 +1035,7 @@ public class ApiService : IApiService
         AddIdentityHeader(request, "X-Device-Name", deviceName);
         AddIdentityHeader(request, "X-Platform", platform);
         AddIdentityHeader(request, "X-Client-Version", clientVersion);
+        AddIdentityHeader(request, "Idempotency-Key", idempotencyKey);
         return await _httpClient.SendAsync(request);
     }
 
