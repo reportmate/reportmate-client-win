@@ -2150,6 +2150,23 @@ namespace ReportMate.WindowsClient.Services.Modules
             return items;
         }
 
+        /// <summary>
+        /// Reads a string property, trying each name in order, and returns "" when
+        /// none is present or the value is null. Cimian's report schema evolves, and
+        /// a missing key must never cost us the whole report.
+        /// </summary>
+        private static string ReadString(JsonElement element, params string[] names)
+        {
+            foreach (var name in names)
+            {
+                if (element.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String)
+                {
+                    return prop.GetString() ?? "";
+                }
+            }
+            return "";
+        }
+
         private List<CimianEvent> ReadCimianEventsReport(string filePath)
         {
             var events = new List<CimianEvent>();
@@ -2181,61 +2198,83 @@ namespace ReportMate.WindowsClient.Services.Modules
                 
                 foreach (var eventElement in document.RootElement.EnumerateArray())
                 {
-                    var cimianEvent = new CimianEvent
+                    // Every field here is optional. Cimian's events.json schema has
+                    // moved -- it now emits package_name/package_version and no longer
+                    // emits source_file/source_function/source_line at all -- and the
+                    // reader used to demand all of them with GetProperty. The first
+                    // event threw KeyNotFoundException, the outer catch swallowed it,
+                    // and the method returned an EMPTY list, so a device silently
+                    // reported no Cimian events at all while its install log was full
+                    // of them. Read defensively and keep going.
+                    try
                     {
-                        EventId = eventElement.GetProperty("event_id").GetString() ?? "",
-                        SessionId = eventElement.GetProperty("session_id").GetString() ?? "",
-                        Level = eventElement.GetProperty("level").GetString() ?? "",
-                        EventType = eventElement.GetProperty("event_type").GetString() ?? "",
-                        Action = eventElement.GetProperty("action").GetString() ?? "",
-                        Status = MapCimianEventStatusToReportMate(eventElement.GetProperty("status").GetString() ?? ""), // Apply event status mapping
-                        Message = eventElement.GetProperty("message").GetString() ?? "",
-                        SourceFile = eventElement.GetProperty("source_file").GetString() ?? "",
-                        SourceFunction = eventElement.GetProperty("source_function").GetString() ?? "",
-                        SourceLine = eventElement.GetProperty("source_line").GetInt32()
-                    };
-
-                    // Enhanced fields from new Cimian structure
-                    if (eventElement.TryGetProperty("package", out var packageProp) && packageProp.ValueKind != JsonValueKind.Null)
-                    {
-                        cimianEvent.Package = packageProp.GetString() ?? "";
-                    }
-
-                    if (eventElement.TryGetProperty("version", out var versionProp) && versionProp.ValueKind != JsonValueKind.Null)
-                    {
-                        cimianEvent.Version = versionProp.GetString() ?? "";
-                    }
-
-                    if (eventElement.TryGetProperty("log_file", out var logFileProp) && logFileProp.ValueKind != JsonValueKind.Null)
-                    {
-                        cimianEvent.LogFile = logFileProp.GetString() ?? "";
-                    }
-
-                    if (eventElement.TryGetProperty("context", out var contextProp) && contextProp.ValueKind == JsonValueKind.Object)
-                    {
-                        foreach (var contextItem in contextProp.EnumerateObject())
+                        var cimianEvent = new CimianEvent
                         {
-                            cimianEvent.Context[contextItem.Name] = contextItem.Value.ToString();
+                            EventId = ReadString(eventElement, "event_id"),
+                            SessionId = ReadString(eventElement, "session_id"),
+                            Level = ReadString(eventElement, "level"),
+                            EventType = ReadString(eventElement, "event_type"),
+                            Action = ReadString(eventElement, "action"),
+                            Status = MapCimianEventStatusToReportMate(ReadString(eventElement, "status")),
+                            Message = ReadString(eventElement, "message"),
+                            SourceFile = ReadString(eventElement, "source_file"),
+                            SourceFunction = ReadString(eventElement, "source_function"),
+                            // package_name/package_version are the current names;
+                            // package/version are kept so older clients still parse.
+                            Package = ReadString(eventElement, "package_name", "package"),
+                            Version = ReadString(eventElement, "package_version", "version"),
+                            LogFile = ReadString(eventElement, "log_file"),
+                            Error = ReadString(eventElement, "error")
+                        };
+
+                        if (eventElement.TryGetProperty("source_line", out var sourceLineProp) &&
+                            sourceLineProp.ValueKind == JsonValueKind.Number &&
+                            sourceLineProp.TryGetInt32(out var sourceLine))
+                        {
+                            cimianEvent.SourceLine = sourceLine;
                         }
-                    }
 
-                    if (eventElement.TryGetProperty("timestamp", out var timestampProp) &&
-                        DateTime.TryParse(timestampProp.GetString(), out var timestamp))
+                        if (eventElement.TryGetProperty("context", out var contextProp) && contextProp.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (var contextItem in contextProp.EnumerateObject())
+                            {
+                                cimianEvent.Context[contextItem.Name] = contextItem.Value.ToString();
+                            }
+                        }
+
+                        // Cimian's status verdict now travels with its own reason and
+                        // detection method. They explain WHY an item was judged the way
+                        // it was, which is the difference between "detection is wrong"
+                        // and "the install never ran", so carry them in the context.
+                        foreach (var name in new[] { "status_reason", "status_reason_code", "detection_method", "target_version" })
+                        {
+                            var value = ReadString(eventElement, name);
+                            if (!string.IsNullOrEmpty(value))
+                            {
+                                cimianEvent.Context[name] = value;
+                            }
+                        }
+
+                        if (eventElement.TryGetProperty("timestamp", out var timestampProp) &&
+                            DateTime.TryParse(timestampProp.GetString(), out var timestamp))
+                        {
+                            cimianEvent.Timestamp = timestamp;
+                        }
+
+                        if (eventElement.TryGetProperty("progress", out var progressProp) &&
+                            progressProp.ValueKind == JsonValueKind.Number &&
+                            progressProp.TryGetInt32(out var progress))
+                        {
+                            cimianEvent.Progress = progress;
+                        }
+
+                        events.Add(cimianEvent);
+                    }
+                    catch (Exception ex)
                     {
-                        cimianEvent.Timestamp = timestamp;
+                        // One malformed record must not discard the whole report.
+                        _logger.LogWarning(ex, "Skipping unreadable Cimian event in {FilePath}", filePath);
                     }
-
-                    if (eventElement.TryGetProperty("error", out var errorProp) && errorProp.ValueKind != JsonValueKind.Null)
-                    {
-                        cimianEvent.Error = errorProp.GetString() ?? "";
-                    }
-
-                    if (eventElement.TryGetProperty("progress", out var progressProp) && progressProp.ValueKind != JsonValueKind.Null)
-                    {
-                        cimianEvent.Progress = progressProp.GetInt32();
-                    }
-
-                    events.Add(cimianEvent);
                 }
 
                 // Sort by timestamp descending (most recent first)
