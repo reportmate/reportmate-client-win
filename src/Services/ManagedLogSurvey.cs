@@ -356,7 +356,9 @@ namespace ReportMate.WindowsClient.Services
                 int? errors = null, warnings = null;
                 if (root.TryGetProperty("summary", out var summary) && summary.ValueKind == JsonValueKind.Object)
                 {
-                    errors = IntOf(summary, "errors");
+                    // The Munki fork's summary carries errors and warnings; Cimian's and
+                    // StartSet's carry failures (and no warning count), so fall back to it.
+                    errors = IntOf(summary, "errors") ?? IntOf(summary, "failures");
                     warnings = IntOf(summary, "warnings");
                 }
                 if (errors == null && root.TryGetProperty("error_items", out var errorItems) && errorItems.ValueKind == JsonValueKind.Array) errors = errorItems.GetArrayLength();
