@@ -36,6 +36,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         // Recent Intune Management Extension logs
         public IntuneLogsResponse? RecentIntuneLogs { get; set; }
 
+        /// <summary>
+        /// Survey of the management tools' own log roots under C:\ProgramData\Managed*\logs.
+        /// Null when the survey failed; the management module is never sunk by it.
+        /// </summary>
+        public ManagementLogs? Logs { get; set; }
+
         // --- Policy & configuration data (merged from deprecated profiles module) ---
         public List<ConfigurationProfile> ConfigurationProfiles { get; set; } = new();
         public List<RegistryPolicy> RegistryPolicies { get; set; } = new();

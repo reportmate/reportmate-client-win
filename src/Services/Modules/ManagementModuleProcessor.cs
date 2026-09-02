@@ -106,6 +106,19 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogWarning(ex, "Intune logs collection failed");
             }
 
+            // Survey our own management tools' log roots under ProgramData
+            var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            try
+            {
+                var roots = ManagedLogSurvey.SurveyAll(programData);
+                data.Logs = new ManagementLogs { Roots = roots };
+                _logger.LogInformation("Managed log survey found {Count} log roots under {ProgramData}", roots.Count, programData);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Managed log survey failed under {ProgramData}", programData);
+            }
+
             // Populate ownership type from dsregcmd join status
             if (string.IsNullOrEmpty(data.OwnershipType))
             {
