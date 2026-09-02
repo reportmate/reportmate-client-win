@@ -7,63 +7,26 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Models.Modules;
 
-namespace ReportMate.WindowsClient.Services.Modules
+namespace ReportMate.WindowsClient.Services
 {
     /// <summary>
-    /// Logs module processor - surveys every management tool log root on the device.
+    /// Surveys every management tool log root on the device.
     ///
-    /// The convention puts each tool's logs under C:\ProgramData\Managed&lt;Tool&gt;\logs
-    /// (ManagedInstalls for Cimian, ManagedBootstrap for BootstrapMate, ManagedReports
-    /// for ReportMate, ManagedState for StartSet, ...). For each root this reports the
-    /// file inventory, the latest session summary when the tool writes Cimian-style
-    /// YYYY-MM-DD\HHMM\session.json directories, error and warning counts, and a capped
-    /// tail of the primary log. The Mac client does the same over /Library/Managed */logs,
-    /// with the same JSON shape.
-    /// </summary>
-    public class LogsModuleProcessor : BaseModuleProcessor<LogsData>
-    {
-        private readonly ILogger<LogsModuleProcessor> _logger;
-
-        public override string ModuleId => "logs";
-
-        public LogsModuleProcessor(ILogger<LogsModuleProcessor> logger)
-        {
-            _logger = logger;
-        }
-
-        public override Task<LogsData> ProcessModuleAsync(
-            Dictionary<string, List<Dictionary<string, object>>> osqueryResults,
-            string deviceId)
-        {
-            var data = new LogsData
-            {
-                ModuleId = ModuleId,
-                DeviceId = deviceId,
-                CollectedAt = DateTime.UtcNow
-            };
-
-            var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-            try
-            {
-                data.Roots = ManagedLogSurvey.SurveyAll(programData);
-                _logger.LogInformation("Logs module found {Count} Managed log roots under {ProgramData}", data.Roots.Count, programData);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Logs module survey failed under {ProgramData}", programData);
-            }
-
-            return Task.FromResult(data);
-        }
-    }
-
-    /// <summary>
-    /// Pure file-system survey, kept free of the module plumbing so it can be run
-    /// against a temporary root in tests.
+    /// The convention puts each tool's logs under
+    /// <c>C:\ProgramData\Managed&lt;Tool&gt;\logs</c> - ManagedInstalls for Cimian,
+    /// ManagedBootstrap for BootstrapMate, ManagedReports for ReportMate, ManagedState
+    /// for StartSet, and so on. For each root this reports the file inventory, the
+    /// latest session summary when the tool writes Cimian-style
+    /// <c>YYYY-MM-DD\HHMM\session.json</c> directories, error and warning counts, and a
+    /// capped tail of the primary log.
+    ///
+    /// The result is carried as a section of the management module rather than a module
+    /// of its own; the Mac client produces the same shape over
+    /// <c>/Library/Managed */logs</c>.
+    ///
+    /// Kept free of the module plumbing so it can be run against a temporary root in tests.
     /// </summary>
     public static class ManagedLogSurvey
     {

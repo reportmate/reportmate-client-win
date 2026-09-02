@@ -62,7 +62,6 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(HardwareData), TypeInfoPropertyName = "ModularHardwareData")]
 [JsonSerializable(typeof(InventoryData))]
 [JsonSerializable(typeof(InstallsData))]
-[JsonSerializable(typeof(LogsData))]
 [JsonSerializable(typeof(CimianReportFileInfo))]
 // Cimian Technical Specification v1.0 models
 [JsonSerializable(typeof(Modules.CimianSessionData))]

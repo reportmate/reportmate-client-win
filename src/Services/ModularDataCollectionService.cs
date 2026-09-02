@@ -635,7 +635,6 @@ namespace ReportMate.WindowsClient.Services
                             "peripherals" => JsonSerializer.Deserialize<PeripheralsModuleData>(json, jsonOptions),
                             "security" => JsonSerializer.Deserialize<SecurityData>(json, jsonOptions),
                             "system" => JsonSerializer.Deserialize<SystemData>(json, jsonOptions),
-                            "logs" => JsonSerializer.Deserialize<LogsData>(json, jsonOptions),
                             _ => null
                         };
 
@@ -1071,9 +1070,6 @@ namespace ReportMate.WindowsClient.Services
                     break;
                 case SystemData systemData:
                     payload.System = systemData;
-                    break;
-                case LogsData logsData:
-                    payload.Logs = logsData;
                     break;
                 default:
                     _logger.LogWarning("Unknown module data type: {ModuleType}", moduleData.GetType().Name);

@@ -4,11 +4,12 @@ using System.Collections.Generic;
 namespace ReportMate.WindowsClient.Models.Modules
 {
     /// <summary>
-    /// Logs module data - management tool log roots under C:\ProgramData\Managed*\logs.
+    /// Management tool log roots under C:\ProgramData\Managed*\logs, carried as the
+    /// <c>logs</c> section of the management module rather than as a module of its own.
     /// Mirrors the Mac client's LogsModels.swift field for field; property names
     /// serialise as camelCase on both platforms so one reader serves both.
     /// </summary>
-    public class LogsData : BaseModuleData
+    public class ManagementLogs
     {
         public string Platform { get; set; } = "Windows";
         public List<LogRoot> Roots { get; set; } = new();

@@ -54,7 +54,6 @@ namespace ReportMate.WindowsClient.Models.Modules
         public NetworkData? Network { get; set; }
         public PeripheralsModuleData? Peripherals { get; set; }
         public ApplicationsData? Applications { get; set; }
-        public LogsData? Logs { get; set; }
     }
 
     /// <summary>

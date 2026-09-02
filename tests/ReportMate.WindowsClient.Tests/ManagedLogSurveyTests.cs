@@ -2,7 +2,7 @@
 using System;
 using System.IO;
 using System.Linq;
-using ReportMate.WindowsClient.Services.Modules;
+using ReportMate.WindowsClient.Services;
 using Xunit;
 
 namespace ReportMate.WindowsClient.Tests
