@@ -1328,43 +1328,90 @@ namespace ReportMate.WindowsClient.Services
             return session.StartTime.AddSeconds(duration);
         }
 
+        private sealed class DayAggregate
+        {
+            public double TotalSeconds;
+            public double ForegroundSeconds;
+            public double ActiveSeconds;
+            public string Publisher = string.Empty;
+            public readonly HashSet<string> Users = new(StringComparer.OrdinalIgnoreCase);
+        }
+
         public List<DailyUsageSummary> BuildDailySummaries(List<ApplicationUsageSession> sessions)
         {
             if (sessions.Count == 0)
                 return new List<DailyUsageSummary>();
 
-            var summaries = sessions
-                // Local day, not UTC: usagetracker keys its foreground/active
-                // counters on the local date (Program.cs), and the merge joins
-                // the two on (Date, AppName). Keying summaries on the UTC day
-                // put every evening's launches on the next calendar day and on
-                // a different row than its foreground seconds. The macOS client
-                // also reports device-local days.
-                .GroupBy(s => new { Date = s.StartTime.ToLocalTime().ToString("yyyy-MM-dd"), s.Name })
-                .Where(g => !string.IsNullOrEmpty(g.Key.Name))
-                .Select(g =>
-                {
-                    var users = g
-                        .Select(s => s.User)
-                        .Where(u => !string.IsNullOrEmpty(u) && u != "UNKNOWN")
-                        .Distinct()
-                        .ToList();
+            // Dates are local days: usagetracker keys its foreground/active
+            // counters on the local date (Program.cs), the merge joins the two
+            // on (Date, AppName), and the macOS client reports device-local
+            // days. A session's SECONDS are apportioned across every local day
+            // its lifetime covers (a render left running past midnight used
+            // both days, and booking it all on the start day both empties the
+            // second day and lets one day's total exceed 24h). Its LAUNCH is
+            // not apportioned: crossing midnight opens nothing, so activations
+            // count on the day the session started, and days that only receive
+            // spillover seconds report zero launches. MaxSessionHours caps the
+            // spillover at one extra day.
+            var perDay = new Dictionary<(string Date, string Name), DayAggregate>();
 
-                    return new DailyUsageSummary
+            foreach (var session in sessions)
+            {
+                if (string.IsNullOrEmpty(session.Name))
+                    continue;
+
+                var localStart = session.StartTime.ToLocalTime();
+                var localEnd = EffectiveEnd(session).ToLocalTime();
+                if (localEnd < localStart)
+                    localEnd = localStart;
+
+                var sliceStart = localStart;
+                do
+                {
+                    var dayEnd = sliceStart.Date.AddDays(1);
+                    var sliceEnd = localEnd < dayEnd ? localEnd : dayEnd;
+
+                    var key = (sliceStart.ToString("yyyy-MM-dd"), session.Name);
+                    if (!perDay.TryGetValue(key, out var agg))
                     {
-                        Date = g.Key.Date,
-                        AppName = g.Key.Name,
-                        Publisher = g.First().Publisher,
-                        Launches = CountActivations(g),
-                        TotalSeconds = g.Sum(s => s.DurationSeconds),
-                        // Foreground/active counters stay at 0 until the
-                        // user-context usagetracker.exe companion is shipped
-                        // and feeds session-level fg/active deltas into the
-                        // ApplicationUsageSession objects this method consumes.
-                        ForegroundSeconds = g.Sum(s => s.ForegroundSeconds),
-                        ActiveSeconds = g.Sum(s => s.ActiveSeconds),
-                        Users = users
-                    };
+                        agg = new DayAggregate { Publisher = session.Publisher };
+                        perDay[key] = agg;
+                    }
+
+                    agg.TotalSeconds += (sliceEnd - sliceStart).TotalSeconds;
+                    if (!string.IsNullOrEmpty(session.User) && session.User != "UNKNOWN")
+                        agg.Users.Add(session.User);
+
+                    // Session-level fg/active have no sub-day timestamps to
+                    // split on; they stay whole on the start day. In practice
+                    // they are zero here -- the tracker's own per-local-day
+                    // counters supply them in MergeUserSessionTrackerData.
+                    if (sliceStart == localStart)
+                    {
+                        agg.ForegroundSeconds += session.ForegroundSeconds;
+                        agg.ActiveSeconds += session.ActiveSeconds;
+                    }
+
+                    sliceStart = sliceEnd;
+                } while (sliceStart < localEnd);
+            }
+
+            var launchesByDay = sessions
+                .Where(s => !string.IsNullOrEmpty(s.Name))
+                .GroupBy(s => (Date: s.StartTime.ToLocalTime().ToString("yyyy-MM-dd"), s.Name))
+                .ToDictionary(g => g.Key, g => CountActivations(g));
+
+            var summaries = perDay
+                .Select(kv => new DailyUsageSummary
+                {
+                    Date = kv.Key.Date,
+                    AppName = kv.Key.Name,
+                    Publisher = kv.Value.Publisher,
+                    Launches = launchesByDay.TryGetValue(kv.Key, out var launches) ? launches : 0,
+                    TotalSeconds = kv.Value.TotalSeconds,
+                    ForegroundSeconds = kv.Value.ForegroundSeconds,
+                    ActiveSeconds = kv.Value.ActiveSeconds,
+                    Users = kv.Value.Users.OrderBy(u => u, StringComparer.OrdinalIgnoreCase).ToList()
                 })
                 .OrderBy(s => s.Date)
                 .ThenByDescending(s => s.TotalSeconds)

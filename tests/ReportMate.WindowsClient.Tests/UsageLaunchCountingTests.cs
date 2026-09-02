@@ -171,6 +171,95 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Fact]
+        public void A_session_crossing_midnight_apportions_seconds_to_both_days()
+        {
+            var service = new ApplicationUsageService(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ApplicationUsageService>.Instance);
+
+            // Local-kind timestamps make the local midnight boundary the same
+            // on every runner regardless of its time zone.
+            var start = new DateTime(2026, 9, 1, 23, 0, 0, DateTimeKind.Local);
+            var end = new DateTime(2026, 9, 2, 1, 30, 0, DateTimeKind.Local);
+            var sessions = new List<ApplicationUsageSession>
+            {
+                new()
+                {
+                    Name = "Unreal Engine",
+                    User = "alice",
+                    StartTime = start,
+                    EndTime = end,
+                    DurationSeconds = (end - start).TotalSeconds,
+                }
+            };
+
+            var summaries = service.BuildDailySummaries(sessions);
+
+            Assert.Equal(2, summaries.Count);
+            var day1 = summaries.Single(s => s.Date == "2026-09-01");
+            var day2 = summaries.Single(s => s.Date == "2026-09-02");
+
+            Assert.Equal(3600, day1.TotalSeconds, precision: 3);
+            Assert.Equal(5400, day2.TotalSeconds, precision: 3);
+            // Crossing midnight opens nothing: the launch belongs to the day
+            // the session started, and the spillover day reports zero.
+            Assert.Equal(1, day1.Launches);
+            Assert.Equal(0, day2.Launches);
+            // The person plainly used the app on both days.
+            Assert.Contains("alice", day1.Users);
+            Assert.Contains("alice", day2.Users);
+        }
+
+        [Fact]
+        public void A_session_within_one_day_is_unchanged_by_apportioning()
+        {
+            var service = new ApplicationUsageService(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ApplicationUsageService>.Instance);
+
+            var start = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Local);
+            var sessions = new List<ApplicationUsageSession>
+            {
+                new()
+                {
+                    Name = "Google Chrome",
+                    User = "alice",
+                    StartTime = start,
+                    EndTime = start.AddHours(2),
+                    DurationSeconds = 7200,
+                }
+            };
+
+            var summary = Assert.Single(service.BuildDailySummaries(sessions));
+            Assert.Equal("2026-09-01", summary.Date);
+            Assert.Equal(7200, summary.TotalSeconds, precision: 3);
+            Assert.Equal(1, summary.Launches);
+        }
+
+        [Fact]
+        public void A_zero_duration_session_still_counts_its_launch_and_user()
+        {
+            var service = new ApplicationUsageService(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ApplicationUsageService>.Instance);
+
+            var start = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Local);
+            var sessions = new List<ApplicationUsageSession>
+            {
+                new()
+                {
+                    Name = "Git",
+                    User = "alice",
+                    StartTime = start,
+                    EndTime = start,
+                    DurationSeconds = 0,
+                }
+            };
+
+            var summary = Assert.Single(service.BuildDailySummaries(sessions));
+            Assert.Equal(0, summary.TotalSeconds, precision: 3);
+            Assert.Equal(1, summary.Launches);
+            Assert.Contains("alice", summary.Users);
+        }
+
+        [Fact]
         public void Daily_summaries_report_activations_and_leave_seconds_alone()
         {
             var service = new ApplicationUsageService(
