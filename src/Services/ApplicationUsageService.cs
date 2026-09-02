@@ -1154,40 +1154,7 @@ namespace ReportMate.WindowsClient.Services
 
                 // 6. Augment passed summaries; append entries that don't have a
                 //    Security-Log-derived match.
-                var summaryIndex = summaries
-                    .GroupBy(s => (s.Date, s.AppName), new DateAppNameComparer())
-                    .ToDictionary(g => g.Key, g => g.First(), new DateAppNameComparer());
-
-                int augmented = 0, appended = 0;
-                foreach (var (key, (fg, active)) in byDateApp)
-                {
-                    if (summaryIndex.TryGetValue(key, out var existing))
-                    {
-                        existing.ForegroundSeconds += fg;
-                        existing.ActiveSeconds += active;
-                        augmented++;
-                    }
-                    else
-                    {
-                        // Tracker has activity for an app the Security Log path
-                        // didn't pick up (e.g. process started outside the 4h
-                        // lookback). Emit a new summary; use foreground as the
-                        // approximation of total_seconds since we have no
-                        // session data.
-                        summaries.Add(new DailyUsageSummary
-                        {
-                            Date = key.Date,
-                            AppName = key.AppName,
-                            Publisher = "",
-                            Launches = 0,
-                            TotalSeconds = fg,
-                            ForegroundSeconds = fg,
-                            ActiveSeconds = active,
-                            Users = new List<string>(),
-                        });
-                        appended++;
-                    }
-                }
+                var (augmented, appended) = ApplyTrackerDeltas(summaries, byDateApp);
 
                 _logger.LogInformation(
                     "UsageTracker merge: {Augmented} summaries augmented, {Appended} new summaries from tracker-only apps",
@@ -1200,6 +1167,56 @@ namespace ReportMate.WindowsClient.Services
                 _logger.LogError(ex, "MergeUserSessionTrackerData failed; returning summaries unchanged");
                 return summaries;
             }
+        }
+
+        internal static (int Augmented, int Appended) ApplyTrackerDeltas(
+            List<DailyUsageSummary> summaries,
+            Dictionary<(string Date, string AppName), (double Fg, double Active)> byDateApp)
+        {
+            var summaryIndex = summaries
+                .GroupBy(s => (s.Date, s.AppName), new DateAppNameComparer())
+                .ToDictionary(g => g.Key, g => g.First(), new DateAppNameComparer());
+
+            int augmented = 0, appended = 0;
+            foreach (var (key, (fg, active)) in byDateApp)
+            {
+                if (summaryIndex.TryGetValue(key, out var existing))
+                {
+                    existing.ForegroundSeconds += fg;
+                    existing.ActiveSeconds += active;
+                    // A foregrounded app was necessarily running, so
+                    // total >= foreground is an invariant of reality. The
+                    // Security-Log total only covers processes that logged an
+                    // event inside the collection window; a long-lived process
+                    // fronted all day contributes hours of fg to a row whose
+                    // in-window session total may be seconds.
+                    if (existing.TotalSeconds < existing.ForegroundSeconds)
+                        existing.TotalSeconds = existing.ForegroundSeconds;
+                    augmented++;
+                }
+                else
+                {
+                    // Tracker has activity for an app the Security Log path
+                    // didn't pick up (e.g. process started outside the 4h
+                    // lookback). Emit a new summary; use foreground as the
+                    // approximation of total_seconds since we have no
+                    // session data.
+                    summaries.Add(new DailyUsageSummary
+                    {
+                        Date = key.Date,
+                        AppName = key.AppName,
+                        Publisher = "",
+                        Launches = 0,
+                        TotalSeconds = fg,
+                        ForegroundSeconds = fg,
+                        ActiveSeconds = active,
+                        Users = new List<string>(),
+                    });
+                    appended++;
+                }
+            }
+
+            return (augmented, appended);
         }
 
         internal sealed class TrackerStateMirror
