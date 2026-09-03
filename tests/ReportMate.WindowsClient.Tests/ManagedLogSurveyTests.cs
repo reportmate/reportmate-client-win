@@ -183,6 +183,21 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Fact]
+        public void AToolWithNoKnownBinaryReportsNoVersion()
+        {
+            // "scripts" is a legacy StartSet root with no binary of its own. A missing
+            // version must be absent, never an empty string.
+            Assert.Null(ManagedLogSurvey.ToolVersion("scripts"));
+            Assert.Null(ManagedLogSurvey.ToolVersion("nonexistent-tool"));
+        }
+
+        [Fact]
+        public void AnUnreadableFileYieldsNoVersionRatherThanThrowing()
+        {
+            Assert.Null(ManagedLogSurvey.ReadFileVersion(Path.Combine(_root, "not-a-real.exe")));
+        }
+
+        [Fact]
         public void TheIntuneRootIsAbsentWhenTheDirectoryIsNot()
         {
             Directory.CreateDirectory(Path.Combine(_root, "ManagedInstalls", "logs"));

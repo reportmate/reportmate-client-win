@@ -36,6 +36,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// <summary>ERROR and WARN lines counted across the primary log's tail</summary>
         public int ErrorCount { get; set; }
         public int WarningCount { get; set; }
+        /// <summary>
+        /// Version of the tool that owns this root, read from its installed binary.
+        /// Null — and omitted from the payload — when the tool has no known binary or is
+        /// not installed, so a missing version is never reported as an empty string.
+        /// </summary>
+        public string? Version { get; set; }
         /// <summary>Tails of the root's most relevant logs, primary first; capped per file and per root</summary>
         public List<LogTail> Tails { get; set; } = new();
     }
