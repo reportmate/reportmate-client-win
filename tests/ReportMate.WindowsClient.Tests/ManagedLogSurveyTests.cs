@@ -44,6 +44,56 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Fact]
+        public void SecondResolutionSessionsSortAgainstMinuteOnes()
+        {
+            var rootDir = Path.Combine(_root, "ManagedBootstrap");
+            var logsDir = Path.Combine(rootDir, "logs");
+            var minute = Path.Combine(logsDir, "2026-09-03", "0411");
+            var seconds = Path.Combine(logsDir, "2026-09-03", "041107");
+            var earlier = Path.Combine(logsDir, "2026-09-03", "041059");
+            Directory.CreateDirectory(minute);
+            Directory.CreateDirectory(seconds);
+            Directory.CreateDirectory(earlier);
+            File.WriteAllText(Path.Combine(minute, "bootstrap.log"), "[2026-09-03 04:11:00] INFO  minute\n");
+            File.WriteAllText(Path.Combine(seconds, "bootstrap.log"), "[2026-09-03 04:11:07] INFO  seconds\n");
+            File.WriteAllText(Path.Combine(earlier, "bootstrap.log"), "[2026-09-03 04:10:59] INFO  earlier\n");
+
+            var root = ManagedLogSurvey.Survey(rootDir, logsDir);
+
+            Assert.NotNull(root);
+            Assert.Equal("sessions", root!.Layout);
+            Assert.Equal("2026-09-03-041107", root.LatestSession!.SessionId);
+        }
+
+        [Fact]
+        public void DayDirectoryWithLooseFilesIsTheDailyLayout()
+        {
+            var rootDir = Path.Combine(_root, "ManagedUtilities");
+            var logsDir = Path.Combine(rootDir, "logs");
+            var day = Path.Combine(logsDir, "2026-09-03");
+            Directory.CreateDirectory(day);
+            File.WriteAllText(Path.Combine(day, "dockutil.log"), "[2026-09-03 04:11:07] INFO  dock rebuilt\n");
+            File.WriteAllText(Path.Combine(day, "events.jsonl"), "{\"level\":\"INFO\",\"message\":\"dock rebuilt\"}\n");
+
+            var root = ManagedLogSurvey.Survey(rootDir, logsDir);
+
+            Assert.NotNull(root);
+            Assert.Equal("daily", root!.Layout);
+            Assert.Equal("2026-09-03/dockutil.log", root.PrimaryLog);
+        }
+
+        [Fact]
+        public void SessionSortKeyPadsMinuteNamesToSeconds()
+        {
+            Assert.Equal("041100", ManagedLogSurvey.SessionSortKey("0411"));
+            Assert.Equal("041107", ManagedLogSurvey.SessionSortKey("041107"));
+            Assert.Equal("041100_2", ManagedLogSurvey.SessionSortKey("0411_2"));
+            Assert.True(string.CompareOrdinal(
+                ManagedLogSurvey.SessionSortKey("0411"),
+                ManagedLogSurvey.SessionSortKey("041107")) < 0);
+        }
+
+        [Fact]
         public void SessionLayoutReportsTheNewestSessionAndItsRunLog()
         {
             var rootDir = Path.Combine(_root, "ManagedInstalls");
