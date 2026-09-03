@@ -248,9 +248,12 @@ namespace ReportMate.WindowsClient.Services
             var tool = known?.Tool ?? ToolKey(dirName);
             if (string.IsNullOrEmpty(tool)) return null;
 
-            // Session layout: logs\YYYY-MM-DD\HHMM\
+            // Day-nested layouts: logs\YYYY-MM-DD\HHMMSS\ for a tool that performs
+            // discrete runs, logs\YYYY-MM-DD\ for a utility invoked too often to
+            // justify a directory per invocation.
             string? latestSessionDir = null;
             string? latestSessionId = null;
+            var layout = "flat";
             var dayDirs = Directory.EnumerateDirectories(logsDir)
                 .Select(Path.GetFileName)
                 .Where(n => n != null && DayPattern.IsMatch(n))
@@ -269,6 +272,14 @@ namespace ReportMate.WindowsClient.Services
                 {
                     latestSessionDir = Path.Combine(dayPath, newest);
                     latestSessionId = $"{day}-{newest}";
+                    layout = "sessions";
+                    break;
+                }
+                if (Directory.EnumerateFiles(dayPath).Any())
+                {
+                    latestSessionDir = dayPath;
+                    latestSessionId = day;
+                    layout = "daily";
                     break;
                 }
             }
@@ -335,7 +346,7 @@ namespace ReportMate.WindowsClient.Services
                 Name = known?.Name ?? DisplayName(dirName),
                 Version = ToolVersion(tool),
                 Path = logsDir,
-                Layout = latestSessionDir == null ? "flat" : "sessions",
+                Layout = layout,
                 FileCount = fileCount,
                 TotalBytes = totalBytes,
                 NewestModified = newestModified,

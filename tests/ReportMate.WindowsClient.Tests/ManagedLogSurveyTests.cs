@@ -66,6 +66,23 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Fact]
+        public void DayDirectoryWithLooseFilesIsTheDailyLayout()
+        {
+            var rootDir = Path.Combine(_root, "ManagedUtilities");
+            var logsDir = Path.Combine(rootDir, "logs");
+            var day = Path.Combine(logsDir, "2026-09-03");
+            Directory.CreateDirectory(day);
+            File.WriteAllText(Path.Combine(day, "dockutil.log"), "[2026-09-03 04:11:07] INFO  dock rebuilt\n");
+            File.WriteAllText(Path.Combine(day, "events.jsonl"), "{\"level\":\"INFO\",\"message\":\"dock rebuilt\"}\n");
+
+            var root = ManagedLogSurvey.Survey(rootDir, logsDir);
+
+            Assert.NotNull(root);
+            Assert.Equal("daily", root!.Layout);
+            Assert.Equal("2026-09-03/dockutil.log", root.PrimaryLog);
+        }
+
+        [Fact]
         public void SessionSortKeyPadsMinuteNamesToSeconds()
         {
             Assert.Equal("041100", ManagedLogSurvey.SessionSortKey("0411"));
