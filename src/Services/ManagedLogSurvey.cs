@@ -67,6 +67,85 @@ namespace ReportMate.WindowsClient.Services
         private static readonly string[] PreferredSessionLogs = { "run.log", "install.log", "startset.log", "bootstrap.log" };
 
         /// <summary>
+        /// The binary whose version identifies each tool, relative to a Program Files root.
+        /// Read from the file; nothing is executed to ask a tool its own version, because a
+        /// telemetry collector must never launch a management tool as a side effect.
+        /// A tool with no entry here, or not installed, reports no version at all.
+        /// </summary>
+        private static readonly Dictionary<string, string[]> ToolBinaries = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["installs"]      = new[] { @"Cimian\managedsoftwareupdate.exe" },
+            ["bootstrap"]     = new[] { @"BootstrapMate\managedbootstrapinstall.exe" },
+            ["reports"]       = new[] { @"ReportMate\managedreportsrunner.exe" },
+            ["state"]         = new[] { @"StartSet\managedstatekeeper.exe" },
+            ["encryption"]    = new[] { @"Crypt\checkin.exe" },
+            ["users"]         = new[] { @"sbin\manageusers.exe" },
+            ["utilities"]     = new[] { @"sbin\installer.exe" },
+            ["notifications"] = new[] { @"csharpDialog\dialog.exe" },
+            ["mdm"]           = new[] { @"Microsoft Intune Management Extension\Microsoft.Management.Services.IntuneWindowsAgent.exe" }
+        };
+
+        /// <summary>
+        /// Version of the tool that owns <paramref name="tool"/>, or null when it has no
+        /// known binary or is not installed here.
+        /// </summary>
+        public static string? ToolVersion(string tool)
+        {
+            if (!ToolBinaries.TryGetValue(tool, out var relatives)) return null;
+
+            foreach (var root in new[]
+                     {
+                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                         Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+                     })
+            {
+                if (string.IsNullOrEmpty(root)) continue;
+                foreach (var relative in relatives)
+                {
+                    var path = Path.Combine(root, relative);
+                    if (!File.Exists(path)) continue;
+                    var version = ReadFileVersion(path);
+                    if (version != null) return version;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The displayable version of one binary.
+        /// </summary>
+        /// <remarks>
+        /// FileVersion is preferred over ProductVersion, which is the opposite of the usual
+        /// advice, because ProductVersion is a free-form string and these binaries fill it
+        /// with things that are not a version. Measured on a managed device: BootstrapMate
+        /// reports ProductVersion "1.0.0+&lt;sha&gt;" while its FileVersion is the real
+        /// 2026.09.02.0601, and the Intune agent reports a ProductVersion carrying a commit
+        /// hash, a redist tag and a build stamp. FileVersion was correct for every tool
+        /// checked. ProductVersion is still used when there is no FileVersion, with the
+        /// SemVer build metadata after '+' and any trailing build description removed.
+        /// </remarks>
+        public static string? ReadFileVersion(string path)
+        {
+            try
+            {
+                var info = System.Diagnostics.FileVersionInfo.GetVersionInfo(path);
+
+                var file = info.FileVersion?.Trim();
+                if (!string.IsNullOrEmpty(file) && file != "0.0.0.0") return file;
+
+                var product = info.ProductVersion?.Trim();
+                if (string.IsNullOrEmpty(product)) return null;
+                var cut = product.IndexOfAny(new[] { '+', ' ' });
+                if (cut > 0) product = product.Substring(0, cut);
+                return string.IsNullOrEmpty(product) || product == "0.0.0.0" ? null : product;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// A log directory that does not follow the Managed* convention because we do not
         /// own the tool that writes it. Detection is directory existence, so a device
         /// without the tool simply reports no such root.
@@ -236,6 +315,7 @@ namespace ReportMate.WindowsClient.Services
             {
                 Tool = tool,
                 Name = known?.Name ?? DisplayName(dirName),
+                Version = ToolVersion(tool),
                 Path = logsDir,
                 Layout = latestSessionDir == null ? "flat" : "sessions",
                 FileCount = fileCount,
