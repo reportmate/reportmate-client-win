@@ -54,7 +54,25 @@ namespace ReportMate.WindowsClient.Services
         public const int PrimaryTailBytes = 256 * 1024;
 
         private static readonly Regex DayPattern = new(@"^\d{4}-\d{2}-\d{2}$", RegexOptions.Compiled);
-        private static readonly Regex SessionPattern = new(@"^\d{4}(_\d)?$", RegexOptions.Compiled);
+        /// <summary>
+        /// A session directory is <c>HHMM</c> or <c>HHMMSS</c>, either optionally
+        /// suffixed <c>_N</c> by a writer that collided within the same minute. The
+        /// four-digit form predates seconds and stays readable indefinitely.
+        /// </summary>
+        private static readonly Regex SessionPattern = new(@"^\d{4}(\d{2})?(_\d)?$", RegexOptions.Compiled);
+        /// <summary>
+        /// Orders <c>HHMM</c> and <c>HHMMSS</c> session names against each other by
+        /// padding the time to seconds, so a minute-resolution directory sorts as that
+        /// minute's zero second rather than ahead of every second within it.
+        /// </summary>
+        internal static string SessionSortKey(string name)
+        {
+            var underscore = name.IndexOf('_');
+            var time = underscore < 0 ? name : name.Substring(0, underscore);
+            var suffix = underscore < 0 ? string.Empty : name.Substring(underscore);
+            return time.PadRight(6, '0') + suffix;
+        }
+
         private static readonly Regex ErrorPattern = new(@"\b(ERROR|ERR|FAULT|CRITICAL|FATAL)\b", RegexOptions.Compiled);
         private static readonly Regex WarningPattern = new(@"\b(WARN|WARNING|WRN)\b", RegexOptions.Compiled);
         /// <summary>
@@ -245,7 +263,7 @@ namespace ReportMate.WindowsClient.Services
                     .Select(Path.GetFileName)
                     .Where(n => n != null && SessionPattern.IsMatch(n))
                     .Select(n => n!)
-                    .OrderByDescending(n => n, StringComparer.Ordinal)
+                    .OrderByDescending(SessionSortKey, StringComparer.Ordinal)
                     .FirstOrDefault();
                 if (newest != null)
                 {
