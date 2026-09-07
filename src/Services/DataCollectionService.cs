@@ -342,6 +342,14 @@ public class DataCollectionService : IDataCollectionService
                     ["timestamp"] = evt.Timestamp.ToString("O")
                 };
 
+                // The module an event belongs to is what lets the API supersede a
+                // run's events with the next run's. Dropping it here is why a
+                // Cimian error stayed on the dashboard after the run that cleared it.
+                if (!string.IsNullOrWhiteSpace(evt.ModuleId))
+                {
+                    eventDict["moduleId"] = evt.ModuleId;
+                }
+
                 if (evt.Details != null && evt.Details.Count > 0)
                 {
                     eventDict["details"] = evt.Details;
