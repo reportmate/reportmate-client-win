@@ -53,6 +53,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                 // Map enhanced Cimian status vocabulary to ReportMate statuses
                 return cimianStatus.ToLowerInvariant() switch
                 {
+                    // A package that reinstalls every run is not healthy, whatever
+                    // status it reports. This argument was accepted here and never
+                    // read, so a looping item mapped straight to Installed and the
+                    // dashboard counted no Cimian install loops at all. Guarded
+                    // arms must precede the unguarded ones or they never match.
+                    "installed" when hasInstallLoop => "Warning",
+                    "success" when hasInstallLoop => "Warning",
+
                     // SUCCESS MAPPINGS - Successfully installed and working
                     "installed" => "Installed",
                     "success" => "Installed",
