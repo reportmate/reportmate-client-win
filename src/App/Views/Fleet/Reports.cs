@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Text.Json;
 using ReportMate.App.Services;
 using ReportMate.App.Views.Shared;
 
@@ -64,9 +65,9 @@ public sealed class ReportsPage : FleetPage
 }
 
 /// <summary>
-/// One fleet report. The per-module fleet aggregations are still being ported from
-/// the web app; until then the page states what it needs rather than rendering an
-/// empty shell that looks like a fleet with no data in it.
+/// One fleet report: the charted distributions across the top and a row per device
+/// underneath, the same shape the web report pages use. The row content is driven by
+/// the report's spec rather than hand-written per module.
 /// </summary>
 public sealed class ReportPage : FleetPage
 {
@@ -76,24 +77,121 @@ public sealed class ReportPage : FleetPage
 
     protected override async Task<UIElement> BuildAsync()
     {
-        var result = await FleetApiClient.Instance.GetDevicesAsync();
         var page = new StackPanel();
-        page.Children.Add(Ui.TabHeader(_area.Title, _area.Subtitle, "", _area.Accent));
+        var spec = ReportSpec.For(_area.Id);
+        if (spec is null)
+        {
+            page.Children.Add(Ui.TabHeader(_area.Title, _area.Subtitle, "", _area.Accent));
+            page.Children.Add(Ui.Card(Ui.EmptyState($"No report is defined for {_area.Title.ToLowerInvariant()} yet.")));
+            return page;
+        }
 
+        var result = await FleetApiClient.Instance.GetModuleAsync(spec.Module);
         if (!result.Ok)
         {
+            page.Children.Add(Ui.TabHeader(_area.Title, _area.Subtitle, "", _area.Accent));
             page.Children.Add(FleetUnavailable(result.Status, result.Detail));
             return page;
         }
 
-        var devices = result.Data!.Devices;
-        var body = new StackPanel();
-        body.Children.Add(Ui.Text($"{devices.Count:N0} devices are reporting.", "SubtitleTextStyle"));
-        var note = Ui.Caption($"The fleet-wide {_area.Title.ToLowerInvariant()} aggregation is still being ported from the web app.");
-        note.Margin = new Thickness(0, 8, 0, 0);
-        note.TextWrapping = TextWrapping.Wrap;
-        body.Children.Add(note);
-        page.Children.Add(Ui.Card(body));
+        var rows = result.Data!;
+        page.Children.Add(Ui.TabHeader(_area.Title, _area.Subtitle, "", _area.Accent,
+            Ui.Caption($"{rows.Count:N0} devices")));
+
+        if (rows.Count == 0)
+        {
+            page.Children.Add(Ui.Card(Ui.EmptyState($"No {_area.Title.ToLowerInvariant()} data has been reported.")));
+            return page;
+        }
+
+        var distributions = BuildDistributions(spec, rows);
+        if (distributions is not null) page.Children.Add(distributions);
+        page.Children.Add(BuildTable(spec, rows));
         return page;
     }
+
+    /// <summary>
+    /// The widget row: how the fleet splits across each dimension the report charts.
+    /// A dimension every device answers identically says nothing, so it is dropped.
+    /// </summary>
+    private static UIElement? BuildDistributions(ReportSpec spec, List<JsonElement> rows)
+    {
+        var cards = new List<UIElement>();
+        foreach (var field in spec.Distributions)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in rows)
+                foreach (var value in field.ReadAll(row).Distinct(StringComparer.OrdinalIgnoreCase))
+                    counts[value] = counts.GetValueOrDefault(value) + 1;
+
+            if (counts.Count < 2) continue;
+
+            var total = counts.Values.Sum();
+            var body = new StackPanel();
+            foreach (var (name, count) in counts.OrderByDescending(kv => kv.Value).Take(6))
+                body.Children.Add(Charts.Bar(name, count, total, Tone.Info));
+
+            if (counts.Count > 6)
+                body.Children.Add(Ui.Caption($"and {counts.Count - 6:N0} more"));
+
+            cards.Add(Ui.StatBlock(field.Label, $"{counts.Count:N0} distinct", "", Accent.Blue, Pad(body)));
+        }
+
+        if (cards.Count == 0) return null;
+
+        var grid = new UniformGrid { Columns = Math.Min(3, cards.Count), Margin = new Thickness(0, 20, 0, 0) };
+        foreach (var card in cards)
+        {
+            if (card is FrameworkElement fe) fe.Margin = new Thickness(0, 0, 14, 14);
+            grid.Children.Add(card);
+        }
+        return grid;
+    }
+
+    private static UIElement BuildTable(ReportSpec spec, List<JsonElement> rows)
+    {
+        var headers = spec.Columns.Select(c => c.Header).ToList();
+        var data = rows.Select(row => new ReportRow(
+            headers.Zip(spec.Columns.Select(c => c.Field.Read(row))).ToDictionary(p => p.First, p => p.Second)))
+            .ToList();
+
+        var columns = spec.Columns
+            .Select(c => Col.Text(c.Header, $"[{c.Header}]", c.Width, star: c.Star, mono: c.Mono))
+            .ToArray();
+
+        var table = new FilteredTable<ReportRow>(spec.Module switch
+        {
+            "hardware" => "Hardware Specifications",
+            _ => "Devices",
+        }, "{0} of {1} devices", data, (r, q) => r.Matches(q), columns,
+            "Search devices...", "No devices match the current filters")
+            .Build();
+        table.Margin = new Thickness(0, 6, 0, 0);
+        return table;
+    }
+
+    private static UIElement Pad(UIElement body) =>
+        new Border { Padding = new Thickness(20, 4, 20, 14), Child = body };
+}
+
+/// <summary>
+/// A report row as the table sees it. The columns are decided by the report spec, so
+/// the row is a bag of already-formatted strings addressed by header name.
+/// </summary>
+public sealed class ReportRow
+{
+    private readonly Dictionary<string, string> _values;
+    private readonly string _haystack;
+
+    public ReportRow(Dictionary<string, string> values)
+    {
+        _values = values;
+        _haystack = string.Join(" ", values.Values);
+    }
+
+    /// <summary>Indexer so a column can bind with the path "[Header]".</summary>
+    public string this[string header] => _values.GetValueOrDefault(header) ?? "";
+
+    public bool Matches(string query) =>
+        string.IsNullOrWhiteSpace(query) || _haystack.Contains(query, StringComparison.OrdinalIgnoreCase);
 }

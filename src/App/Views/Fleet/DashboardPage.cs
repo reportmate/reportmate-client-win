@@ -56,22 +56,21 @@ public sealed class DashboardPage : FleetPage
     /// <summary>Active / stale / missing counts, the web's StatusWidget.</summary>
     private static UIElement StatusWidget(List<FleetDevice> devices)
     {
-        // The API classifies each device as online / idle / offline. Recomputing that
-        // here from lastSeen would quietly disagree with the web app's numbers.
-        var online = devices.Count(d => Is(d, "online"));
-        var idle = devices.Count(d => Is(d, "idle"));
-        var offline = devices.Count(d => Is(d, "offline"));
+        // Derived from lastSeen, not the API's own status field, because that is what
+        // the web dashboard does -- see DeviceStatus for why the two disagree.
+        var buckets = devices.GroupBy(DeviceStatus.Calculate)
+            .ToDictionary(g => g.Key, g => g.Count());
+        int Count(DeviceLiveness l) => buckets.TryGetValue(l, out var n) ? n : 0;
 
         var body = new StackPanel();
         body.Children.Add(BigNumber(devices.Count, "devices total"));
-        body.Children.Add(Bar("Online", online, devices.Count, Tone.Success));
-        body.Children.Add(Bar("Idle", idle, devices.Count, Tone.Warning));
-        body.Children.Add(Bar("Offline", offline, devices.Count, Tone.Error));
-        return Ui.StatBlock("Fleet Status", "Devices by reporting status", "", Accent.Green, Pad(body));
+        body.Children.Add(Charts.Bar("Active", Count(DeviceLiveness.Active), devices.Count, Tone.Success));
+        body.Children.Add(Charts.Bar("Stale", Count(DeviceLiveness.Stale), devices.Count, Tone.Warning));
+        body.Children.Add(Charts.Bar("Missing", Count(DeviceLiveness.Missing), devices.Count, Tone.Error));
+        if (Count(DeviceLiveness.Archived) > 0)
+            body.Children.Add(Charts.Bar("Archived", Count(DeviceLiveness.Archived), devices.Count, Tone.Neutral));
+        return Ui.StatBlock("Fleet Status", "Seen in the last 24 hours", "", Accent.Green, Pad(body));
     }
-
-    private static bool Is(FleetDevice d, string status) =>
-        string.Equals(d.Status, status, StringComparison.OrdinalIgnoreCase);
 
     private static UIElement CounterCard(string title, int total, int deviceCount, Tone tone)
     {
@@ -167,7 +166,7 @@ public sealed class DashboardPage : FleetPage
         var body = new StackPanel();
         var total = devices.Count;
         foreach (var (name, count) in groups)
-            body.Children.Add(Bar(name, count, total, name == "Windows" ? Tone.Info : Tone.Neutral));
+            body.Children.Add(Charts.Bar(name, count, total, name == "Windows" ? Tone.Info : Tone.Neutral));
 
         return Ui.StatBlock("Platforms", "Devices by operating system", "", Accent.Purple, Pad(body));
     }
@@ -188,52 +187,12 @@ public sealed class DashboardPage : FleetPage
 
         var body = new StackPanel();
         foreach (var (name, count) in groups)
-            body.Children.Add(Bar(name, count, matching.Count, Tone.Info));
+            body.Children.Add(Charts.Bar(name, count, matching.Count, Tone.Info));
 
         return Ui.StatBlock($"{platform} Versions", $"{matching.Count:N0} devices", "", Accent.Teal, Pad(body));
     }
 
     // ── Small parts ──────────────────────────────────────────────────────
-
-    /// <summary>A labelled proportion bar. Bars, not pie slices: comparing lengths on a
-    /// shared baseline is easier than comparing angles, and it scales past a few slices.</summary>
-    private static UIElement Bar(string label, int count, int total, Tone tone)
-    {
-        var fraction = total <= 0 ? 0 : (double)count / total;
-
-        var head = new Grid();
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var name = Ui.Text(label);
-        name.FontSize = 12.5;
-        name.TextTrimming = TextTrimming.CharacterEllipsis;
-        head.Children.Add(name);
-        var value = Ui.Caption($"{count:N0}  ·  {fraction:P0}");
-        Grid.SetColumn(value, 1);
-        head.Children.Add(value);
-
-        var track = new Border
-        {
-            Height = 6,
-            CornerRadius = new CornerRadius(3),
-            Background = Ui.Brush("SubtleFillBrush"),
-            Margin = new Thickness(0, 5, 0, 0),
-        };
-        var fill = new Border
-        {
-            Height = 6,
-            CornerRadius = new CornerRadius(3),
-            Background = Ui.StatusBrush(tone),
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-        track.Child = fill;
-        track.SizeChanged += (_, e) => fill.Width = Math.Max(0, e.NewSize.Width * fraction);
-
-        var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
-        panel.Children.Add(head);
-        panel.Children.Add(track);
-        return panel;
-    }
 
     private static UIElement BigNumber(int value, string caption)
     {

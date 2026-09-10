@@ -55,6 +55,15 @@ public sealed class FleetApiClient
     public Task<FleetResult<EventsPayload>> GetEventsAsync(int limit = 250, CancellationToken ct = default) =>
         GetAsync<EventsPayload>($"/api/v1/events?limit={limit}", ct);
 
+    /// <summary>
+    /// One fleet report: /api/v1/&lt;module&gt; returns a row per device. The row shape
+    /// differs per module and changes as modules gain fields, so reports read it as
+    /// JSON and address values by path rather than through nine sets of models that
+    /// would silently drop anything new.
+    /// </summary>
+    public Task<FleetResult<List<JsonElement>>> GetModuleAsync(string module, CancellationToken ct = default) =>
+        GetAsync<List<JsonElement>>($"/api/v1/{module}", ct);
+
     private async Task<FleetResult<T>> GetAsync<T>(string path, CancellationToken ct) where T : class
     {
         var config = ConfigManager.Instance.Config;

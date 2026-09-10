@@ -38,12 +38,13 @@ public sealed class DevicesPage : FleetPage
             {
                 Name = Display(d),
                 Serial = d.SerialNumber,
-                Status = d.Status ?? "",
-                StatusTone = d.Status?.ToLowerInvariant() switch
+                Liveness = DeviceStatus.Calculate(d),
+                Status = DeviceStatus.Label(DeviceStatus.Calculate(d)),
+                StatusTone = DeviceStatus.Calculate(d) switch
                 {
-                    "online" => Tone.Success,
-                    "idle" => Tone.Warning,
-                    "offline" => Tone.Error,
+                    DeviceLiveness.Active => Tone.Success,
+                    DeviceLiveness.Stale => Tone.Warning,
+                    DeviceLiveness.Missing => Tone.Error,
                     _ => Tone.Neutral,
                 },
                 Department = d.Department ?? "",
@@ -73,6 +74,18 @@ public sealed class DevicesPage : FleetPage
                 new("windows", "Windows", rows.Count(r => r.Platform == "Windows")),
                 new("macos", "macOS", rows.Count(r => r.Platform == "macOS")),
             ], (r, k) => k switch { "windows" => r.Platform == "Windows", "macos" => r.Platform == "macOS", _ => true })
+            .Filter([
+                new("all", "Any status", rows.Count),
+                new("active", "Active", rows.Count(r => r.Liveness == DeviceLiveness.Active)),
+                new("stale", "Stale", rows.Count(r => r.Liveness == DeviceLiveness.Stale)),
+                new("missing", "Missing", rows.Count(r => r.Liveness == DeviceLiveness.Missing)),
+            ], (r, k) => k switch
+            {
+                "active" => r.Liveness == DeviceLiveness.Active,
+                "stale" => r.Liveness == DeviceLiveness.Stale,
+                "missing" => r.Liveness == DeviceLiveness.Missing,
+                _ => true,
+            })
             .Build();
 
         table.Margin = new Thickness(0, 20, 0, 0);
@@ -107,6 +120,7 @@ public sealed class DevicesPage : FleetPage
         public string Serial { get; init; } = "";
         public string Status { get; init; } = "";
         public Tone StatusTone { get; init; }
+        public DeviceLiveness Liveness { get; init; }
         public string Usage { get; init; } = "";
         public string Department { get; init; } = "";
         public string Platform { get; init; } = "";
