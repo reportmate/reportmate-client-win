@@ -44,6 +44,8 @@ public sealed class ConfigManager
                 key.SetValue("ApiKey", config.ApiKey);
             if (!string.IsNullOrWhiteSpace(config.Passphrase))
                 key.SetValue("Passphrase", config.Passphrase);
+            if (!string.IsNullOrWhiteSpace(config.ReadApiKey))
+                key.SetValue("ReadApiKey", config.ReadApiKey);
             if (!string.IsNullOrWhiteSpace(config.DeviceId))
                 key.SetValue("DeviceId", config.DeviceId);
 
@@ -77,6 +79,7 @@ public sealed class ConfigManager
             config.ApiUrl = ReadString(key, "ApiUrl") ?? config.ApiUrl;
             config.ApiKey = ReadString(key, "ApiKey") ?? config.ApiKey;
             config.Passphrase = ReadString(key, "Passphrase") ?? config.Passphrase;
+            config.ReadApiKey = ReadString(key, "ReadApiKey") ?? config.ReadApiKey;
             config.DeviceId = ReadString(key, "DeviceId") ?? config.DeviceId;
 
             config.CollectionIntervalSeconds = ReadInt(key, "CollectionIntervalSeconds") ?? ReadInt(key, "CollectionInterval") ?? config.CollectionIntervalSeconds;

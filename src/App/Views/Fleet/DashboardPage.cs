@@ -28,8 +28,8 @@ public sealed class DashboardPage : FleetPage
         var left = new StackPanel();
         Stack(left, StatusWidget(devices));
         Stack(left, Ui.Columns(2, 14,
-            CounterCard("Errors", data.InstallStats?.TotalErrors ?? 0, data.InstallStats?.DevicesWithErrors ?? 0, Tone.Error),
-            CounterCard("Warnings", data.InstallStats?.TotalWarnings ?? 0, data.InstallStats?.DevicesWithWarnings ?? 0, Tone.Warning)));
+            CounterCard("Errors", data.InstallStats?.TotalErrorItems ?? 0, data.InstallStats?.DevicesWithErrors ?? 0, Tone.Error),
+            CounterCard("Warnings", data.InstallStats?.TotalWarningItems ?? 0, data.InstallStats?.DevicesWithWarnings ?? 0, Tone.Warning)));
         Stack(left, NewClientsWidget(devices));
 
         var right = new StackPanel();
@@ -56,23 +56,22 @@ public sealed class DashboardPage : FleetPage
     /// <summary>Active / stale / missing counts, the web's StatusWidget.</summary>
     private static UIElement StatusWidget(List<FleetDevice> devices)
     {
-        var now = DateTime.UtcNow;
-        var active = 0; var stale = 0; var missing = 0;
-        foreach (var d in devices)
-        {
-            var age = d.LastSeen is null ? TimeSpan.MaxValue : now - d.LastSeen.Value.ToUniversalTime();
-            if (age <= TimeSpan.FromHours(24)) active++;
-            else if (age <= TimeSpan.FromDays(7)) stale++;
-            else missing++;
-        }
+        // The API classifies each device as online / idle / offline. Recomputing that
+        // here from lastSeen would quietly disagree with the web app's numbers.
+        var online = devices.Count(d => Is(d, "online"));
+        var idle = devices.Count(d => Is(d, "idle"));
+        var offline = devices.Count(d => Is(d, "offline"));
 
         var body = new StackPanel();
         body.Children.Add(BigNumber(devices.Count, "devices total"));
-        body.Children.Add(Bar("Active", active, devices.Count, Tone.Success));
-        body.Children.Add(Bar("Stale", stale, devices.Count, Tone.Warning));
-        body.Children.Add(Bar("Missing", missing, devices.Count, Tone.Error));
-        return Ui.StatBlock("Fleet Status", "Reporting in the last 24 hours", "", Accent.Green, Pad(body));
+        body.Children.Add(Bar("Online", online, devices.Count, Tone.Success));
+        body.Children.Add(Bar("Idle", idle, devices.Count, Tone.Warning));
+        body.Children.Add(Bar("Offline", offline, devices.Count, Tone.Error));
+        return Ui.StatBlock("Fleet Status", "Devices by reporting status", "", Accent.Green, Pad(body));
     }
+
+    private static bool Is(FleetDevice d, string status) =>
+        string.Equals(d.Status, status, StringComparison.OrdinalIgnoreCase);
 
     private static UIElement CounterCard(string title, int total, int deviceCount, Tone tone)
     {
@@ -124,7 +123,7 @@ public sealed class DashboardPage : FleetPage
                 Pad(Ui.EmptyState("No events have been reported.")));
 
         var body = new StackPanel();
-        foreach (var e in events.OrderByDescending(e => e.Timestamp ?? DateTime.MinValue).Take(12))
+        foreach (var e in events.OrderByDescending(e => e.When ?? DateTime.MinValue).Take(12))
         {
             var row = new Grid { Margin = new Thickness(0, 0, 0, 9) };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -148,7 +147,7 @@ public sealed class DashboardPage : FleetPage
             Grid.SetColumn(text, 1);
             row.Children.Add(text);
 
-            var meta = Ui.Caption($"{e.DeviceName ?? e.SerialNumber ?? ""}  ·  {Relative(e.Timestamp)}");
+            var meta = Ui.Caption($"{e.DeviceName ?? e.SerialNumber ?? ""}  ·  {Relative(e.When)}");
             Grid.SetColumn(meta, 2);
             row.Children.Add(meta);
             body.Children.Add(row);
@@ -181,7 +180,7 @@ public sealed class DashboardPage : FleetPage
                 Pad(Ui.EmptyState($"No {platform} devices are reporting.")));
 
         var groups = matching
-            .GroupBy(d => string.IsNullOrWhiteSpace(d.OsVersion) ? "Unknown" : d.OsVersion!)
+            .GroupBy(OsLabel)
             .Select(g => (Name: g.Key, Count: g.Count()))
             .OrderByDescending(g => g.Count)
             .Take(8)
@@ -252,14 +251,26 @@ public sealed class DashboardPage : FleetPage
 
     private static string NormalizePlatform(FleetDevice d)
     {
-        var raw = (d.Platform ?? d.OsName ?? "").ToLowerInvariant();
+        var raw = (d.Platform ?? d.OsName ?? d.Modules?.System?.OperatingSystem?.Name ?? "").ToLowerInvariant();
         if (raw.Contains("win")) return "Windows";
         if (raw.Contains("mac") || raw.Contains("darwin") || raw.Contains("os x")) return "macOS";
         return string.IsNullOrWhiteSpace(raw) ? "Unknown" : Format.Capitalize(raw);
     }
 
+    /// <summary>The OS version, preferring the flat field and falling back to the module summary.</summary>
+    private static string OsLabel(FleetDevice d)
+    {
+        var os = d.Modules?.System?.OperatingSystem;
+        var version = Pick(d.OsVersion, os?.DisplayVersion, os?.Version, os?.Build);
+        return string.IsNullOrWhiteSpace(version) ? "Unknown" : version!;
+    }
+
+    private static string? Pick(params string?[] options) =>
+        options.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o));
+
     private static string DisplayName(FleetDevice d) =>
         !string.IsNullOrWhiteSpace(d.Name) ? d.Name
+        : !string.IsNullOrWhiteSpace(d.Modules?.Inventory?.DeviceName) ? d.Modules!.Inventory!.DeviceName!
         : !string.IsNullOrWhiteSpace(d.SerialNumber) ? d.SerialNumber
         : d.DeviceId;
 

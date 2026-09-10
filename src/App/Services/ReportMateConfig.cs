@@ -10,6 +10,12 @@ public sealed class ReportMateConfig
     public string ApiUrl { get; set; } = "";
     public string? ApiKey { get; set; }
     public string? Passphrase { get; set; }
+
+    /// <summary>
+    /// A read-scoped API key for the fleet pages. Separate from ApiKey, which is the
+    /// endpoint's ingest credential and is rejected by the read endpoints.
+    /// </summary>
+    public string? ReadApiKey { get; set; }
     public string? DeviceId { get; set; }
 
     // Collection

@@ -63,7 +63,14 @@ public sealed class FleetApiClient
 
         var url = config.ApiUrl.TrimEnd('/') + path;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        if (!string.IsNullOrWhiteSpace(config.ApiKey))
+        // The endpoint's own ApiKey is an ingest credential and the fleet endpoints
+        // reject it, so the shared passphrase is what actually reads today. A
+        // read-scoped key set explicitly wins over it when one is provisioned.
+        if (!string.IsNullOrWhiteSpace(config.ReadApiKey))
+            request.Headers.TryAddWithoutValidation("X-API-Key", config.ReadApiKey);
+        else if (!string.IsNullOrWhiteSpace(config.Passphrase))
+            request.Headers.TryAddWithoutValidation("X-Client-Passphrase", config.Passphrase);
+        else if (!string.IsNullOrWhiteSpace(config.ApiKey))
             request.Headers.TryAddWithoutValidation("X-API-Key", config.ApiKey);
 
         try
@@ -101,22 +108,56 @@ public sealed class FleetApiClient
 /// <summary>One device as the fleet list and dashboard widgets see it.</summary>
 public sealed class FleetDevice
 {
+    public string Id { get; set; } = "";
     public string DeviceId { get; set; } = "";
     public string SerialNumber { get; set; } = "";
     public string Name { get; set; } = "";
-    public string? AssetTag { get; set; }
-    public string? Status { get; set; }
     public string? Platform { get; set; }
     public string? OsName { get; set; }
     public string? OsVersion { get; set; }
-    public string? Model { get; set; }
-    public string? Manufacturer { get; set; }
-    public string? IpAddress { get; set; }
-    public string? Location { get; set; }
-    public string? Usage { get; set; }
-    public string? Catalog { get; set; }
+
+    /// <summary>The API's own liveness verdict: online, idle or offline.</summary>
+    public string? Status { get; set; }
+
+    public bool Archived { get; set; }
     public DateTime? LastSeen { get; set; }
     public DateTime? CreatedAt { get; set; }
+
+    /// <summary>Per-module summaries the list view shows without a second call.</summary>
+    public DeviceModuleSummaries? Modules { get; set; }
+
+    public string? Location => Modules?.Inventory?.Location;
+    public string? Usage => Modules?.Inventory?.Usage;
+    public string? Catalog => Modules?.Inventory?.Catalog;
+    public string? Department => Modules?.Inventory?.Department;
+}
+
+public sealed class DeviceModuleSummaries
+{
+    public InventorySummary? Inventory { get; set; }
+    public SystemSummary? System { get; set; }
+}
+
+public sealed class InventorySummary
+{
+    public string? DeviceName { get; set; }
+    public string? Catalog { get; set; }
+    public string? Usage { get; set; }
+    public string? Department { get; set; }
+    public string? Location { get; set; }
+}
+
+public sealed class SystemSummary
+{
+    public OperatingSystemSummary? OperatingSystem { get; set; }
+}
+
+public sealed class OperatingSystemSummary
+{
+    public string? Name { get; set; }
+    public string? Version { get; set; }
+    public string? DisplayVersion { get; set; }
+    public string? Build { get; set; }
 }
 
 public sealed class FleetEvent
@@ -125,21 +166,38 @@ public sealed class FleetEvent
     public string? Device { get; set; }
     public string? DeviceName { get; set; }
     public string? SerialNumber { get; set; }
+    public string? AssetTag { get; set; }
     public string? Kind { get; set; }
     public string? EventType { get; set; }
     public string? Message { get; set; }
     public string? Platform { get; set; }
+
+    /// <summary>The API sends both; ts is the one always populated.</summary>
+    public DateTime? Ts { get; set; }
     public DateTime? Timestamp { get; set; }
+
+    public DateTime? When => Ts ?? Timestamp;
 }
 
-/// <summary>Fleet-wide install counters the dashboard's error and warning cards show.</summary>
+/// <summary>
+/// Fleet-wide install counters, split by platform exactly as the API reports them
+/// so the dashboard can honour the platform filter without recomputing anything.
+/// </summary>
 public sealed class InstallStats
 {
-    public int TotalDevices { get; set; }
     public int DevicesWithErrors { get; set; }
     public int DevicesWithWarnings { get; set; }
-    public int TotalErrors { get; set; }
-    public int TotalWarnings { get; set; }
+    public int WinDevicesWithErrors { get; set; }
+    public int WinDevicesWithWarnings { get; set; }
+    public int MacDevicesWithErrors { get; set; }
+    public int MacDevicesWithWarnings { get; set; }
+    public int TotalErrorItems { get; set; }
+    public int TotalWarningItems { get; set; }
+    public int WinErrorItems { get; set; }
+    public int WinWarningItems { get; set; }
+    public int MacErrorItems { get; set; }
+    public int MacWarningItems { get; set; }
+    public bool HasInstallData { get; set; }
 }
 
 public sealed class DashboardPayload
@@ -147,14 +205,19 @@ public sealed class DashboardPayload
     public List<FleetDevice> Devices { get; set; } = new();
     public List<FleetEvent> Events { get; set; } = new();
     public InstallStats? InstallStats { get; set; }
+    public long TotalDevices { get; set; }
+    public long TotalEvents { get; set; }
+    public DateTime? LastUpdated { get; set; }
 }
 
 public sealed class DevicesPayload
 {
     public List<FleetDevice> Devices { get; set; } = new();
+    public long TotalDevices { get; set; }
 }
 
 public sealed class EventsPayload
 {
     public List<FleetEvent> Events { get; set; } = new();
+    public long TotalEvents { get; set; }
 }

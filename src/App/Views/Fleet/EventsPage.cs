@@ -25,14 +25,14 @@ public sealed class EventsPage : FleetPage
         }
 
         var rows = events
-            .OrderByDescending(e => e.Timestamp ?? DateTime.MinValue)
+            .OrderByDescending(e => e.When ?? DateTime.MinValue)
             .Select(e => new EventRow
             {
                 Kind = Format.Capitalize(e.Kind ?? e.EventType ?? "info"),
                 KindTone = Classify(e.Kind ?? e.EventType),
                 Device = e.DeviceName ?? e.SerialNumber ?? e.Device ?? "",
                 Message = e.Message ?? "",
-                When = e.Timestamp,
+                When = e.When,
             })
             .ToList();
 

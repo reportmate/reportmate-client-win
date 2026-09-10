@@ -38,10 +38,19 @@ public sealed class DevicesPage : FleetPage
             {
                 Name = Display(d),
                 Serial = d.SerialNumber,
-                AssetTag = d.AssetTag ?? "",
+                Status = d.Status ?? "",
+                StatusTone = d.Status?.ToLowerInvariant() switch
+                {
+                    "online" => Tone.Success,
+                    "idle" => Tone.Warning,
+                    "offline" => Tone.Error,
+                    _ => Tone.Neutral,
+                },
+                Department = d.Department ?? "",
                 Platform = Platform(d),
-                OsVersion = d.OsVersion ?? "",
-                Model = d.Model ?? "",
+                OsVersion = Pick(d.OsVersion, d.Modules?.System?.OperatingSystem?.DisplayVersion,
+                                 d.Modules?.System?.OperatingSystem?.Version) ?? "",
+                Usage = d.Usage ?? "",
                 Location = d.Location ?? "",
                 LastSeen = d.LastSeen,
             })
@@ -50,11 +59,12 @@ public sealed class DevicesPage : FleetPage
         var table = new FilteredTable<DeviceRow>("Devices", "{0} of {1} devices", rows,
             (r, q) => r.Matches(q),
             [
-                Col.Text("Device", "Name", star: true, sub: "Model"),
-                Col.Text("Serial", "Serial", 150, mono: true),
-                Col.Text("Asset Tag", "AssetTag", 120, mono: true),
+                Col.Text("Device", "Name", star: true, sub: "Department"),
+                Col.Pill("Status", "Status", "StatusTone", 110),
+                Col.Text("Serial", "Serial", 160, mono: true),
                 Col.Text("Platform", "Platform", 110),
                 Col.Text("OS", "OsVersion", 130),
+                Col.Text("Usage", "Usage", 120),
                 Col.Text("Location", "Location", 130),
                 Col.Text("Last Seen", "LastSeenLabel", 130),
             ], "Search devices...", "No devices match the current filters")
@@ -95,28 +105,34 @@ public sealed class DevicesPage : FleetPage
     {
         public string Name { get; init; } = "";
         public string Serial { get; init; } = "";
-        public string AssetTag { get; init; } = "";
+        public string Status { get; init; } = "";
+        public Tone StatusTone { get; init; }
+        public string Usage { get; init; } = "";
+        public string Department { get; init; } = "";
         public string Platform { get; init; } = "";
         public string OsVersion { get; init; } = "";
-        public string Model { get; init; } = "";
         public string Location { get; init; } = "";
         public DateTime? LastSeen { get; init; }
         public string LastSeenLabel => Relative(LastSeen);
 
         public bool Matches(string query) =>
             string.IsNullOrWhiteSpace(query)
-            || $"{Name} {Serial} {AssetTag} {Model} {Location} {OsVersion}"
+            || $"{Name} {Serial} {Usage} {Department} {Location} {OsVersion}"
                 .Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
+    private static string? Pick(params string?[] options) =>
+        options.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o));
+
     private static string Display(FleetDevice d) =>
         !string.IsNullOrWhiteSpace(d.Name) ? d.Name
+        : !string.IsNullOrWhiteSpace(d.Modules?.Inventory?.DeviceName) ? d.Modules!.Inventory!.DeviceName!
         : !string.IsNullOrWhiteSpace(d.SerialNumber) ? d.SerialNumber
         : d.DeviceId;
 
     private static string Platform(FleetDevice d)
     {
-        var raw = (d.Platform ?? d.OsName ?? "").ToLowerInvariant();
+        var raw = (d.Platform ?? d.OsName ?? d.Modules?.System?.OperatingSystem?.Name ?? "").ToLowerInvariant();
         if (raw.Contains("win")) return "Windows";
         if (raw.Contains("mac") || raw.Contains("darwin")) return "macOS";
         return string.IsNullOrWhiteSpace(raw) ? "Unknown" : Format.Capitalize(raw);
