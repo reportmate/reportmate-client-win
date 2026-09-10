@@ -72,7 +72,115 @@ public sealed class SecurityTab : DeviceTab
         Add(cveHost);
 
         Add(DetectionsCard(sec));
+        Add(AsrCard(sec));
+        Add(ExclusionsCard(sec));
+        Add(AuditPolicyCard(sec));
         return page;
+    }
+
+    /// <summary>
+    /// Attack Surface Reduction rules and what each is set to. A rule in Audit or Warn
+    /// is not enforcing, which is the distinction that matters when something is being
+    /// blocked or conspicuously is not, so the state is shown per rule rather than as a
+    /// count of "configured" ones.
+    /// </summary>
+    private UIElement AsrCard(SecurityData sec)
+    {
+        var rules = sec.AsrRules ?? [];
+        if (rules.Count == 0) return new StackPanel();
+
+        var blocking = rules.Count(r => Tone(r.State) == Shared.Tone.Success);
+        var body = new StackPanel { Margin = new Thickness(20, 4, 20, 16) };
+        foreach (var rule in rules.OrderBy(r => r.Name.Length == 0 ? r.Id : r.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var name = Ui.Text(string.IsNullOrWhiteSpace(rule.Name) ? rule.Id : rule.Name);
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            name.ToolTip = rule.Id;
+            row.Children.Add(name);
+
+            var pill = Ui.Pill(string.IsNullOrWhiteSpace(rule.State) ? "Unknown" : rule.State, Tone(rule.State));
+            Grid.SetColumn(pill, 1);
+            row.Children.Add(pill);
+            body.Children.Add(row);
+        }
+
+        return Ui.StatBlock("Attack Surface Reduction",
+            $"{blocking} of {rules.Count} rules blocking", Glyph, Accent, body);
+
+        static Shared.Tone Tone(string? state) => (state ?? "").ToLowerInvariant() switch
+        {
+            "block" => Shared.Tone.Success,
+            "warn" => Shared.Tone.Warning,
+            "audit" => Shared.Tone.Info,
+            "off" => Shared.Tone.Neutral,
+            _ => Shared.Tone.Neutral,
+        };
+    }
+
+    /// <summary>
+    /// What Defender has been told not to look at. An exclusion is a deliberate hole, so
+    /// the paths are listed rather than counted.
+    /// </summary>
+    private UIElement ExclusionsCard(SecurityData sec)
+    {
+        var ex = sec.DefenderExclusions;
+        if (ex is null) return new StackPanel();
+
+        var groups = new (string Label, List<string> Values)[]
+        {
+            ("Paths", ex.Paths ?? []),
+            ("Extensions", ex.Extensions ?? []),
+            ("Processes", ex.Processes ?? []),
+            ("IP addresses", ex.IpAddresses ?? []),
+        };
+        var total = groups.Sum(g => g.Values.Count);
+        if (total == 0) return new StackPanel();
+
+        var body = new StackPanel { Margin = new Thickness(20, 4, 20, 16) };
+        foreach (var (label, values) in groups)
+        {
+            if (values.Count == 0) continue;
+            body.Children.Add(Ui.Caption($"{label} ({values.Count})"));
+            foreach (var value in values.OrderBy(v => v, StringComparer.OrdinalIgnoreCase))
+            {
+                var line = Ui.Mono(value);
+                line.TextWrapping = TextWrapping.Wrap;
+                line.Margin = new Thickness(0, 2, 0, 0);
+                body.Children.Add(line);
+            }
+            body.Children.Add(new Border { Height = 10 });
+        }
+
+        return Ui.StatBlock("Defender Exclusions", $"{total} excluded", Glyph, Accent, body);
+    }
+
+    /// <summary>Which audit categories are logging, and for which outcomes.</summary>
+    private UIElement AuditPolicyCard(SecurityData sec)
+    {
+        var policy = sec.AuditPolicy;
+        var categories = policy?.Categories ?? [];
+        if (categories.Count == 0)
+        {
+            if (policy is null || string.IsNullOrWhiteSpace(policy.ErrorMessage)) return new StackPanel();
+            return Ui.StatBlock("Audit Policy", null, Glyph, Accent,
+                new Border { Padding = new Thickness(20, 4, 20, 16), Child = Ui.EmptyState(policy.ErrorMessage) });
+        }
+
+        var body = new StackPanel { Margin = new Thickness(20, 4, 20, 16) };
+        foreach (var category in categories)
+        {
+            var label = string.IsNullOrWhiteSpace(category.Subcategory)
+                ? category.Category
+                : $"{category.Category} / {category.Subcategory}";
+            var setting = string.IsNullOrWhiteSpace(category.Setting) ? "No Auditing" : category.Setting;
+            body.Children.Add(Ui.Row(label, setting));
+        }
+
+        return Ui.StatBlock("Audit Policy", $"{categories.Count} categories", Glyph, Accent, body);
     }
 
     // ── Posture cards ────────────────────────────────────────────────
