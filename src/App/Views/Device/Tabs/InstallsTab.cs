@@ -377,6 +377,10 @@ public sealed class InstallsTab : DeviceTab
         if (cimian is null) return packages;
         var latest = cimian.Sessions?.FirstOrDefault();
         var latestSessionId = latest?.SessionId?.Trim() ?? "";
+        // Where a device reports sessions, a message only counts when the item actually
+        // appeared in a run, so a stale message is not held against an item this run
+        // never touched.
+        var hasSessions = cimian.Sessions is { Count: > 0 };
         var latestEnd = latest?.EndTime ?? latest?.StartTime;
 
         IEnumerable<CimianItem> items = cimian.Items ?? [];
@@ -403,9 +407,15 @@ public sealed class InstallsTab : DeviceTab
             var installedVersion = item.InstalledVersion ?? "";
             var latestVersion = item.LatestVersion ?? "";
 
+            // The shared ladder decides whether an item is a problem; it reads the state
+            // the API computed, the verdict, a detected loop and the run's own messages,
+            // none of which a raw status string carries on its own.
+            var classified = InstallStatus.Classify(new InstallItem(item), hasSessions);
             var standardized = Standardize(rawStatus);
             string status;
-            if (standardized is "Error" or "Warning" or "Removed") status = standardized;
+            if (classified is ItemStatus.Error or ItemStatus.Warning)
+                status = InstallStatus.Label(classified);
+            else if (standardized == "Removed") status = standardized;
             else if (!string.IsNullOrWhiteSpace(installedVersion) && !string.IsNullOrWhiteSpace(latestVersion))
                 status = CompareVersions(installedVersion, latestVersion) >= 0 ? "Installed" : "Pending";
             else status = standardized;

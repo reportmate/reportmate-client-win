@@ -25,6 +25,7 @@
       directly and the link parsing is covered here rather than not at all.
     -->
     <Compile Include="..\..\src\App\Services\DeepLink.cs" Link="DeepLink.cs" />
+    <Compile Include="..\..\src\App\Services\InstallStatus.cs" Link="InstallStatus.cs" />
   </ItemGroup>
 
   <ItemGroup>
