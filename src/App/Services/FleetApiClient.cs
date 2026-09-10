@@ -64,23 +64,31 @@ public sealed class FleetApiClient
     public Task<FleetResult<List<JsonElement>>> GetModuleAsync(string module, int? limit = null, CancellationToken ct = default) =>
         GetAsync<List<JsonElement>>(limit is null ? $"/api/v1/{module}" : $"/api/v1/{module}?limit={limit}", ct);
 
+    private static string? FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
     private async Task<FleetResult<T>> GetAsync<T>(string path, CancellationToken ct) where T : class
     {
         var config = ConfigManager.Instance.Config;
         if (string.IsNullOrWhiteSpace(config.ApiUrl))
             return new FleetResult<T>(FleetStatus.NotConfigured, null, "No API URL is configured for this device.");
 
+        // The runner's ApiKey is a per-client INGEST credential and the API's scope gate
+        // refuses it for every read. Sending it anyway would turn a device that has only
+        // that key into a 403 on every page, which reads as a broken app rather than as
+        // the missing credential it is -- so it is deliberately never used here.
+        var readCredential = FirstNonEmpty(config.ReadApiKey, config.Passphrase);
+        if (readCredential is null)
+            return new FleetResult<T>(FleetStatus.NotConfigured, null,
+                "This device has no read credential. The runner's API key can report data in "
+                + "but cannot read the fleet back out.");
+
         var url = config.ApiUrl.TrimEnd('/') + path;
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        // The endpoint's own ApiKey is an ingest credential and the fleet endpoints
-        // reject it, so the shared passphrase is what actually reads today. A
-        // read-scoped key set explicitly wins over it when one is provisioned.
         if (!string.IsNullOrWhiteSpace(config.ReadApiKey))
             request.Headers.TryAddWithoutValidation("X-API-Key", config.ReadApiKey);
-        else if (!string.IsNullOrWhiteSpace(config.Passphrase))
+        else
             request.Headers.TryAddWithoutValidation("X-Client-Passphrase", config.Passphrase);
-        else if (!string.IsNullOrWhiteSpace(config.ApiKey))
-            request.Headers.TryAddWithoutValidation("X-API-Key", config.ApiKey);
 
         try
         {

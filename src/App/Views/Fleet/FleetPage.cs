@@ -85,8 +85,9 @@ public abstract class FleetPage : Page
         var (title, guidance) = status switch
         {
             FleetApiClient.FleetStatus.NotConfigured =>
-                ("No ReportMate API is configured",
-                 "This device has no API URL, so there is no fleet to show."),
+                ("This device cannot read the fleet yet",
+                 "The fleet pages need a read credential. The runner's own API key reports "
+                 + "data in and is refused for reading it back out, so one has to be set here."),
             FleetApiClient.FleetStatus.Forbidden =>
                 ("This device cannot read fleet data",
                  "The endpoint's API key is scoped for reporting data in, not reading the fleet back out. "
