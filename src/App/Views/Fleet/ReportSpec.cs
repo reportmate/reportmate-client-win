@@ -109,7 +109,7 @@ public sealed record ReportSpec(
                 new("TPM present", "tpmPresent"),
                 new("Secure Boot", "secureBootEnabled"),
                 new("Tamper protection", "tamperProtected"),
-                new("SmartScreen", "smartScreenState"),
+                new("Smart App Control", "smartAppControlState"),
             ],
             [
                 new("Device", new("Device", "deviceName"), Star: true),
@@ -126,7 +126,7 @@ public sealed record ReportSpec(
             [
                 new("Connection", "raw.activeConnection.connectionType"),
                 new("Interface", "raw.primaryInterface"),
-                new("Domain", "raw.domain"),
+                new("DNS server", "raw.dns.servers[]"),
                 new("Wi-Fi SSID", "raw.activeConnection.activeWifiSsid"),
             ],
             [
@@ -141,7 +141,7 @@ public sealed record ReportSpec(
 
         ["identity"] = new("identity",
             [
-                new("Domain joined", "directoryServices.activeDirectory.joined"),
+                new("Domain joined", "directoryServices.activeDirectory.isDomainJoined"),
                 new("Entra joined", "directoryServices.azureAd.joined"),
                 new("Workgroup", "directoryServices.workgroup"),
             ],
@@ -187,7 +187,7 @@ public sealed record ReportSpec(
                 new("Printers", new("Printers", "printers[].name"), 200),
                 new("USB", new("USB", "usbDevices[].name"), 220),
                 new("Audio", new("Audio", "audioDevices[].name"), 180),
-                new("Displays", new("Displays", "displayDevices[].name"), 170),
+                new("Displays", new("Displays", "displayDevices[].friendlyName"), 170),
             ]),
     };
 
