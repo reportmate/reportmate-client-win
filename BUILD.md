@@ -147,6 +147,9 @@ release/
 
 .publish/
 └── managedreportsrunner.exe                   # Self-contained executable
+
+src/App/bin/Release/net10.0-windows/win-x64/publish/
+└── Managed Reports Runner.exe                 # Self-contained GUI app
 ```
 
 ## Package Contents
@@ -156,6 +159,8 @@ All packages deploy the same file structure:
 ```text
 C:\Program Files\ReportMate\
 ├── managedreportsrunner.exe                   # Main executable
+├── Managed Reports Runner.exe                 # GUI: device report, run, logs, settings
+├── usagetracker.exe                           # Per-user usage companion
 └── version.txt                  # Version information
 
 C:\ProgramData\ManagedReports\
@@ -174,6 +179,24 @@ C:\ProgramData\ManagedReports\
 C:\Program Files\Cimian\         # (NUPKG only)
 └── postflight.ps1              # Cimian integration script
 ```
+
+## GUI Project
+
+`src/App/ReportMate.App.csproj` is the WPF app (Managed Reports Runner). `build.ps1` publishes it self-contained for win-x64 and copies it into the payload next to the runner. The project sets `EnableWindowsTargeting`, so it also compiles on macOS and Linux for a quick check, even though it only runs on Windows.
+
+Compile check on any host:
+
+```bash
+dotnet build src/App/ReportMate.App.csproj
+```
+
+Publish it on its own, the way build.ps1 does:
+
+```powershell
+dotnet publish src/App/ReportMate.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+```
+
+The app links the client's `src/Models/Modules` sources rather than referencing the runner project, so it reads the cache with the same classes that wrote it and carries none of the runner's collection dependencies.
 
 ## CI/CD Integration
 

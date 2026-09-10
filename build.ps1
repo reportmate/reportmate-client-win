@@ -816,6 +816,54 @@ if (Test-Path $usageTrackerProj) {
     Write-Verbose "usagetracker project not found; skipping (legacy build path)"
 }
 
+# ─────────────── MANAGED REPORTS RUNNER (GUI) ───────────────
+# Builds the WPF app that renders this device's report from the runner's local
+# cache (the web device page, tab for tab), runs collections elevated, tails
+# the logs and edits the registry settings. Self-contained single file like
+# the runner; WPF cannot be trimmed, so it is larger.
+$guiProj = Join-Path $SrcDir "App\ReportMate.App.csproj"
+$guiPublishDir = Join-Path $SrcDir "App\bin\$Configuration\net10.0-windows\win-x64\publish"
+if (Test-Path $guiProj) {
+    Write-Step "Building Managed Reports Runner.exe (GUI)..."
+    dotnet publish $guiProj `
+        --configuration $Configuration `
+        --runtime win-x64 `
+        --self-contained true `
+        -p:PublishSingleFile=true `
+        -p:PublishTrimmed=false `
+        -p:IncludeNativeLibrariesForSelfExtract=true `
+        -p:VersionPrefix=$Version `
+        --verbosity quiet
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "GUI build failed (exit $LASTEXITCODE)"
+        exit $LASTEXITCODE
+    }
+    $guiExe = Join-Path $guiPublishDir "Managed Reports Runner.exe"
+    if (-not (Test-Path $guiExe)) {
+        Write-Error "Managed Reports Runner.exe not found at expected path: $guiExe"
+        exit 1
+    }
+    if ($Sign) {
+        Write-Step "Signing Managed Reports Runner.exe..."
+        try {
+            signPackage -FilePath $guiExe
+            Write-Success "Signed Managed Reports Runner.exe"
+        } catch {
+            Write-Error "Failed to sign Managed Reports Runner.exe: $_"
+            exit 1
+        }
+    }
+    Copy-Item $guiExe (Join-Path $ProgramFilesPayloadDir "Managed Reports Runner.exe") -Force
+    $guiAssets = Join-Path $guiPublishDir "Assets"
+    if (Test-Path $guiAssets) {
+        Copy-Item $guiAssets (Join-Path $ProgramFilesPayloadDir "Assets") -Recurse -Force
+    }
+    $guiSize = (Get-Item $guiExe).Length / 1MB
+    Write-Success ("Managed Reports Runner.exe bundled ({0:N1} MB)" -f $guiSize)
+} else {
+    Write-Verbose "GUI project not found; skipping"
+}
+
 # Create version file in payload root
 $versionContent = @"
 ReportMate

@@ -116,7 +116,7 @@ After deployment, files are organized following Windows conventions:
 ├─────────────────────────────────────────────────────────────────┤
 │  managedsoftwareupdate.exe → postflight.ps1 → managedreportsrunner.exe       │
 │                                                                 │
-│  Simple postflight execution - no GUI status integration       │
+│  Postflight runs the collector; the GUI app reads its cache     │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -266,7 +266,8 @@ choco install reportmate-windows-client.nupkg
 ### Core Functionality
 
 - **osquery Integration**: Leverages osquery for comprehensive system data collection
-- **Cimian Integration**: Simple postflight script execution (no GUI integration) 
+- **Cimian Integration**: Postflight script execution after each managed software run
+- **Managed Reports Runner app**: A native WPF app that renders this device's report from the local cache, tab for tab with the web device page, and runs collections, tails logs and edits settings
 - **Secure Communication**: HTTPS with proper certificate validation
 - **Configuration Management**: Multi-source configuration with Windows Registry support
 - **Error Handling**: Robust retry logic and comprehensive logging
@@ -288,6 +289,17 @@ choco install reportmate-windows-client.nupkg
 - **Logging & Monitoring**: Comprehensive Windows Event Log integration
 - **Configuration Management**: Multiple configuration sources (Registry, JSON, Environment)
 - **Deployment Scripts**: Batch, PowerShell, and silent installation options
+
+## Managed Reports Runner (GUI)
+
+`Managed Reports Runner.exe` is a native Windows app installed next to the runner. It reads the newest per-module JSON the runner writes under `C:\ProgramData\ManagedReports\cache\` and renders the same device page the ReportMate web app shows, with no network access needed:
+
+- **Device**: the device header (name, asset tag, serial, IP, collection age) and eleven tabs mirroring the web device page: Info, Installs, Applications, System, Management, Identity, Hardware, Peripherals, Security, Network and Events.
+- **Run**: launches `managedreportsrunner.exe` elevated for all or selected modules and streams its log; the Device tab refreshes when the run finishes.
+- **Logs**: browses and filters the runner's log files.
+- **Settings**: edits the registry-backed configuration, with policy-managed keys shown locked.
+
+The app compiles the client's own payload models, so it deserialises the cache with the classes that wrote it. It is built and packaged by `build.ps1` alongside the runner.
 
 ## Command Line Interface
 
