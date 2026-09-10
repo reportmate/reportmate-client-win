@@ -20,7 +20,7 @@ public enum Tone { Neutral, Success, Warning, Error, Info, Purple, Orange }
 /// bodies are data-driven and conditional, so composing them in code keeps each tab
 /// a straight port of its web counterpart instead of a wall of converters.
 /// </summary>
-public static class Ui
+public static partial class Ui
 {
     public static Brush Brush(string key) =>
         Application.Current.TryFindResource(key) as Brush ?? Brushes.Transparent;

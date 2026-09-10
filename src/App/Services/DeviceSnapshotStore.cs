@@ -39,6 +39,7 @@ public sealed class DeviceSnapshotStore
 
         var collectedAt = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         var events = new List<ReportMateEvent>();
+        var seenEvents = new HashSet<(DateTime, string, string)>();
         EventMetadata? metadata = null;
 
         InventoryData? inventory = null;
@@ -65,14 +66,14 @@ public sealed class DeviceSnapshotStore
             peripherals ??= Read<PeripheralsModuleData>(run, "peripherals", collectedAt);
             applications ??= Read<ApplicationsData>(run, "applications", collectedAt);
 
-            if (metadata is null)
+            // Every run's event.json carries that run's events; keep them all so the
+            // Events tab has a history, deduplicated on (timestamp, module, message).
+            var unified = ReadFile<UnifiedDevicePayload>(Path.Combine(run, "event.json"));
+            if (unified is not null)
             {
-                var unified = ReadFile<UnifiedDevicePayload>(Path.Combine(run, "event.json"));
-                if (unified is not null)
-                {
-                    metadata = unified.Metadata;
-                    events = unified.Events ?? [];
-                }
+                metadata ??= unified.Metadata;
+                foreach (var e in unified.Events ?? [])
+                    if (seenEvents.Add((e.Timestamp, e.ModuleId ?? "", e.Message ?? ""))) events.Add(e);
             }
         }
 
