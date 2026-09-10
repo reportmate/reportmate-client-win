@@ -339,6 +339,16 @@ public sealed class FilteredTable<T> : ContentControl
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
     }
 
+    /// <summary>
+    /// Open with a search already applied, so a link can reopen the exact view it was
+    /// copied from rather than the unfiltered table.
+    /// </summary>
+    public FilteredTable<T> WithQuery(string? query)
+    {
+        if (!string.IsNullOrWhiteSpace(query)) _query = query;
+        return this;
+    }
+
     /// <summary>Add a pill group. The predicate receives the row and the selected key ("all" passes everything).</summary>
     public FilteredTable<T> Filter(IEnumerable<FilterOption> options, Func<T, string, bool> predicate, string initial = "all")
     {
@@ -353,7 +363,9 @@ public sealed class FilteredTable<T> : ContentControl
     public FilteredTable<T> Build()
     {
         foreach (var (pills, _) in _filters) _controls.Children.Add(pills);
-        _controls.Children.Add(new SearchBox(_searchPlaceholder, q => { _query = q; Refresh(); }));
+        var search = new SearchBox(_searchPlaceholder, q => { _query = q; Refresh(); });
+        if (!string.IsNullOrEmpty(_query)) search.Text = _query;
+        _controls.Children.Add(search);
         var header = new StackPanel();
         header.Children.Add(Ui.Text(_title, "TitleTextStyle"));
         header.Children.Add(_subtitle);

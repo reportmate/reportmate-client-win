@@ -154,6 +154,8 @@ public sealed class InventorySummary
     public string? Usage { get; set; }
     public string? Department { get; set; }
     public string? Location { get; set; }
+    public string? Area { get; set; }
+    public string? Fleet { get; set; }
 }
 
 public sealed class SystemSummary

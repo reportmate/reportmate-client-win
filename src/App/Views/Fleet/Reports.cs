@@ -109,7 +109,7 @@ public sealed class ReportPage : FleetPage
 
         var distributions = BuildDistributions(spec, rows);
         if (distributions is not null) page.Children.Add(distributions);
-        page.Children.Add(BuildTable(spec, rows));
+        page.Children.Add(BuildTable(spec, rows, Filter("q") ?? Filter("search")));
         if (capped)
             page.Children.Add(Ui.Caption(
                 $"Showing the first {rows.Count:N0} {spec.RowNoun}; the fleet holds more. "
@@ -155,7 +155,7 @@ public sealed class ReportPage : FleetPage
         return grid;
     }
 
-    private static UIElement BuildTable(ReportSpec spec, List<JsonElement> rows)
+    private static UIElement BuildTable(ReportSpec spec, List<JsonElement> rows, string? query)
     {
         var headers = spec.Columns.Select(c => c.Header).ToList();
         var data = rows.Select(row => new ReportRow(
@@ -176,6 +176,7 @@ public sealed class ReportPage : FleetPage
         var table = new FilteredTable<ReportRow>(title, "{0} of {1} " + spec.RowNoun,
             data, (r, q) => r.Matches(q), columns,
             $"Search {spec.RowNoun}...", $"No {spec.RowNoun} match the current filters")
+            .WithQuery(query)
             .Build();
         table.Margin = new Thickness(0, 6, 0, 0);
         return table;

@@ -36,12 +36,22 @@ public abstract class FleetPage : Page
     /// <summary>Fetch and render. Implementations return the page body.</summary>
     protected abstract Task<UIElement> BuildAsync();
 
+    /// <summary>
+    /// The link that opened this page, if it was opened by one. Taken once, so a later
+    /// refresh re-renders the same filters without a link re-applying itself.
+    /// </summary>
+    protected DeepLink? Link { get; private set; }
+
+    /// <summary>A filter value from the arriving link, or null.</summary>
+    protected string? Filter(string key) => Link?[key];
+
     public async Task ReloadAsync()
     {
         if (_loading) return;
         _loading = true;
         try
         {
+            Link ??= Views.Shared.MainWindow.TakePendingLink();
             if (_scroll.Content is null) _scroll.Content = Loading();
             var body = await BuildAsync();
             _scroll.Content = body;

@@ -53,12 +53,32 @@ public sealed class EventsPage : FleetPage
                 "error" => r.KindTone == Tone.Error,
                 "warning" => r.KindTone == Tone.Warning,
                 _ => true,
-            })
+            }, initial: InitialFilter())
+            .WithQuery(Filter("q"))
             .Build();
 
         table.Margin = new Thickness(0, 20, 0, 0);
         page.Children.Add(table);
         return page;
+    }
+
+    /// <summary>
+    /// The events route carries its filter as a comma-separated list and has a failures
+    /// sub-route; both mean the same thing to a single-choice filter here, so the first
+    /// recognised kind wins.
+    /// </summary>
+    private string InitialFilter()
+    {
+        if (string.Equals(Link?.Argument, "failures", StringComparison.OrdinalIgnoreCase)) return "error";
+        var raw = Filter("filter");
+        if (raw is null) return "all";
+        foreach (var part in raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            switch (part.ToLowerInvariant())
+            {
+                case "errors" or "error": return "error";
+                case "warnings" or "warning": return "warning";
+            }
+        return "all";
     }
 
     private static Tone Classify(string? kind) => (kind ?? "").ToLowerInvariant() switch

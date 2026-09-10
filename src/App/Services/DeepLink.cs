@@ -87,7 +87,9 @@ public sealed record DeepLink(string Section, string? Argument, NameValueCollect
         return s switch
         {
             "this-device" or "this-pc" or "this-mac" or "local" => "this-device",
+            // The web nav carries both of these; neither is a section of its own here.
             "profiles" => "management",
+            "inventory" => "devices",
             _ => Sections.Contains(s) ? s : null,
         };
     }

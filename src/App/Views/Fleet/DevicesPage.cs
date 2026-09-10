@@ -32,6 +32,19 @@ public sealed class DevicesPage : FleetPage
             return page;
         }
 
+        // The web devices page carries these as its query; a link reopens the same view.
+        var wantedStatus = Filter("status");
+        foreach (var (key, value) in new[]
+                 {
+                     ("usage", Filter("usage")), ("catalog", Filter("catalog")),
+                     ("area", Filter("area")), ("location", Filter("location")),
+                     ("fleet", Filter("fleet")),
+                 })
+        {
+            if (value is null) continue;
+            devices = devices.Where(d => Matches(d, key, value)).ToList();
+        }
+
         var rows = devices
             .OrderByDescending(d => d.LastSeen ?? DateTime.MinValue)
             .Select(d => new DeviceRow
@@ -85,7 +98,8 @@ public sealed class DevicesPage : FleetPage
                 "stale" => r.Liveness == DeviceLiveness.Stale,
                 "missing" => r.Liveness == DeviceLiveness.Missing,
                 _ => true,
-            })
+            }, initial: wantedStatus is null ? "all" : wantedStatus.ToLowerInvariant())
+            .WithQuery(Filter("search") ?? Filter("q"))
             .Build();
 
         table.Margin = new Thickness(0, 20, 0, 0);
@@ -133,6 +147,21 @@ public sealed class DevicesPage : FleetPage
             string.IsNullOrWhiteSpace(query)
             || $"{Name} {Serial} {Usage} {Department} {Location} {OsVersion}"
                 .Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Match one of the inventory dimensions a link can narrow the list by.</summary>
+    private static bool Matches(FleetDevice d, string key, string value)
+    {
+        var actual = key switch
+        {
+            "usage" => d.Usage,
+            "catalog" => d.Catalog,
+            "location" => d.Location,
+            "fleet" => d.Modules?.Inventory?.Fleet,
+            "area" => d.Modules?.Inventory?.Area,
+            _ => null,
+        };
+        return string.Equals(actual, value, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? Pick(params string?[] options) =>
