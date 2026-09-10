@@ -45,10 +45,21 @@ public sealed record ReportColumn(string Header, Field Field, double? Width = nu
 /// A whole fleet report: the charted distributions across the top and the table
 /// underneath, matching how the web report pages are laid out.
 /// </summary>
+/// <param name="RowNoun">
+/// What one row is. Most reports are a row per device, but the applications and
+/// installs reports are a row per installed item, so calling those rows "devices"
+/// would misstate the fleet by a factor of a hundred.
+/// </param>
+/// <param name="Limit">
+/// Rows to request. The item-level reports run to six figures fleet-wide, which is
+/// more than a table should pull down or a reader should scroll.
+/// </param>
 public sealed record ReportSpec(
     string Module,
     IReadOnlyList<Field> Distributions,
-    IReadOnlyList<ReportColumn> Columns)
+    IReadOnlyList<ReportColumn> Columns,
+    string RowNoun = "devices",
+    int? Limit = null)
 {
     public static ReportSpec? For(string module) => All.GetValueOrDefault(module);
 
@@ -172,6 +183,38 @@ public sealed record ReportSpec(
                 new("Type", new("Type", "enrollmentType"), 140),
                 new("Tenant", new("Tenant", "tenantName"), 170),
             ]),
+
+        ["applications"] = new("applications",
+            [
+                new("Publisher", "publisher"),
+                new("Category", "category"),
+                new("Architecture", "architecture"),
+                new("Application", "name"),
+            ],
+            [
+                new("Application", new("Application", "name"), Star: true),
+                new("Version", new("Version", "version"), 140),
+                new("Publisher", new("Publisher", "publisher"), 190),
+                new("Device", new("Device", "deviceName"), 190),
+                new("Serial", new("Serial", "serialNumber"), 150, Mono: true),
+                new("Architecture", new("Architecture", "architecture"), 110),
+            ], RowNoun: "installed applications", Limit: 5000),
+
+        ["installs"] = new("installs",
+            [
+                new("Status", "currentStatus"),
+                new("Item", "itemName"),
+                new("Catalog", "catalog"),
+                new("Platform", "platform"),
+            ],
+            [
+                new("Item", new("Item", "itemName"), Star: true),
+                new("Status", new("Status", "currentStatus"), 130),
+                new("Installed", new("Installed", "installedVersion"), 150),
+                new("Latest", new("Latest", "latestVersion"), 150),
+                new("Device", new("Device", "deviceName"), 190),
+                new("Serial", new("Serial", "serialNumber"), 150, Mono: true),
+            ], RowNoun: "managed items", Limit: 5000),
 
         ["peripherals"] = new("peripherals",
             [

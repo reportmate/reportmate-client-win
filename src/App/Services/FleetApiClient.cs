@@ -61,8 +61,8 @@ public sealed class FleetApiClient
     /// JSON and address values by path rather than through nine sets of models that
     /// would silently drop anything new.
     /// </summary>
-    public Task<FleetResult<List<JsonElement>>> GetModuleAsync(string module, CancellationToken ct = default) =>
-        GetAsync<List<JsonElement>>($"/api/v1/{module}", ct);
+    public Task<FleetResult<List<JsonElement>>> GetModuleAsync(string module, int? limit = null, CancellationToken ct = default) =>
+        GetAsync<List<JsonElement>>(limit is null ? $"/api/v1/{module}" : $"/api/v1/{module}?limit={limit}", ct);
 
     private async Task<FleetResult<T>> GetAsync<T>(string path, CancellationToken ct) where T : class
     {

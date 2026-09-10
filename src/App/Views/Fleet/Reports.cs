@@ -86,7 +86,7 @@ public sealed class ReportPage : FleetPage
             return page;
         }
 
-        var result = await FleetApiClient.Instance.GetModuleAsync(spec.Module);
+        var result = await FleetApiClient.Instance.GetModuleAsync(spec.Module, spec.Limit);
         if (!result.Ok)
         {
             page.Children.Add(Ui.TabHeader(_area.Title, _area.Subtitle, "", _area.Accent));
@@ -95,8 +95,11 @@ public sealed class ReportPage : FleetPage
         }
 
         var rows = result.Data!;
+        var capped = spec.Limit is { } cap && rows.Count >= cap;
         page.Children.Add(Ui.TabHeader(_area.Title, _area.Subtitle, "", _area.Accent,
-            Ui.Caption($"{rows.Count:N0} devices")));
+            Ui.Caption(capped
+                ? $"first {rows.Count:N0} {spec.RowNoun}"
+                : $"{rows.Count:N0} {spec.RowNoun}")));
 
         if (rows.Count == 0)
         {
@@ -107,6 +110,10 @@ public sealed class ReportPage : FleetPage
         var distributions = BuildDistributions(spec, rows);
         if (distributions is not null) page.Children.Add(distributions);
         page.Children.Add(BuildTable(spec, rows));
+        if (capped)
+            page.Children.Add(Ui.Caption(
+                $"Showing the first {rows.Count:N0} {spec.RowNoun}; the fleet holds more. "
+                + "The figures above describe this page, not the whole fleet."));
         return page;
     }
 
@@ -159,12 +166,16 @@ public sealed class ReportPage : FleetPage
             .Select(c => Col.Text(c.Header, $"[{c.Header}]", c.Width, star: c.Star, mono: c.Mono))
             .ToArray();
 
-        var table = new FilteredTable<ReportRow>(spec.Module switch
+        var title = spec.Module switch
         {
             "hardware" => "Hardware Specifications",
+            "applications" => "Applications",
+            "installs" => "Managed Items",
             _ => "Devices",
-        }, "{0} of {1} devices", data, (r, q) => r.Matches(q), columns,
-            "Search devices...", "No devices match the current filters")
+        };
+        var table = new FilteredTable<ReportRow>(title, "{0} of {1} " + spec.RowNoun,
+            data, (r, q) => r.Matches(q), columns,
+            $"Search {spec.RowNoun}...", $"No {spec.RowNoun} match the current filters")
             .Build();
         table.Margin = new Thickness(0, 6, 0, 0);
         return table;
