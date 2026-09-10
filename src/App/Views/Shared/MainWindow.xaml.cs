@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using ReportMate.App.Views.Device;
+using ReportMate.App.Services;
 using ReportMate.App.Views.Fleet;
 
 namespace ReportMate.App.Views.Shared;
@@ -28,6 +29,7 @@ public partial class MainWindow : Window
         else AppIcon.Visibility = Visibility.Collapsed;
 
         ReportsPage.ReportChosen += id => NavigateTo("report:" + id);
+        ProtocolHandler.LinkReceived += OpenDeepLink;
         SizeChanged += (_, _) => BuildTabs();
         BuildTabs();
         Navigate("dashboard");
@@ -115,6 +117,54 @@ public partial class MainWindow : Window
         if (tag == "Settings") { TabSettings.IsChecked = true; return; }
         Navigate(tag);
         SyncChecked();
+    }
+
+    /// <summary>
+    /// Open the view a reportmate:// link names. The link's own query is handed to the
+    /// page so a copied link reopens the exact filters it was copied from.
+    /// </summary>
+    public void OpenDeepLink(DeepLink link)
+    {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+
+        switch (link.Section)
+        {
+            case "settings":
+                NavigateTo("Settings");
+                return;
+
+            case "device" or "this-device":
+                // A serial addresses a fleet device; without one the link means this
+                // machine, which the device page already renders from the local cache.
+                var page = (DevicePage)GetOrCreatePage("device");
+                page.ApplyDeepLink(link);
+                NavigateTo("device");
+                return;
+
+            case "dashboard" or "devices" or "events":
+                PendingLink = link;
+                NavigateTo(link.Section);
+                return;
+
+            default:
+                // Every remaining section is a report, and they share their names with
+                // the web routes, so the section is the report id.
+                PendingLink = link;
+                NavigateTo("report:" + link.Section);
+                return;
+        }
+    }
+
+    /// <summary>The link a page about to be shown should apply, if any.</summary>
+    public static DeepLink? PendingLink { get; private set; }
+
+    /// <summary>Taken by the page that consumes it, so it applies once and not again.</summary>
+    public static DeepLink? TakePendingLink()
+    {
+        var link = PendingLink;
+        PendingLink = null;
+        return link;
     }
 
     /// <summary>The cached per-device page, if it has been created yet.</summary>

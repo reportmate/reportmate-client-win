@@ -73,6 +73,25 @@ public partial class DevicePage : Page
         _active = _tabs[0];
     }
 
+    /// <summary>
+    /// Open the tab a reportmate:// link names. The web device page carries its tab as
+    /// the URL fragment and the app form uses ?tab=, and DeepLink normalises both, so a
+    /// link copied from either place lands on the same tab here.
+    /// </summary>
+    public void ApplyDeepLink(DeepLink link)
+    {
+        var wanted = link.DeviceTab;
+        if (string.IsNullOrWhiteSpace(wanted)) return;
+
+        var index = _tabs.FindIndex(t => string.Equals(t.Label, wanted, StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index >= TabStrip.Children.Count) return;
+        if (TabStrip.Children[index] is RadioButton rb) rb.IsChecked = true;
+    }
+
+    /// <summary>A link to this device, carrying the tab currently being shown.</summary>
+    public DeepLink CurrentLink() =>
+        DeepLink.For("device", _vm.SerialNumber, ("tab", _active?.Label?.ToLowerInvariant()));
+
     private void ShowTab(DeviceTab tab)
     {
         _active = tab;
@@ -178,6 +197,17 @@ public partial class DevicePage : Page
     private void OnCopyAssetTag(object sender, RoutedEventArgs e) => ClipboardHelper.Copy(_vm.AssetTag);
     private void OnCopyIp(object sender, RoutedEventArgs e) => ClipboardHelper.Copy(_vm.IpAddress);
 
+    // Three link forms, as on the Mac: the handoff link is the one to share, because a
+    // bare reportmate:// link simply fails on a machine with no handler.
+    private void OnCopyHandoffLink(object sender, RoutedEventArgs e) =>
+        ClipboardHelper.Copy(CurrentLink().ToHandoffUrl(ConfigManager.Instance.WebDashboardUrl));
+
+    private void OnCopyWebLink(object sender, RoutedEventArgs e) =>
+        ClipboardHelper.Copy(CurrentLink().ToWebUrl(ConfigManager.Instance.WebDashboardUrl));
+
+    private void OnCopyAppLink(object sender, RoutedEventArgs e) =>
+        ClipboardHelper.Copy(CurrentLink().ToAppUrl());
+
     private void OnOpenCache(object sender, RoutedEventArgs e)
     {
         var dir = _vm.Snapshot.NewestRunDirectory ?? DeviceSnapshotStore.Instance.CacheRoot;
@@ -187,12 +217,9 @@ public partial class DevicePage : Page
 
     private void OnOpenWeb(object sender, RoutedEventArgs e)
     {
-        // The web app resolves a device by serial number; derive its origin from the API URL.
-        var api = ConfigManager.Instance.Config.ApiUrl;
-        if (string.IsNullOrWhiteSpace(api) || string.IsNullOrWhiteSpace(_vm.SerialNumber)) return;
-        if (!Uri.TryCreate(api, UriKind.Absolute, out var uri)) return;
-        var host = uri.Host.StartsWith("api.", StringComparison.OrdinalIgnoreCase) ? uri.Host[4..] : uri.Host;
-        var url = $"{uri.Scheme}://{host}/device/{Uri.EscapeDataString(_vm.SerialNumber)}";
+        var web = ConfigManager.Instance.WebDashboardUrl;
+        if (string.IsNullOrWhiteSpace(web) || string.IsNullOrWhiteSpace(_vm.SerialNumber)) return;
+        var url = CurrentLink().ToWebUrl(web);
         try { Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true }); } catch { }
     }
 

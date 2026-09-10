@@ -19,6 +19,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      DeepLink is part of the WPF app, which a test project cannot reference without
+      pulling in WPF. The type itself has no UI dependency, so it is compiled in
+      directly and the link parsing is covered here rather than not at all.
+    -->
+    <Compile Include="..\..\src\App\Services\DeepLink.cs" Link="DeepLink.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="Fixtures\**\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

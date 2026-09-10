@@ -10,6 +10,25 @@ namespace ReportMate.App.Services;
 /// </summary>
 public sealed class ConfigManager
 {
+    /// <summary>
+    /// The web dashboard's base URL: the configured WebUrl when set, otherwise derived
+    /// from the API host by dropping an api. prefix. Derivation keeps links working on a
+    /// device nobody has configured, without hardcoding a deployment anywhere.
+    /// </summary>
+    public string WebDashboardUrl
+    {
+        get
+        {
+            var configured = Config.WebUrl;
+            if (!string.IsNullOrWhiteSpace(configured)) return configured.TrimEnd('/');
+
+            var api = Config.ApiUrl;
+            if (string.IsNullOrWhiteSpace(api) || !Uri.TryCreate(api, UriKind.Absolute, out var uri)) return "";
+            var host = uri.Host.StartsWith("api.", StringComparison.OrdinalIgnoreCase) ? uri.Host[4..] : uri.Host;
+            return $"{uri.Scheme}://{host}";
+        }
+    }
+
     public static ConfigManager Instance { get; } = new();
 
     public ReportMateConfig Config { get; private set; } = new();
@@ -46,6 +65,8 @@ public sealed class ConfigManager
                 key.SetValue("Passphrase", config.Passphrase);
             if (!string.IsNullOrWhiteSpace(config.ReadApiKey))
                 key.SetValue("ReadApiKey", config.ReadApiKey);
+            if (!string.IsNullOrWhiteSpace(config.WebUrl))
+                key.SetValue("WebUrl", config.WebUrl);
             if (!string.IsNullOrWhiteSpace(config.DeviceId))
                 key.SetValue("DeviceId", config.DeviceId);
 
@@ -80,6 +101,7 @@ public sealed class ConfigManager
             config.ApiKey = ReadString(key, "ApiKey") ?? config.ApiKey;
             config.Passphrase = ReadString(key, "Passphrase") ?? config.Passphrase;
             config.ReadApiKey = ReadString(key, "ReadApiKey") ?? config.ReadApiKey;
+            config.WebUrl = ReadString(key, "WebUrl") ?? config.WebUrl;
             config.DeviceId = ReadString(key, "DeviceId") ?? config.DeviceId;
 
             config.CollectionIntervalSeconds = ReadInt(key, "CollectionIntervalSeconds") ?? ReadInt(key, "CollectionInterval") ?? config.CollectionIntervalSeconds;

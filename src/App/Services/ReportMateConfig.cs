@@ -16,6 +16,13 @@ public sealed class ReportMateConfig
     /// endpoint's ingest credential and is rejected by the read endpoints.
     /// </summary>
     public string? ReadApiKey { get; set; }
+
+    /// <summary>
+    /// The web dashboard's base URL. The only thing a shareable link needs that the app
+    /// cannot work out for itself, so it is configured rather than hardcoded per
+    /// deployment. Falls back to the API host with its api. prefix dropped.
+    /// </summary>
+    public string? WebUrl { get; set; }
     public string? DeviceId { get; set; }
 
     // Collection

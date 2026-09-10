@@ -38,6 +38,11 @@
                                     <MenuItem Header="Copy asset tag" Click="OnCopyAssetTag" />
                                     <MenuItem Header="Copy IP address" Click="OnCopyIp" />
                                     <Separator />
+                                    <MenuItem Header="Copy link" Click="OnCopyHandoffLink"
+                                              ToolTip="Opens the app where it is installed, and the web dashboard where it is not" />
+                                    <MenuItem Header="Copy web link" Click="OnCopyWebLink" />
+                                    <MenuItem Header="Copy app link" Click="OnCopyAppLink" />
+                                    <Separator />
                                     <MenuItem Header="Open cache folder" Click="OnOpenCache" />
                                     <MenuItem Header="Open in ReportMate web" Click="OnOpenWeb" />
                                 </ui:MenuFlyout>
