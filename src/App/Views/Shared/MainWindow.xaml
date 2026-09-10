@@ -1,0 +1,76 @@
+<Window x:Class="ReportMate.App.Views.Shared.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.modernwpf.com/2019"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        ui:WindowHelper.UseModernWindowStyle="True"
+        ui:TitleBar.ExtendViewIntoTitleBar="True"
+        Title="Managed Reports Runner"
+        Height="960" Width="1440" MinHeight="640" MinWidth="900"
+        WindowStartupLocation="CenterScreen">
+
+    <Grid Background="{DynamicResource AppBackgroundBrush}"
+          TextElement.Foreground="{DynamicResource TextPrimaryBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Chrome: centred segmented navigation, settings gear on the right. -->
+        <Border Grid.Row="0" Background="{DynamicResource HeaderBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}" BorderThickness="0,0,0,1" Padding="12,7">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Image x:Name="AppIcon" Width="20" Height="20" Margin="4,0,8,0" />
+                    <TextBlock Text="ReportMate" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <Border Grid.Column="1" CornerRadius="9"
+                        shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                        BorderBrush="{DynamicResource CardBorderBrush}"
+                        BorderThickness="1" Padding="2">
+                    <StackPanel Orientation="Horizontal" x:Name="TabBar">
+                        <RadioButton x:Name="TabDevice" Tag="Device" GroupName="MainTabs" IsChecked="True"
+                                     Checked="OnTabChecked" Style="{StaticResource NavigationTabStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:FontIcon Glyph="&#xE7F8;" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <TextBlock Text="Device" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="TabRun" Tag="Run" GroupName="MainTabs"
+                                     Checked="OnTabChecked" Style="{StaticResource NavigationTabStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:FontIcon Glyph="&#xE768;" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <TextBlock Text="Run" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="TabLogs" Tag="Logs" GroupName="MainTabs"
+                                     Checked="OnTabChecked" Style="{StaticResource NavigationTabStyle}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:FontIcon Glyph="&#xE9D5;" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <TextBlock Text="Logs" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,140,0">
+                    <RadioButton x:Name="TabSettings" ToolTip="Settings"
+                                 shell:WindowChrome.IsHitTestVisibleInChrome="True"
+                                 Tag="Settings" GroupName="MainTabs" Checked="OnTabChecked"
+                                 Style="{StaticResource NavigationTabStyle}">
+                        <ui:FontIcon Glyph="&#xE713;" FontSize="14" />
+                    </RadioButton>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Frame x:Name="ContentFrame" Grid.Row="1" NavigationUIVisibility="Hidden" />
+    </Grid>
+</Window>

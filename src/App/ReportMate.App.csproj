@@ -2,48 +2,60 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
-    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
-    <UseWinUI>true</UseWinUI>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <RootNamespace>ReportMate.App</RootNamespace>
     <AssemblyName>Managed Reports Runner</AssemblyName>
+    <AssemblyTitle>Managed Reports Runner</AssemblyTitle>
     <Product>Managed Reports Runner</Product>
-    <Description>Managed Reports Runner</Description>
+    <Description>ReportMate device report, collection runner and settings for this Windows endpoint</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <PublishSingleFile>false</PublishSingleFile>
-    <SelfContained>true</SelfContained>
-    <WindowsPackageType>None</WindowsPackageType>
-    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
-    <EnableCoreMrtTooling>false</EnableCoreMrtTooling>
-    <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
+    <ApplicationIcon Condition="Exists('Assets\ReportMate.ico')">Assets\ReportMate.ico</ApplicationIcon>
+    <StartupObject>ReportMate.App.Program</StartupObject>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <PublishTrimmed>false</PublishTrimmed>
+    <NoWarn>$(NoWarn);MVVMTK0045;NU1900;CS0618</NoWarn>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</VersionPrefix>
+    <AssemblyVersion>$(VersionPrefix)</AssemblyVersion>
+    <FileVersion>$(VersionPrefix)</FileVersion>
+    <InformationalVersion>$(VersionPrefix)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
-  <!-- Build timestamp for version display -->
-  <PropertyGroup>
-    <BuildTimestamp>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</BuildTimestamp>
+  <!-- Self-contained single-file output only when a runtime is chosen (publish -r win-x64
+       or win-arm64); a plain build stays framework-dependent so it compiles on any host. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+
   <ItemGroup>
     <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
       <_Parameter1>BuildTimestamp</_Parameter1>
-      <_Parameter2>$(BuildTimestamp)</_Parameter2>
+      <_Parameter2>$(VersionPrefix)</_Parameter2>
     </AssemblyAttribute>
   </ItemGroup>
 
+  <!-- The payload models are the client's own: the GUI reads the JSON the runner
+       writes to the cache, so it deserialises with the very classes that wrote it. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250401001" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <Compile Include="..\Models\Modules\*.cs" Link="Models\%(Filename)%(Extension)" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('Assets\ReportMate.png')">
-    <Content Include="Assets\ReportMate.png" CopyToOutputDirectory="PreserveNewest" />
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="ModernWpfUI" Version="0.9.6" />
   </ItemGroup>
+
   <ItemGroup Condition="Exists('Assets\ReportMate.ico')">
-    <Content Include="Assets\ReportMate.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="Assets\ReportMate.ico" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('Assets\ReportMate.png')">
+    <Resource Include="Assets\ReportMate.png" />
   </ItemGroup>
 
 </Project>
