@@ -38,6 +38,14 @@ public sealed class DeviceSnapshot
 
     public bool HasModule(string moduleId) => ModuleCollectedAt.ContainsKey(moduleId);
 
+    /// <summary>Modules whose JSON was on disk but unreadable, keyed by module id.</summary>
+    public IReadOnlyDictionary<string, string> ModuleErrors { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The parse error for a module, or null when it simply was not collected.</summary>
+    public string? ModuleError(string moduleId) =>
+        ModuleErrors.TryGetValue(moduleId, out var e) ? e : null;
+
     // ── Identity helpers used by the header and every tab ────────────
 
     public string SerialNumber =>

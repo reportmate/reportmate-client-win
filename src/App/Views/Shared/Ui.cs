@@ -272,28 +272,75 @@ public static partial class Ui
     public static Grid StatusBadge(string label, string? status, Tone tone)
         => Row(label, Pill(OrUnknown(status), tone));
 
+    /// <summary>
+    /// A status badge: capsule, a 15% wash of the tone colour behind tone-coloured
+    /// text, and no border. The solid tone fills this replaced turned every badge into
+    /// a block of saturated colour, so a table of healthy rows read like a wall of
+    /// alerts. Same recipe as the web and the Mac client, so the three agree.
+    /// </summary>
     public static Border Pill(string? text, Tone tone = Tone.Neutral, double fontSize = 12)
     {
-        var (bg, fg) = tone switch
-        {
-            Tone.Success => ("PillGreenBackground", "PillGreenForeground"),
-            Tone.Warning => ("PillYellowBackground", "PillYellowForeground"),
-            Tone.Error => ("PillRedBackground", "PillRedForeground"),
-            Tone.Info => ("PillBlueBackground", "PillBlueForeground"),
-            Tone.Purple => ("PillPurpleBackground", "PillPurpleForeground"),
-            Tone.Orange => ("PillOrangeBackground", "PillOrangeForeground"),
-            _ => ("PillGrayBackground", "PillGrayForeground"),
-        };
+        var accent = StatusBrush(tone);
         var tb = new TextBlock
         {
             Text = text ?? "", FontSize = fontSize, FontWeight = FontWeights.Medium,
-            Foreground = Brush(fg), VerticalAlignment = VerticalAlignment.Center,
+            Foreground = accent, VerticalAlignment = VerticalAlignment.Center,
         };
         return new Border
         {
             Style = (Style)Res("PillStyle"),
-            Background = Brush(bg),
+            Background = Tint(tone, 0.15),
             Child = tb,
+        };
+    }
+
+    /// <summary>The tone colour at a fraction of its opacity, for badge and chip fills.</summary>
+    public static Brush Tint(Tone tone, double opacity)
+    {
+        if (StatusBrush(tone) is not SolidColorBrush solid) return Brushes.Transparent;
+        var c = solid.Color;
+        var brush = new SolidColorBrush(Color.FromArgb((byte)Math.Round(255 * opacity), c.R, c.G, c.B));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>
+    /// A filter chip. Unlike a status pill, a chip is a control: it reads as neutral
+    /// until it is switched on, and carries a small tone dot so the colour is legible
+    /// without flooding the whole chip. Filling every chip with its status colour made
+    /// the row read as a set of warnings rather than a set of filters.
+    /// </summary>
+    public static Border FilterChip(string label, int count, Tone tone, bool active)
+    {
+        var text = new TextBlock
+        {
+            Text = label, FontSize = 12, FontWeight = FontWeights.Medium,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = active ? StatusBrush(tone) : Brush("TextSecondaryBrush"),
+        };
+        var num = new TextBlock
+        {
+            Text = count.ToString(), FontSize = 12, FontWeight = FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0),
+            Foreground = active ? StatusBrush(tone) : Brush("TextTertiaryBrush"),
+        };
+        var content = new StackPanel { Orientation = Orientation.Horizontal };
+        content.Children.Add(text);
+        content.Children.Add(num);
+
+        return new Border
+        {
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 5, 10, 5),
+            Margin = new Thickness(0, 0, 6, 0),
+            // Off is a plain outlined chip; on gets the tone wash. A chip that is
+            // always filled reads as a status, not as a control you can toggle.
+            Background = active ? Tint(tone, 0.15) : Brushes.Transparent,
+            BorderThickness = new Thickness(1),
+            BorderBrush = active ? Tint(tone, 0.45) : Brush("CardBorderBrush"),
+            Cursor = Cursors.Hand,
+            Child = content,
+            VerticalAlignment = VerticalAlignment.Center,
         };
     }
 

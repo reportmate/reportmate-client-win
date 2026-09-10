@@ -31,7 +31,7 @@ public sealed class ManagementTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("management") || s.Management is null) return ModuleMissing("management");
+        if (!s.HasModule("management") || s.Management is null) return ModuleMissing("management", s);
         var m = s.Management;
         var page = new StackPanel();
         void Add(UIElement e, double top = 24) { if (e is FrameworkElement fe && page.Children.Count > 0) fe.Margin = new Thickness(0, top, 0, 0); page.Children.Add(e); }

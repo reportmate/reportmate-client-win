@@ -28,7 +28,19 @@ public sealed class DeviceSnapshotStore
         NumberHandling = JsonNumberHandling.AllowReadingFromString,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
+        // The client writes enums as their names ("ProgramFiles" for a storage
+        // DirectoryCategory). Without this converter that single string throws,
+        // ReadFile swallows the JsonException, and the whole module reads as
+        // "not collected" -- which is how the Hardware tab lost its deep-scan.
+        Converters = { new JsonStringEnumConverter() },
     };
+
+    /// <summary>
+    /// Modules whose newest JSON was found but could not be parsed, with the reason.
+    /// A parse failure is a bug, not an uncollected module, and the tab says so.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ModuleErrors => _moduleErrors;
+    private readonly Dictionary<string, string> _moduleErrors = new(StringComparer.OrdinalIgnoreCase);
 
     public string CacheRoot { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -38,6 +50,7 @@ public sealed class DeviceSnapshotStore
 
     public DeviceSnapshot Load()
     {
+        _moduleErrors.Clear();
         var runs = ListRuns();
         if (runs.Count == 0) return new DeviceSnapshot();
 
@@ -98,6 +111,7 @@ public sealed class DeviceSnapshotStore
             Peripherals = peripherals,
             Applications = applications,
             ModuleCollectedAt = collectedAt,
+            ModuleErrors = new Dictionary<string, string>(_moduleErrors, StringComparer.OrdinalIgnoreCase),
             NewestRunDirectory = runs[0],
         };
     }
@@ -113,13 +127,25 @@ public sealed class DeviceSnapshotStore
             .ToList();
     }
 
-    private static T? Read<T>(string run, string moduleId, Dictionary<string, DateTime> collectedAt) where T : class
+    private T? Read<T>(string run, string moduleId, Dictionary<string, DateTime> collectedAt) where T : class
     {
         var path = Path.Combine(run, moduleId + ".json");
-        var data = ReadFile<T>(path);
-        if (data is not null && !collectedAt.ContainsKey(moduleId))
-            collectedAt[moduleId] = File.GetLastWriteTime(path);
-        return data;
+        if (!File.Exists(path)) return null;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var data = JsonSerializer.Deserialize<T>(stream, JsonOptions);
+            if (data is not null && !collectedAt.ContainsKey(moduleId))
+                collectedAt[moduleId] = File.GetLastWriteTime(path);
+            return data;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            // Record the first failure per module so the tab can say the data is
+            // unreadable rather than silently claiming it was never collected.
+            if (!_moduleErrors.ContainsKey(moduleId)) _moduleErrors[moduleId] = ex.Message;
+            return null;
+        }
     }
 
     private static T? ReadFile<T>(string path) where T : class

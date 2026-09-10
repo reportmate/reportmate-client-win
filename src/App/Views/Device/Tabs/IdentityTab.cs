@@ -32,7 +32,7 @@ public sealed class IdentityTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("identity") || s.Identity is null) return ModuleMissing("identity");
+        if (!s.HasModule("identity") || s.Identity is null) return ModuleMissing("identity", s);
         var id = s.Identity;
         var page = new StackPanel();
         void Add(UIElement e, double top = 24) { if (e is FrameworkElement fe && page.Children.Count > 0) fe.Margin = new Thickness(0, top, 0, 0); page.Children.Add(e); }

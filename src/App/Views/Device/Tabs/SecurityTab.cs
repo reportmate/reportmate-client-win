@@ -35,7 +35,7 @@ public sealed class SecurityTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("security") || s.Security is null) return ModuleMissing("security");
+        if (!s.HasModule("security") || s.Security is null) return ModuleMissing("security", s);
         var sec = s.Security;
         var page = new StackPanel();
         void Add(UIElement e, double top = 24) { if (e is FrameworkElement fe && page.Children.Count > 0) fe.Margin = new Thickness(0, top, 0, 0); page.Children.Add(e); }

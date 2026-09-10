@@ -35,6 +35,15 @@ public partial class DevicePage : Page
         Loaded += async (_, _) =>
         {
             if (_vm.Snapshot.IsEmpty && !_vm.IsLoading) await ReloadAsync();
+            if (_watcher is null && _poll is null) StartAutoRefresh();
+        };
+        Unloaded += (_, _) =>
+        {
+            _watcher?.Dispose();
+            _watcher = null;
+            _poll?.Stop();
+            _poll = null;
+            _debounce?.Stop();
         };
     }
 
@@ -112,12 +121,58 @@ public partial class DevicePage : Page
             Add(Ui.Pill(status, status == "Missing" ? Tone.Error : Tone.Warning));
     }
 
-    private async void OnRefreshClicked(object sender, RoutedEventArgs e) => await ReloadAsync();
-
-    private void OnRunClicked(object sender, RoutedEventArgs e)
+    // The endpoint collects on its own schedule and there is no operator action to
+    // take here, so the page follows the cache instead of offering a Refresh button:
+    // a watcher picks up a finished run within a second, and a slow timer covers the
+    // cases a watcher misses (a run directory created while the app was suspended).
+    private void StartAutoRefresh()
     {
-        if (Window.GetWindow(this) is MainWindow main) main.NavigateTo("Run");
+        var root = DeviceSnapshotStore.Instance.CacheRoot;
+        if (System.IO.Directory.Exists(root))
+        {
+            _watcher = new System.IO.FileSystemWatcher(root)
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = System.IO.NotifyFilters.FileName | System.IO.NotifyFilters.LastWrite,
+                Filter = "*.json",
+            };
+            System.IO.FileSystemEventHandler onChange = (_, _) => ScheduleReload();
+            _watcher.Created += onChange;
+            _watcher.Changed += onChange;
+            _watcher.Renamed += (_, _) => ScheduleReload();
+            _watcher.EnableRaisingEvents = true;
+        }
+
+        _poll = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMinutes(2) };
+        _poll.Tick += async (_, _) => await ReloadAsync();
+        _poll.Start();
     }
+
+    /// <summary>
+    /// A run writes many files in a burst, so coalesce the watcher's events into a
+    /// single reload once writing has been quiet briefly.
+    /// </summary>
+    private void ScheduleReload()
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _debounce ??= new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _debounce.Stop();
+            _debounce.Tick -= OnDebounceTick;
+            _debounce.Tick += OnDebounceTick;
+            _debounce.Start();
+        });
+    }
+
+    private async void OnDebounceTick(object? sender, EventArgs e)
+    {
+        _debounce?.Stop();
+        await ReloadAsync();
+    }
+
+    private System.IO.FileSystemWatcher? _watcher;
+    private System.Windows.Threading.DispatcherTimer? _poll;
+    private System.Windows.Threading.DispatcherTimer? _debounce;
 
     private void OnCopySerial(object sender, RoutedEventArgs e) => ClipboardHelper.Copy(_vm.SerialNumber);
     private void OnCopyAssetTag(object sender, RoutedEventArgs e) => ClipboardHelper.Copy(_vm.AssetTag);

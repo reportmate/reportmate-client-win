@@ -36,7 +36,16 @@ public abstract class DeviceTab : ContentControl
 
     protected abstract UIElement Build(DeviceSnapshot snapshot);
 
-    /// <summary>Body shown when the module has never been collected on this device.</summary>
-    protected UIElement ModuleMissing(string moduleId) =>
-        Ui.Card(Ui.EmptyState($"The {moduleId} module has not been collected yet. Run a collection to populate this tab."));
+    /// <summary>
+    /// Body shown when a module has no data. A module whose JSON was on disk but
+    /// unreadable is a different problem from one the endpoint has not collected,
+    /// and saying "not collected" for a parse failure hides a real bug.
+    /// </summary>
+    protected UIElement ModuleMissing(string moduleId, DeviceSnapshot? snapshot = null)
+    {
+        var error = snapshot?.ModuleError(moduleId);
+        return Ui.Card(Ui.EmptyState(error is null
+            ? $"No {moduleId} data has been reported for this device yet."
+            : $"The {moduleId} data on this device could not be read: {error}"));
+    }
 }

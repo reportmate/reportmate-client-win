@@ -16,7 +16,7 @@ public sealed class NetworkTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("network") || s.Network is null) return ModuleMissing("network");
+        if (!s.HasModule("network") || s.Network is null) return ModuleMissing("network", s);
         var net = NetworkExtractor.Extract(s);
         var active = net.Interfaces.Where(i => i.IsActive).OrderBy(i => i.IsEthernet ? 0 : 1).ToList();
         var inactive = net.Interfaces.Where(i => !i.IsActive).ToList();

@@ -35,29 +35,7 @@
                         shell:WindowChrome.IsHitTestVisibleInChrome="True"
                         BorderBrush="{DynamicResource CardBorderBrush}"
                         BorderThickness="1" Padding="2">
-                    <StackPanel Orientation="Horizontal" x:Name="TabBar">
-                        <RadioButton x:Name="TabDevice" Tag="Device" GroupName="MainTabs" IsChecked="True"
-                                     Checked="OnTabChecked" Style="{StaticResource NavigationTabStyle}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:FontIcon Glyph="&#xE7F8;" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" />
-                                <TextBlock Text="Device" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </RadioButton>
-                        <RadioButton x:Name="TabRun" Tag="Run" GroupName="MainTabs"
-                                     Checked="OnTabChecked" Style="{StaticResource NavigationTabStyle}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:FontIcon Glyph="&#xE768;" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" />
-                                <TextBlock Text="Run" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </RadioButton>
-                        <RadioButton x:Name="TabLogs" Tag="Logs" GroupName="MainTabs"
-                                     Checked="OnTabChecked" Style="{StaticResource NavigationTabStyle}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:FontIcon Glyph="&#xE9D5;" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Center" />
-                                <TextBlock Text="Logs" VerticalAlignment="Center" />
-                            </StackPanel>
-                        </RadioButton>
-                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" x:Name="TabBar" />
                 </Border>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,140,0">

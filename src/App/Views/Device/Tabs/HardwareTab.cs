@@ -22,7 +22,7 @@ public sealed class HardwareTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("hardware") || s.Hardware is null) return ModuleMissing("hardware");
+        if (!s.HasModule("hardware") || s.Hardware is null) return ModuleMissing("hardware", s);
         var hw = s.Hardware;
         var page = new StackPanel();
         void Add(UIElement e, double top = 24) { if (e is FrameworkElement fe && page.Children.Count > 0) fe.Margin = new Thickness(0, top, 0, 0); page.Children.Add(e); }

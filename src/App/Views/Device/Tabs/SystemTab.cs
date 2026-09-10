@@ -26,7 +26,7 @@ public sealed class SystemTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("system") || s.System is null) return ModuleMissing("system");
+        if (!s.HasModule("system") || s.System is null) return ModuleMissing("system", s);
         var sys = s.System;
         var os = sys.OperatingSystem;
         var page = new StackPanel();

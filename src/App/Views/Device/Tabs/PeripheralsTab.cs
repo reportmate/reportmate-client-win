@@ -27,7 +27,7 @@ public sealed class PeripheralsTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("peripherals") || s.Peripherals is null) return ModuleMissing("peripherals");
+        if (!s.HasModule("peripherals") || s.Peripherals is null) return ModuleMissing("peripherals", s);
         var p = s.Peripherals;
         var page = new StackPanel();
         page.Children.Add(Ui.TabHeader("Peripherals", "Connected devices by category", Glyph, Accent));

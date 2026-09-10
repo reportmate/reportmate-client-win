@@ -54,7 +54,7 @@ public sealed class InstallsTab : DeviceTab
 
     protected override UIElement Build(DeviceSnapshot s)
     {
-        if (!s.HasModule("installs") || s.Installs is null) return ModuleMissing("installs");
+        if (!s.HasModule("installs") || s.Installs is null) return ModuleMissing("installs", s);
         var installs = s.Installs;
         var cimian = installs.Cimian;
         var page = new StackPanel();
@@ -171,10 +171,7 @@ public sealed class InstallsTab : DeviceTab
         void FilterPill(string key, string label, int n, Tone tone)
         {
             var active = _statusFilter.Contains(key);
-            var pill = Ui.Pill($"{label} - {n}", tone);
-            pill.Cursor = Cursors.Hand; pill.Margin = new Thickness(0, 0, 6, 0); pill.Padding = new Thickness(11, 4, 11, 4);
-            pill.BorderThickness = new Thickness(2);
-            pill.BorderBrush = active ? Ui.StatusBrush(tone) : System.Windows.Media.Brushes.Transparent;
+            var pill = Ui.FilterChip(label, n, tone, active);
             pill.MouseLeftButtonUp += (_, _) =>
             {
                 if (!_statusFilter.Remove(key))
