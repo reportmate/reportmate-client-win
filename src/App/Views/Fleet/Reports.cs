@@ -43,7 +43,12 @@ public sealed class ReportsPage : FleetPage
         page.Children.Add(Ui.TabHeader("Reports", "Fleet-wide views of every module", "", Accent.Blue));
 
         var grid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 20, 0, 0) };
-        foreach (var area in ReportArea.All)
+        // The applications drill-downs are pages of their own on the web, so they get
+        // their own cards here rather than being reachable only by a link.
+        var areas = ReportArea.All.Append(
+            new ReportArea("applications/coverage", "Usage Coverage",
+                "Which devices report application usage", Accent.Emerald));
+        foreach (var area in areas)
         {
             var body = new StackPanel();
             body.Children.Add(Ui.Text(area.Title, "TitleTextStyle"));

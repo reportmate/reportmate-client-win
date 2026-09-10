@@ -64,6 +64,13 @@ public sealed class FleetApiClient
     public Task<FleetResult<List<JsonElement>>> GetModuleAsync(string module, int? limit = null, CancellationToken ct = default) =>
         GetAsync<List<JsonElement>>(limit is null ? $"/api/v1/{module}" : $"/api/v1/{module}?limit={limit}", ct);
 
+    /// <summary>
+    /// A response read as raw JSON, for the drill-downs whose envelope is specific to
+    /// one page and not worth a model that would have to change with it.
+    /// </summary>
+    public Task<FleetResult<JsonDocument>> GetRawAsync(string path, CancellationToken ct = default) =>
+        GetAsync<JsonDocument>(path, ct);
+
     private static string? FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 

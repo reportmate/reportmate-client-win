@@ -28,7 +28,8 @@ public partial class MainWindow : Window
         if (File.Exists(icon)) AppIcon.Source = new BitmapImage(new Uri(icon));
         else AppIcon.Visibility = Visibility.Collapsed;
 
-        ReportsPage.ReportChosen += id => NavigateTo("report:" + id);
+        ReportsPage.ReportChosen += id =>
+            NavigateTo(id == "applications/coverage" ? "coverage" : "report:" + id);
         ProtocolHandler.LinkReceived += OpenDeepLink;
         SizeChanged += (_, _) => BuildTabs();
         BuildTabs();
@@ -142,6 +143,25 @@ public partial class MainWindow : Window
                 NavigateTo("device");
                 return;
 
+            case "applications" when link.Argument is { } argument:
+                // applications/coverage and applications/usage/<app> are pages of their
+                // own on the web, so a link to one opens that page rather than the
+                // applications report with a filter applied.
+                if (argument.Equals("coverage", StringComparison.OrdinalIgnoreCase))
+                {
+                    NavigateTo("coverage");
+                    return;
+                }
+                if (argument.StartsWith("usage/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var days = int.TryParse(link["days"], out var d) ? d : 30;
+                    NavigateTo($"usage:{days}:{argument["usage/".Length..]}");
+                    return;
+                }
+                PendingLink = link;
+                NavigateTo("report:applications");
+                return;
+
             case "dashboard" or "devices" or "events":
                 PendingLink = link;
                 NavigateTo(link.Section);
@@ -177,7 +197,17 @@ public partial class MainWindow : Window
         if (_pages.TryGetValue(tag, out var cached)) return cached;
 
         Page page;
-        if (tag.StartsWith("report:", StringComparison.Ordinal))
+        if (tag.StartsWith("usage:", StringComparison.Ordinal))
+        {
+            // usage:<days>:<app> -- the app name can contain a colon, so only the two
+            // leading fields are split off.
+            var rest = tag["usage:".Length..];
+            var split = rest.IndexOf(':');
+            var days = split > 0 && int.TryParse(rest[..split], out var d) ? d : 30;
+            page = new AppUsagePage(split > 0 ? rest[(split + 1)..] : rest, days);
+        }
+        else if (tag == "coverage") page = new CoveragePage();
+        else if (tag.StartsWith("report:", StringComparison.Ordinal))
         {
             var area = ReportArea.ById(tag["report:".Length..]);
             page = area is null ? new ReportsPage() : new ReportPage(area);
