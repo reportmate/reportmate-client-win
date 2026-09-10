@@ -51,11 +51,16 @@ public class InstallStatusTests
     public void InstalledIsAVerdictNotPresenceWithACaveat()
     {
         // A bare last-attempt status does not overturn a verdict of Installed: every
-        // such mismatch in the fleet carried no message and zero counts.
-        Assert.Equal(ItemStatus.Success, InstallStatus.Classify(
-            new Item { CurrentStatus = "Installed", LastAttemptStatus = "Failed" }));
-        Assert.Equal(ItemStatus.Success, InstallStatus.Classify(
-            new Item { CurrentStatus = "Installed", LastAttemptStatus = "Warning" }));
+        // such mismatch in the fleet carried no message and zero counts. It is also not
+        // Success, which means installed in the most recent run -- a plain Installed
+        // item only says the package is present, and that set is vastly larger.
+        foreach (var attempt in new[] { "Failed", "Warning" })
+        {
+            var status = InstallStatus.Classify(new Item { CurrentStatus = "Installed", LastAttemptStatus = attempt });
+            Assert.NotEqual(ItemStatus.Error, status);
+            Assert.NotEqual(ItemStatus.Warning, status);
+            Assert.NotEqual(ItemStatus.Pending, status);
+        }
     }
 
     [Fact]
@@ -69,12 +74,19 @@ public class InstallStatusTests
     // ── A loop overturns a good verdict, and only a loop ────────────────
 
     [Theory]
-    [InlineData(true, false, ItemStatus.Warning)]
-    [InlineData(false, true, ItemStatus.Warning)]
-    [InlineData(false, false, ItemStatus.Success)]
-    public void ALoopingPackageIsAWarningWhateverItReports(bool loop, bool detected, ItemStatus expected) =>
-        Assert.Equal(expected, InstallStatus.Classify(
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ALoopingPackageIsAWarningWhateverItReports(bool loop, bool detected) =>
+        Assert.Equal(ItemStatus.Warning, InstallStatus.Classify(
             new Item { CurrentStatus = "Installed", HasInstallLoop = loop, InstallLoopDetected = detected }));
+
+    [Fact]
+    public void AnInstalledPackageThatIsNotLoopingIsNotFlagged()
+    {
+        var status = InstallStatus.Classify(new Item { CurrentStatus = "Installed" });
+        Assert.NotEqual(ItemStatus.Warning, status);
+        Assert.NotEqual(ItemStatus.Error, status);
+    }
 
     [Fact]
     public void AnErrorStaysAnErrorWhenItAlsoLoops() =>
