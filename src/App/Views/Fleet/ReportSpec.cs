@@ -38,6 +38,13 @@ public sealed record Field(string Label, string Path, ValueFormat Format = Value
         }).Where(s => !string.IsNullOrWhiteSpace(s));
 }
 
+/// <summary>
+/// A query key a link can carry, bound to the field it narrows. Plural keys hold a
+/// comma-separated list and a row matches any of them, which is how the web report
+/// pages carry their multi-select filters.
+/// </summary>
+public sealed record LinkFilter(string Key, string Path, bool MultiValue = false);
+
 /// <summary>A table column in a report.</summary>
 public sealed record ReportColumn(string Header, Field Field, double? Width = null, bool Mono = false, bool Star = false);
 
@@ -59,8 +66,12 @@ public sealed record ReportSpec(
     IReadOnlyList<Field> Distributions,
     IReadOnlyList<ReportColumn> Columns,
     string RowNoun = "devices",
-    int? Limit = null)
+    int? Limit = null,
+    IReadOnlyList<LinkFilter>? LinkFilters = null)
 {
+    /// <summary>The link keys this report narrows by, empty when it takes none.</summary>
+    public IReadOnlyList<LinkFilter> Filters => LinkFilters ?? [];
+
     public static ReportSpec? For(string module) => All.GetValueOrDefault(module);
 
     // Paths below are the report endpoints' own row shape, which is flattened and
@@ -109,6 +120,11 @@ public sealed record ReportSpec(
                 new("Edition", new("Edition", "edition"), 150),
                 new("Uptime", new("Uptime", "uptimeString"), 120),
                 new("Pending", new("Pending", "pendingUpdatesCount"), 90),
+            ], LinkFilters:
+            [
+                new("osVersion", "osVersion"),
+                new("edition", "edition"),
+                new("architecture", "architecture"),
             ]),
 
         ["security"] = new("security",
@@ -198,7 +214,17 @@ public sealed record ReportSpec(
                 new("Device", new("Device", "deviceName"), 190),
                 new("Serial", new("Serial", "serialNumber"), 150, Mono: true),
                 new("Architecture", new("Architecture", "architecture"), 110),
-            ], RowNoun: "installed applications", Limit: 5000),
+            ], RowNoun: "installed applications", Limit: 5000, LinkFilters:
+            [
+                new("apps", "name", MultiValue: true),
+                new("publishers", "publisher", MultiValue: true),
+                new("versions", "version", MultiValue: true),
+                new("usages", "usage", MultiValue: true),
+                new("catalogs", "catalog", MultiValue: true),
+                new("rooms", "room", MultiValue: true),
+                new("areas", "area", MultiValue: true),
+                new("fleets", "fleet", MultiValue: true),
+            ]),
 
         ["installs"] = new("installs",
             [
@@ -214,7 +240,16 @@ public sealed record ReportSpec(
                 new("Latest", new("Latest", "latestVersion"), 150),
                 new("Device", new("Device", "deviceName"), 190),
                 new("Serial", new("Serial", "serialNumber"), 150, Mono: true),
-            ], RowNoun: "managed items", Limit: 5000),
+            ], RowNoun: "managed items", Limit: 5000, LinkFilters:
+            [
+                new("filter", "currentStatus"),
+                new("items", "itemName", MultiValue: true),
+                new("catalogs", "catalog", MultiValue: true),
+                new("usages", "usage", MultiValue: true),
+                // No fleets filter here: the installs rows carry the key but it is
+                // empty on every one, so binding it would make any link using it
+                // return nothing and read as missing data.
+            ]),
 
         ["peripherals"] = new("peripherals",
             [

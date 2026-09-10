@@ -94,16 +94,21 @@ public sealed class ReportPage : FleetPage
             return page;
         }
 
-        var rows = result.Data!;
-        var capped = spec.Limit is { } cap && rows.Count >= cap;
+        var rows = ApplyLinkFilters(spec, result.Data!);
+        var capped = spec.Limit is { } cap && result.Data!.Count >= cap;
+        var narrowed = rows.Count != result.Data!.Count;
         page.Children.Add(Ui.TabHeader(_area.Title, _area.Subtitle, "", _area.Accent,
-            Ui.Caption(capped
-                ? $"first {rows.Count:N0} {spec.RowNoun}"
-                : $"{rows.Count:N0} {spec.RowNoun}")));
+            Ui.Caption(narrowed
+                ? $"{rows.Count:N0} of {result.Data!.Count:N0} {spec.RowNoun}"
+                : capped
+                    ? $"first {rows.Count:N0} {spec.RowNoun}"
+                    : $"{rows.Count:N0} {spec.RowNoun}")));
 
         if (rows.Count == 0)
         {
-            page.Children.Add(Ui.Card(Ui.EmptyState($"No {_area.Title.ToLowerInvariant()} data has been reported.")));
+            page.Children.Add(Ui.Card(Ui.EmptyState(narrowed
+                ? $"Nothing in the {_area.Title.ToLowerInvariant()} report matches this link's filters."
+                : $"No {_area.Title.ToLowerInvariant()} data has been reported.")));
             return page;
         }
 
@@ -115,6 +120,32 @@ public sealed class ReportPage : FleetPage
                 $"Showing the first {rows.Count:N0} {spec.RowNoun}; the fleet holds more. "
                 + "The figures above describe this page, not the whole fleet."));
         return page;
+    }
+
+    /// <summary>
+    /// Narrow the rows by whatever the arriving link asked for. The web report pages
+    /// carry their filters in the query, so a link copied from one reopens the same
+    /// subset here rather than the whole report.
+    /// </summary>
+    private List<JsonElement> ApplyLinkFilters(ReportSpec spec, List<JsonElement> rows)
+    {
+        foreach (var filter in spec.Filters)
+        {
+            var raw = Filter(filter.Key);
+            if (raw is null) continue;
+
+            var wanted = filter.MultiValue
+                ? raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                : [raw];
+            if (wanted.Length == 0) continue;
+
+            var field = new Field(filter.Key, filter.Path);
+            rows = rows
+                .Where(r => field.ReadAll(r)
+                    .Any(v => wanted.Contains(v, StringComparer.OrdinalIgnoreCase)))
+                .ToList();
+        }
+        return rows;
     }
 
     /// <summary>
