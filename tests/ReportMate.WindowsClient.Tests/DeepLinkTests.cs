@@ -137,19 +137,60 @@ public class DeepLinkTests
     }
 
     [Fact]
-    public void HandoffLinkIsTheWebRouteUnderOpen()
+    public void WebAndHandoffLinksCarryTheTabAsAFragment()
     {
+        // The web app's own address bar shows /device/X#installs, and its pages read the
+        // fragment, so the web forms have to match that rather than the app's ?tab=.
         var link = DeepLink.For("device", "ABC123", ("tab", "installs"));
-        Assert.Equal("https://host.example.org/open/device/ABC123?tab=installs",
+        Assert.Equal("https://host.example.org/device/ABC123#installs",
+            link.ToWebUrl("https://host.example.org"));
+        Assert.Equal("https://host.example.org/open/device/ABC123#installs",
             link.ToHandoffUrl("https://host.example.org"));
-        Assert.Equal("https://host.example.org/device/ABC123?tab=installs",
+    }
+
+    [Fact]
+    public void WebLinkKeepsOtherKeysInTheQueryBesideTheFragment()
+    {
+        var link = DeepLink.For("device", "ABC123", ("tab", "installs"), ("filter", "errors"));
+        Assert.Equal("https://host.example.org/device/ABC123?filter=errors#installs",
             link.ToWebUrl("https://host.example.org"));
     }
+
+    [Fact]
+    public void AppLinkLeadsWithTheTabThenSortsTheRest()
+    {
+        // Both apps emit this exact string, so comparing two links is a string comparison.
+        var link = DeepLink.For("device", "ABC123",
+            ("filter", "errors"), ("tab", "installs"), ("agent", "cimian"));
+        Assert.Equal("reportmate://device/ABC123?tab=installs&agent=cimian&filter=errors",
+            link.ToAppUrl());
+    }
+
+    [Fact]
+    public void QueryOnlyLinkIsSortedByKey() =>
+        Assert.Equal("reportmate://devices?catalog=staff&status=active&usage=assigned",
+            DeepLink.For("devices", null,
+                ("usage", "assigned"), ("status", "active"), ("catalog", "staff")).ToAppUrl());
 
     [Fact]
     public void TrailingSlashOnTheWebHostDoesNotDoubleUp() =>
         Assert.Equal("https://host.example.org/dashboard",
             DeepLink.For("dashboard").ToWebUrl("https://host.example.org/"));
+
+    [Fact]
+    public void WebFormRoundTripsBackToTheSameLink()
+    {
+        var original = DeepLink.For("device", "ABC123", ("tab", "installs"), ("filter", "errors"));
+        var web = original.ToWebUrl("https://host.example.org");
+        var reparsed = DeepLink.Parse(web)!;
+
+        Assert.Equal("device", reparsed.Section);
+        Assert.Equal("ABC123", reparsed.Argument);
+        Assert.Equal("installs", reparsed.DeviceTab);
+        Assert.Equal("errors", reparsed["filter"]);
+        Assert.Equal(web, reparsed.ToWebUrl("https://host.example.org"));
+        Assert.Equal(original.ToAppUrl(), reparsed.ToAppUrl());
+    }
 
     [Fact]
     public void EmptyFiltersAreLeftOutOfABuiltLink() =>

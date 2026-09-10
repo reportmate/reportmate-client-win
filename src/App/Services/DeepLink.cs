@@ -101,31 +101,56 @@ public sealed record DeepLink(string Section, string? Argument, NameValueCollect
 
     // ── Building links ───────────────────────────────────────────────────
 
-    /// <summary>The raw app link. Opens instantly where the app is installed, and nowhere else.</summary>
-    public string ToAppUrl() => "reportmate://" + Route();
+    /// <summary>
+    /// The raw app link. Opens instantly where the app is installed, and nowhere else.
+    /// The tab leads the query and the rest is sorted, so this app and the Mac app emit
+    /// byte-identical links and comparing two links is a string comparison.
+    /// </summary>
+    public string ToAppUrl() => "reportmate://" + Route(tabInFragment: false);
 
-    /// <summary>The plain web link for the configured dashboard.</summary>
-    public string ToWebUrl(string webBaseUrl) => Combine(webBaseUrl, Route());
+    /// <summary>
+    /// The plain web link for the configured dashboard. The tab goes in the fragment
+    /// rather than the query, because that is the form the web app's own address bar
+    /// shows and its pages read.
+    /// </summary>
+    public string ToWebUrl(string webBaseUrl) => Combine(webBaseUrl, Route(tabInFragment: true));
 
     /// <summary>
     /// The shareable form. A bare <c>reportmate://</c> link cannot fall back on a machine
     /// with no handler, so the handoff route tries the app and then continues to the same
     /// page in the browser.
     /// </summary>
-    public string ToHandoffUrl(string webBaseUrl) => Combine(webBaseUrl, "open/" + Route());
+    public string ToHandoffUrl(string webBaseUrl) => Combine(webBaseUrl, "open/" + Route(tabInFragment: true));
 
-    private string Route()
+    private string Route(bool tabInFragment)
     {
         var path = Section;
         if (!string.IsNullOrWhiteSpace(Argument))
             path += "/" + string.Join('/', Argument.Split('/').Select(Uri.EscapeDataString));
 
-        var pairs = Query.AllKeys
+        var present = Query.AllKeys
             .Where(k => !string.IsNullOrEmpty(k) && !string.IsNullOrEmpty(Query[k]))
-            .Select(k => $"{Uri.EscapeDataString(k!)}={Uri.EscapeDataString(Query[k]!)}")
+            .Select(k => k!)
             .ToList();
 
-        return pairs.Count == 0 ? path : $"{path}?{string.Join('&', pairs)}";
+        var tab = present.FirstOrDefault(k => k.Equals("tab", StringComparison.OrdinalIgnoreCase));
+        var rest = present
+            .Where(k => !k.Equals("tab", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .Select(Pair)
+            .ToList();
+
+        var fragment = "";
+        if (tab is not null)
+        {
+            if (tabInFragment) fragment = "#" + Uri.EscapeDataString(Query[tab]!);
+            else rest.Insert(0, Pair(tab));
+        }
+
+        var query = rest.Count == 0 ? "" : "?" + string.Join('&', rest);
+        return path + query + fragment;
+
+        string Pair(string key) => $"{Uri.EscapeDataString(key)}={Uri.EscapeDataString(Query[key]!)}";
     }
 
     private static string Combine(string baseUrl, string route) =>
