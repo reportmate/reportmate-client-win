@@ -30,6 +30,7 @@ try {
 $expectedPayload = @(
     'managedreportsrunner.exe'
     'usagetracker.exe'
+    'Managed Reports Runner.exe'
     'appsettings.yaml'
     'module-schedules.json'
 )

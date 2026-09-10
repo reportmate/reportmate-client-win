@@ -14,8 +14,12 @@ public sealed class DeviceSnapshotStore
 {
     public static DeviceSnapshotStore Instance { get; } = new();
 
-    /// <summary>How many cache runs back to look for a module the newest run lacks.</summary>
-    private const int RunsToScan = 12;
+    /// <summary>
+    /// How many cache runs back to gather events from. Only bounds the event history --
+    /// modules are searched across every run, because a module on a slow schedule
+    /// (hardware's daily deep scan) can easily be further back than this.
+    /// </summary>
+    private const int EventRunsToScan = 12;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -53,8 +57,9 @@ public sealed class DeviceSnapshotStore
         PeripheralsModuleData? peripherals = null;
         ApplicationsData? applications = null;
 
-        foreach (var run in runs)
+        for (var i = 0; i < runs.Count; i++)
         {
+            var run = runs[i];
             inventory ??= Read<InventoryData>(run, "inventory", collectedAt);
             system ??= Read<SystemData>(run, "system", collectedAt);
             hardware ??= Read<HardwareData>(run, "hardware", collectedAt);
@@ -68,6 +73,7 @@ public sealed class DeviceSnapshotStore
 
             // Every run's event.json carries that run's events; keep them all so the
             // Events tab has a history, deduplicated on (timestamp, module, message).
+            if (i >= EventRunsToScan) continue;
             var unified = ReadFile<UnifiedDevicePayload>(Path.Combine(run, "event.json"));
             if (unified is not null)
             {
@@ -96,7 +102,7 @@ public sealed class DeviceSnapshotStore
         };
     }
 
-    /// <summary>Cache run directories, newest first, by the timestamp in their name.</summary>
+    /// <summary>Every cache run directory, newest first, by the timestamp in their name.</summary>
     public List<string> ListRuns()
     {
         if (!Directory.Exists(CacheRoot)) return [];
@@ -104,7 +110,6 @@ public sealed class DeviceSnapshotStore
             .Where(d => DateTime.TryParseExact(Path.GetFileName(d), "yyyy-MM-dd-HHmmss", null,
                 System.Globalization.DateTimeStyles.None, out _))
             .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal)
-            .Take(RunsToScan)
             .ToList();
     }
 

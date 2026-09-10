@@ -1284,6 +1284,18 @@ if (-not $SkipMSI) {
         Write-Verbose "Copied usagetracker.exe to MSI payload"
     }
 
+    # Copy the GUI to the MSI payload. Same trap as usagetracker.exe above:
+    # the earlier build stages it into the NUPKG payload only, so without this
+    # copy the MSI installs a runner with no "Managed Reports Runner.exe".
+    if ($guiExe -and (Test-Path $guiExe)) {
+        Copy-Item $guiExe (Join-Path $PkgPayloadDir "Managed Reports Runner.exe") -Force
+        $guiAssetsDir = Join-Path $guiPublishDir "Assets"
+        if (Test-Path $guiAssetsDir) {
+            Copy-Item $guiAssetsDir (Join-Path $PkgPayloadDir "Assets") -Recurse -Force
+        }
+        Write-Verbose "Copied Managed Reports Runner.exe to MSI payload"
+    }
+
     # Copy shared resources
     $sharedResourcesDir = Join-Path $BuildDir "resources"
     $sharedFiles = @(
