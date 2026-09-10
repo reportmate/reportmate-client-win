@@ -42,10 +42,17 @@ public sealed class ConfigManager
     {
         var config = new ReportMateConfig();
 
-        // Layer 1: User settings (lower priority)
+        // Layer 1: the client's own configuration at the root key. This is what the
+        // runner reads and what provisioning actually writes, so a device configured
+        // in the normal way has its settings here and nowhere else. Reading only the
+        // Settings subkey below made a fully configured endpoint report that it had
+        // no API at all.
+        LoadFromRegistry(config, ReportMateConstants.StandardRegistryPath);
+
+        // Layer 2: settings edited in this app, which override the client's.
         LoadFromRegistry(config, ReportMateConstants.SettingsRegistryPath);
 
-        // Layer 2: Policy settings (higher priority — overwrites user settings)
+        // Layer 3: policy, which overrides everything.
         LoadFromRegistry(config, ReportMateConstants.PolicyRegistryPath);
 
         Config = config;
