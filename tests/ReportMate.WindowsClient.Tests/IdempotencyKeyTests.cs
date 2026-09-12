@@ -13,10 +13,10 @@ namespace ReportMate.WindowsClient.Tests
             // the macOS client derives the same value the same way, and the
             // server treats the key as opaque, so this vector is the contract.
             var key = IdempotencyKey.Create(
-                "0F33V9G25083HJ", "unified",
+                "C00EXAMPLE001", "unified",
                 new DateTime(2026, 9, 2, 7, 0, 0, DateTimeKind.Utc));
 
-            Assert.Equal("e729927d-37f2-51c7-b28d-15a2ce49ba1a", key);
+            Assert.Equal("d267de5c-a873-533d-b644-b4a8904178e5", key);
         }
 
         [Fact]
