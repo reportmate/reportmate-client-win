@@ -2,7 +2,9 @@
 
 ReportMate Client side Windows installer for gathering endpoint telemetry for monitoring dashboard using `osquery`.
 
-Written in C# .NET 8. Designed to run on its own or as a postflight script after Cimian's managed software update process. It collects detailed device information using `osquery` and securely transmits it to the ReportMate API.
+Written in C# on .NET 10. Designed to run on its own or as a postflight script after Cimian's managed software update process. It collects detailed device information using `osquery` and securely transmits it to the ReportMate API.
+
+Full documentation lives in the [wiki](https://github.com/reportmate/reportmate-client-win/wiki). This README covers the essentials.
 
 ## Quick Start
 
@@ -10,28 +12,35 @@ Written in C# .NET 8. Designed to run on its own or as a postflight script after
 
 The project includes a unified PowerShell 7 build script that handles all package types:
 
+Build everything with an auto-generated date version:
+
 ```powershell
-# Simple build with auto-generated date version
-.\build.ps1 -Sign
+.\build.ps1
+```
 
-# Build specific version
-.\build.ps1 -Version "2024.06.27" -Sign
+Build a specific version:
 
-# Clean build for release
-.\build.ps1 -Clean -Version "2024.06.27" -ApiUrl "https://api.reportmate.com" -Sign
+```powershell
+.\build.ps1 -Version "2026.09.03.1430"
+```
+
+Clean build with signing forced on:
+
+```powershell
+.\build.ps1 -Clean -Version "2026.09.03.1430" -Sign
 ```
 
 **📋 Prerequisites:**
-- PowerShell 7+ ([Download](https://github.com/PowerShell/PowerShell/releases))
-- .NET 8.0 SDK ([Download](https://dotnet.microsoft.com/download))
-- WiX Toolset v3.11 for MSI creation ([Download](https://wixtoolset.org/releases/))
+- PowerShell 7+ ([Download](https://github.com/PowerShell/PowerShell/releases)) — the script refuses to run on Windows PowerShell 5.1
+- .NET 10 SDK ([Download](https://dotnet.microsoft.com/download))
+- `cimipkg` for MSI and NUPKG creation — downloaded automatically by `build.ps1` if it is not on `PATH` or in the repo root
 
-**📦 Output:** Three deployment packages in `build/output/`
-- `ReportMate-{version}.msi` - Enterprise MSI installer
-- `ReportMate-{version}.nupkg` - Chocolatey/Cimian package  
+**📦 Output:** Three deployment packages in `release/`
+- `ReportMate-{version}.msi` - Enterprise MSI installer (primary artifact)
+- `ReportMate-{version}.nupkg` - Chocolatey/Cimian package
 - `ReportMate-{version}.zip` - Manual installation archive
 
-See [BUILD.md](BUILD.md) for detailed build instructions and troubleshooting.
+See [BUILD.md](BUILD.md) and the [Building and Releasing](https://github.com/reportmate/reportmate-client-win/wiki/Building-and-Releasing) wiki page for detailed build instructions and troubleshooting.
 
 ## Directory Structure
 
@@ -39,31 +48,28 @@ The project uses a unified package structure that supports all deployment format
 
 ```
 reportmate-client-win/
-├── src/                    # C# source code
-├── build/                  # Build outputs and legacy scripts
-│   ├── output/            # Generated packages (MSI, NUPKG, ZIP)
-│   ├── publish/           # .NET publish output
-│   └── legacy/            # Legacy build scripts (deprecated)
+├── src/                    # C# source code for managedreportsrunner.exe
+├── usagetracker/           # C# source code for usagetracker.exe
+├── tests/                  # xUnit test project
+├── build/                  # Packaging inputs
+│   ├── nupkg/             # cimipkg project for the NUPKG
+│   │   ├── build-info.yaml   # Package metadata ({{VERSION}} substituted at build time)
+│   │   ├── reportmate.nuspec
+│   │   └── scripts/          # preinstall.ps1, postinstall.ps1
+│   ├── pkg/               # cimipkg project for the MSI
+│   │   ├── build-info.yaml
+│   │   └── scripts/          # preinstall.ps1, postinstall.ps1
+│   └── resources/         # Payload assets shared by both packages
+│       ├── osquery/          # Modular osquery configuration
+│       ├── module-schedules.json
+│       ├── cimian-postflight.ps1
+│       ├── install-tasks.ps1
+│       └── uninstall-tasks.ps1
 ├── build.ps1              # 🚀 Unified build script (PowerShell 7)
 ├── BUILD.md               # Detailed build documentation
-├── nupkg/                 # Package structure (populated by build)
-│   ├── build-info.yaml   # Package metadata
-│   ├── payload/
-│   │   ├── Program Files/
-│   │   │   ├── Cimian/
-│   │   │   │   └── postflight.ps1     # Cimian integration
-│   │   │   └── ReportMate/
-│   │   │       ├── managedreportsrunner.exe         # Main executable
-│   │   │       └── version.txt        # Build info
-│   │   └── ProgramData/
-│   │       └── ManagedReports/
-│   │           ├── appsettings.yaml   # Working config
-│   │           ├── appsettings.template.yaml  # Enterprise template
-│   │           └── queries.json       # OSQuery definitions
-│   └── scripts/
-│       ├── preinstall.ps1   # Pre-installation script
-│       └── postinstall.ps1  # Post-installation script
-└── .github/workflows/       # CI/CD automation
+├── .publish/              # .NET publish output (generated)
+├── release/               # Generated packages (generated)
+└── .github/workflows/     # CI/CD automation (ci.yml, release.yml)
 ```
 
 ## Installation Locations
@@ -72,7 +78,12 @@ After deployment, files are organized following Windows conventions:
 
 ### Binaries (`C:\Program Files\ReportMate\`)
 
-- `managedreportsrunner.exe` - Main ReportMate executable
+- `managedreportsrunner.exe` - Main ReportMate executable (added to the machine `PATH` by the installer)
+- `usagetracker.exe` - Per-user session companion that records application foreground and active time
+- `speedtest.exe` - Ookla Speedtest CLI, used by the network module
+- `appsettings.yaml` / `appsettings.template.yaml` - Configuration seeds, copied to `ProgramData` at install time
+- `module-schedules.json` - Module-to-schedule mapping used to register the scheduled tasks
+- `osquery/` - Query packs, copied to `ProgramData` at install time
 - `version.txt` - Build and version information
 
 ### Working Data (`C:\ProgramData\ManagedReports\`)
@@ -81,18 +92,16 @@ After deployment, files are organized following Windows conventions:
 - `appsettings.template.yaml` - Enterprise template configuration (CSP/OMA-URI manageable)
 - `osquery/` - Modular osquery configuration directory
   - `enabled-modules.json` - Module configuration
-  - `modules/` - Individual module query files
-    - `hardware.json` - Hardware detection queries
-    - `system.json` - OS and system queries
-    - `network.json` - Network configuration queries
-    - `security.json` - Security feature queries
-    - `applications.json` - Software inventory queries
-    - `inventory.json` - Device identification queries
-- Cache and log files (created at runtime)
+  - `modules/` - Individual module query files: `applications.json`, `hardware.json`, `identity.json`, `installs.json`, `inventory.json`, `management.json`, `network.json`, `peripherals.json`, `security.json`, `system.json`
+- `config/`, `logs/`, `cache/`, `data/` - Created by the installer and populated at runtime
 
 ### Cimian Integration (`C:\Program Files\Cimian\`)
 
 - `postflight.ps1` - Executed by Cimian after software updates
+
+### Scheduled Tasks
+
+The installer registers four SYSTEM collection tasks (`ReportMate Hourly Collection`, `ReportMate 4-Hourly Collection`, `ReportMate Daily Collection`, `ReportMate All Modules Collection`) plus `ReportMate User Session Tracker` for the per-user usage tracker. Which modules run on which schedule is defined in `build/resources/module-schedules.json`.
 
 ## Architecture
 
@@ -133,7 +142,7 @@ After deployment, files are organized following Windows conventions:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   ReportMate API (Azure)                       │
+│                       ReportMate API                            │
 ├─────────────────────────────────────────────────────────────────┤
 │ • Secure HTTPS transmission                                     │
 │ • Authentication & authorization                                │
@@ -142,17 +151,20 @@ After deployment, files are organized following Windows conventions:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+See the [Architecture](https://github.com/reportmate/reportmate-client-win/wiki/Architecture) and [Modules](https://github.com/reportmate/reportmate-client-win/wiki/Modules) wiki pages for the run flow and the payload each module emits.
+
 ## Configuration Management
 
-The application uses a configuration hierarchy to support enterprise deployment and management:
+The application uses a configuration hierarchy to support enterprise deployment and management. From lowest to highest precedence:
 
-1. **Windows Registry** (`HKLM\SOFTWARE\Config\ReportMate`) - CSP/MDM configuration managed (highest precedence)
-2. **Environment Variables** (prefix: `REPORTMATE_`) - Container/deployment specific
-3. **Working Configuration** (`ProgramData/ManagedReports/appsettings.yaml`) - Runtime editable
-4. **Enterprise Template Configuration** (`ProgramData/ManagedReports/appsettings.template.yaml`) - CSP/OMA-URI manageable defaults
-5. **Application Defaults** (Embedded in binary) - Fallback values
+1. **Application Defaults** (embedded in the binary) - Fallback values
+2. **Working Configuration** (`ProgramData/ManagedReports/appsettings.yaml`) - Runtime editable
+3. **Environment Variables** (prefix: `REPORTMATE_`) - Container/deployment specific
+4. **Windows Registry** (`HKLM\SOFTWARE\ReportMate`, then `HKLM\SOFTWARE\Config\ReportMate` for CSP/MDM) - Highest precedence
 
-Higher priority sources override lower priority ones, allowing flexible deployment and customization.
+`appsettings.template.yaml` is shipped alongside the working configuration as an unmodified enterprise reference copy; the client itself only reads `appsettings.yaml`.
+
+All configuration files are stored in `ProgramData` (not `Program Files`) to ensure they are accessible by CSP and MDM configuration management tools.
 
 ### Enterprise Deployment with CSP/OMA-URI
 
@@ -162,13 +174,11 @@ For enterprise environments, configuration can be managed through:
 - **MDM configuration**: Set registry values under `HKLM\SOFTWARE\ReportMate`
 - **OMA-URI**: Push configuration files and registry settings remotely
 
-All configuration files are stored in `ProgramData` (not `Program Files`) to ensure they are accessible by CSP and MDM configuration management tools.
-
 #### Example Complete Configuration
 
 **Intune Custom Configuration Profile (XML):**
+
 ```xml
-<!-- Intune Custom Configuration Profile -->
 <OMASettings>
   <OMADevice>
     <OMAApplicationData>
@@ -176,7 +186,7 @@ All configuration files are stored in `ProgramData` (not `Program Files`) to ens
       <OMAConfigurationData>
         <Item>
           <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl</Target>
-          <Data>https://api.reportmate.contoso.com</Data>
+          <Data>https://api.example.com</Data>
         </Item>
         <Item>
           <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase</Target>
@@ -196,68 +206,38 @@ All configuration files are stored in `ProgramData` (not `Program Files`) to ens
 </OMASettings>
 ```
 
-#### Troubleshooting Enterprise Configuration
-
-**Common Issues:**
-
-1. **Registry Access Denied**: Ensure the profile is applied to computer configuration, not user configuration
-2. **Configuration Not Applied**: Check that the device is receiving and processing the policy
-3. **Invalid API URL**: Ensure the URL includes the protocol (https://) and is accessible from the client
-
-**Validation Steps:**
-
-1. Verify registry values are created correctly
-2. Test API connectivity: `managedreportsrunner.exe test`
-3. Check Windows Event Log for ReportMate entries
-4. Review configuration hierarchy: `managedreportsrunner.exe info`
-
 ## Building and Deployment
 
 ### Development Workflow
 
-1. **Source Code**: All C# source files in `src/`
-2. **Build**: Run `./build/build_exe.sh` to compile and populate `nupkg/payload/`
-3. **Package**: Use PowerShell scripts to create MSI, NUPKG, or ZIP formats
+1. **Source Code**: C# source files in `src/` (agent) and `usagetracker/` (per-user companion)
+2. **Build**: Run `.\build.ps1` to publish the executables and assemble the package payloads
+3. **Package**: The same script produces the MSI and NUPKG via `cimipkg`, plus a ZIP archive
 4. **Deploy**: All formats install to the same standardized Windows locations
-
-### Build Scripts
-
-```bash
-# Cross-platform build (macOS/Linux/Windows)
-./build/build_exe.sh
-
-# Windows-specific package creation
-.\build\build_nupkg.ps1 -Version "1.0.0"
-.\build\build_msi.ps1 -Version "1.0.0"
-```
 
 ### Automated CI/CD
 
-The project includes GitHub Actions workflows that:
-- Build all package formats on every tag push
-- Run automated tests and validation
-- Create GitHub releases with downloadable artifacts
-- Support semantic versioning (e.g., `v1.0.0`)
+The project includes two GitHub Actions workflows:
+
+- `ci.yml` — runs on pull requests to `main` and on pushes to `main`. Builds with `.\build.ps1 -NoSign -SkipMSI -SkipNUPKG -SkipZIP -Configuration Release`, then runs the xUnit test project. There is no scheduled build.
+- `release.yml` — runs on pushed tags matching `v*` or a bare `YYYY.MM.DD.NNNN` date stamp. Builds with `.\build.ps1 -NoSign`, then creates a GitHub release and uploads every `.msi`, `.nupkg` and `.zip` under `release/`.
+
+**Release artifacts are unsigned.** Sign the binaries and the installer with your own code signing certificate before fleet distribution; the generated release notes include the `signtool` commands.
 
 ### Manual Deployment Options
 
 #### MSI Installation (Recommended)
-```powershell
-# Silent installation for enterprise deployment
-msiexec /i ReportMateClient.msi /quiet API_URL="https://api.reportmate.com"
-```
 
-#### Cimian/Chocolatey Package
+The MSI takes its API URL from a `.env` file baked into the package at build time (`PROD_API_URL` or `REPORTMATE_API_URL`); it does not accept an `API_URL` msiexec property.
 
 ```powershell
-choco install reportmate-windows-client.nupkg
+msiexec /i ReportMate-{version}.msi /quiet /l*v "%TEMP%\reportmate-install.log"
 ```
 
 #### Direct Executable
 
 ```powershell
-# Manual installation and setup
-.\managedreportsrunner.exe install --api-url "https://api.reportmate.com"
+.\managedreportsrunner.exe install --api-url "https://api.example.com"
 .\managedreportsrunner.exe run
 ```
 
@@ -266,355 +246,119 @@ choco install reportmate-windows-client.nupkg
 ### Core Functionality
 
 - **osquery Integration**: Leverages osquery for comprehensive system data collection
-- **Cimian Integration**: Simple postflight script execution (no GUI integration) 
+- **Cimian Integration**: Simple postflight script execution (no GUI integration)
 - **Secure Communication**: HTTPS with proper certificate validation
 - **Configuration Management**: Multi-source configuration with Windows Registry support
 - **Error Handling**: Robust retry logic and comprehensive logging
 - **Performance Optimization**: Efficient data collection with caching
-- **Application Usage Analytics**: Tracks launch counts and session durations using Windows kernel process telemetry
+- **Application Usage Analytics**: Tracks launch counts and session durations from an in-session companion process
 
 ### Security Features
 
-- **Privilege Management**: Runs with appropriate administrator privileges
+- **Privilege Management**: Requires administrator privileges (`requireAdministrator` in the application manifest)
 - **Secure Storage**: No hardcoded credentials, uses Windows registry securely
 - **Data Encryption**: All API communications encrypted in transit
 - **Certificate Validation**: Proper SSL/TLS certificate verification
-- **Access Control**: Managed identity integration ready
 
 ### Enterprise Ready
 
-- **MSI Installer**: Professional Windows Installer package
+- **MSI Installer**: Windows Installer package built by `cimipkg`
 - **MDM configuration Support**: Silent installation and configuration
-- **Logging & Monitoring**: Comprehensive Windows Event Log integration
-- **Configuration Management**: Multiple configuration sources (Registry, JSON, Environment)
-- **Deployment Scripts**: Batch, PowerShell, and silent installation options
+- **Logging & Monitoring**: Windows Event Log integration under the `ReportMate` source
+- **Configuration Management**: Multiple configuration sources (Registry, YAML, Environment)
 
 ## Command Line Interface
 
+Run data collection (the default action when no command is given):
+
 ```powershell
-# Run data collection (default action)
-managedreportsrunner.exe run [--force] [--device-id ID] [--api-url URL]
+managedreportsrunner.exe run [--force] [--collect-only] [--transmit-only] [--run-module ID] [--run-modules A,B] [--device-id ID] [--api-url URL] [--storage-mode quick|deep|auto]
+```
 
-# Test configuration and connectivity  
-managedreportsrunner.exe test [--verbose]
+Transmit the most recent cached payload without collecting:
 
-# Display system information
+```powershell
+managedreportsrunner.exe transmit
+```
+
+Display device identity and current configuration:
+
+```powershell
 managedreportsrunner.exe info
+```
 
-# Install and configure
+Write the `HKLM\SOFTWARE\ReportMate` configuration key:
+
+```powershell
 managedreportsrunner.exe install --api-url URL [--device-id ID] [--api-key KEY]
 ```
+
+Print the client version:
+
+```powershell
+managedreportsrunner.exe version
+```
+
+Verbosity is controlled by `--verbose[=N]` (0–3) or the `-v` / `-vv` / `-vvv` shorthands. The full option and exit-code table is in the [Command Line Reference](https://github.com/reportmate/reportmate-client-win/wiki/Command-Line-Reference) wiki page.
 
 ## Requirements
 
 ### Runtime Requirements
+
 - Windows 10/11 or Windows Server 2016+
-- .NET 8.0 Runtime (included in self-contained builds)
-- Administrator privileges (for full data collection)
-- Network connectivity to ReportMate API
+- No .NET runtime on the endpoint — the agent and the usage tracker are published self-contained for `win-x64`
+- Administrator privileges (required by the application manifest)
+- Network connectivity to the ReportMate API
 
 ### Build Requirements
-- .NET 8.0 SDK
-- PowerShell 5.1+ (for Windows build scripts)
-- WiX Toolset 3.11+ (for MSI creation)
-- cimipkg (for NUPKG creation) - [Download here](https://github.com/windowsadmins/cimian-pkg/releases)
+
+- .NET 10 SDK
+- PowerShell 7+ (`build.ps1` enforces this)
+- `cimipkg` for MSI and NUPKG creation, auto-downloaded from the [cimian-pkg releases](https://github.com/windowsadmins/cimian-pkg/releases) when missing
+- `nuget` on `PATH` for the NUPKG step
+- `gh` for `-CreateRelease`
 
 ### Optional Dependencies
+
 - osquery (for enhanced data collection) - Automatically detected at `C:\Program Files\osquery\`
 
 ## Integration Examples
 
 ### Cimian Postflight Script
-The included `postflight.ps1` script automatically executes ReportMate after Cimian runs `managedsoftwareupdate.exe`:
 
-```powershell
-# Located at: C:\Program Files\Cimian\postflight.ps1
-& "C:\Program Files\ReportMate\managedreportsrunner.exe" run --force
-```
-
-### Deploy via startup script or scheduled task
-
-```powershell
-schtasks /create /tn "ReportMate Data Collection" /tr "C:\Program Files\ReportMate\managedreportsrunner.exe run" /sc daily /st 09:00
-```
+The included `postflight.ps1` script automatically executes ReportMate after Cimian runs `managedsoftwareupdate.exe`. It is installed to `C:\Program Files\Cimian\postflight.ps1` from `build/resources/cimian-postflight.ps1`.
 
 ### Manual Integration
 
 ```powershell
-# Run from any automation system
-C:\Program Files\ReportMate\managedreportsrunner.exe run
+& "C:\Program Files\ReportMate\managedreportsrunner.exe" run
 ```
-
-The `nupkg/` directory serves as the canonical package structure that all build processes populate and reference.
-
-### Windows Structure
-
-#### Executables (Program Files)
-
-```pwsh
-C:\Program Files\ReportMate\
-├── managedreportsrunner.exe                    # Main ReportMate executable
-├── appsettings.yaml              # Default configuration template
-├── osquery-queries.json          # osquery query definitions
-└── version.txt                   # Version information
-```
-
-#### Data & Configuration (ProgramData)
-
-```pwsh
-C:\ProgramData\ManagedReports\
-├── config\                       # Configuration files
-│   ├── reportmate.yaml           # Main configuration
-│   └── registry.config           # Registry-based settings
-├── logs\                         # Log files
-│   ├── reportmate.log            # Main application log
-│   ├── postflight.log            # Postflight script log
-│   ├── error.log                 # Error log
-│   └── osquery.log               # osquery execution log
-├── cache\                        # Temporary cache files
-│   ├── device-info.json         # Cached device information
-│   └── last-run.timestamp        # Last execution timestamp
-└── data\                         # Persistent data storage
-    ├── device-id.txt             # Device identifier
-    └── api-keys.encrypted        # Encrypted API credentials
-```
-
-### Configuration Priority
-
-ReportMate uses the following configuration priority (highest to lowest):
-
-1. **Command-line arguments** (`--api-url`, `--device-id`, etc.)
-2. **Environment variables** (`REPORTMATE_API_URL`, `REPORTMATE_DEVICE_ID`, etc.)
-3. **Registry values** (Windows) / **YAML Preferences** (macOS)
-4. **YAML configuration files** in data directory
-5. **Default YAML configuration** in program directory
 
 ## Package Formats
 
 ReportMate supports three deployment formats, all built from the same unified source structure:
 
-### 1. NUPKG Package (Recommended)
-
-- **Use Case**: Chocolatey and Cimian deployment
-- **Benefits**: Automatic dependency management, uninstall support, integration with existing package managers
-- **Installation**: `choco install ReportMate` or `cimipkg install`
-
-### 2. MSI Installer  
+### 1. MSI Installer (Primary)
 
 - **Use Case**: Traditional Windows enterprise deployment (MDM configuration, SCCM, Intune)
-- **Benefits**: Windows Installer features, proper Add/Remove Programs integration, silent installation
-- **Installation**: `msiexec /i ReportMate-1.0.0.msi /quiet`
+- **Built by**: `cimipkg` from `build/pkg/`; there is no WiX authoring in this repository
+- **Benefits**: Windows Installer features, Add/Remove Programs integration, silent installation
+
+### 2. NUPKG Package
+
+- **Use Case**: Chocolatey and Cimian package management
+- **Built by**: `cimipkg --nupkg` from `build/nupkg/`
 
 ### 3. ZIP Archive
 
-- **Use Case**: Manual deployment, custom automation scripts
-- **Benefits**: Simple extraction, complete control over installation process
-- **Installation**: Manual extraction and configuration
-
-### Package Structure
-
-All packages deploy to the same standardized locations:
-
-```
-C:\Program Files\ReportMate\          # Binaries and executable files
-├── managedreportsrunner.exe                       # Main ReportMate executable
-├── appsettings.yaml                  # Template configuration
-└── version.txt                      # Build version information
-
-C:\ProgramData\ManagedReports\        # Working data and configuration
-├── appsettings.yaml                  # Active configuration file
-└── queries.json                     # OSQuery definitions
-
-C:\Program Files\Cimian\              # Cimian integration
-└── postflight.ps1                   # Postflight execution script
-```
-
-### Build Requirements
-
-- **.NET 8.0 SDK** - For building the executable
-- **PowerShell 7+** - For cross-platform build scripts (recommended)
-- **WiX Toolset 3.11+** - For MSI creation (Windows only)
-- **cimipkg** - For NUPKG creation ([Download here](https://github.com/windowsadmins/cimian-pkg/releases))
-
-### Environment Variables for Build
-
-The build and installation scripts recognize these environment variables:
-
-- `REPORTMATE_API_URL` - Sets the default API endpoint
-- `REPORTMATE_DEVICE_ID` - Sets custom device identifier
-- `REPORTMATE_API_KEY` - Sets API authentication key
-
-Example:
-```bash
-export REPORTMATE_API_URL="https://your-reportmate-api.azurewebsites.net"
-./build/build_exe.sh
-```
-
-## Installation & Deployment
-
-### Prerequisites
-
-- Windows 7 or later (Windows 10+ recommended)
-- .NET 8.0 Runtime (included in self-contained build)
-- Administrator privileges for installation
-- osquery (optional but recommended for full functionality)
-
-### Quick Deployment Steps
-
-#### Step 1: Build the Application
-
-```bash
-# Navigate to the Windows client directory
-cd reportmate-client-win
-
-# Build the executable using the unified build script
-./build/build_exe.sh
-```
-
-This creates:
-- Self-contained executable at `build/publish/managedreportsrunner.exe`
-- Properly structured nupkg payload at `nupkg/payload/`
-- ZIP deployment package at `build/output/`
-
-#### Step 2: Create Installers
-
-**Automated Build with GitHub Actions**
-
-Push a version tag to automatically build MSI, NUPKG, and ZIP packages:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-**Local Build (All Formats)**
-
-```bash
-# Build executable and prepare nupkg structure
-./build/build_exe.sh
-
-# Create MSI and NUPKG packages (Windows with PowerShell)
-pwsh ./build/build_nupkg.ps1 -Version "1.0.0"
-```
-
-**MSI Only (Legacy)**
-
-```powershell
-# Run on Windows machine with WiX Toolset installed
-.\build\build_msi.ps1 -Version "1.0.0" -SourcePath "nupkg/payload" -OutputPath "build/output"
-```
-
-This creates:
-- `ReportMate-1.0.0.msi` - Traditional Windows installer
-- `ReportMate-1.0.0.nupkg` - Chocolatey/Cimian compatible package  
-- `ReportMate-1.0.0.zip` - Manual installation archive
-
-#### Step 3: Deploy to Target Machines
-
-**Option A: MDM configuration Deployment**
-
-1. Copy MSI to network share
-2. Create MDM configuration Object
-3. Assign software installation to computer objects
-4. Configure registry settings via GPO
-
-**Option B: SCCM/Intune Deployment**
-
-1. Import MSI into SCCM/Intune
-
-2. Create application with silent install command:
-
-`msiexec /i "ReportMate-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"`
-
-3. Deploy to device collections
-
-**Option C: Manual/Script Deployment**
-
-```pwsh
-# Copy and run deployment script
-.\Deploy-ReportMate.ps1 -ApiUrl "https://your-reportmate-api.azurewebsites.net"
-```
-
-### Installation Methods
-
-#### 1. NUPKG Package (Recommended for Cimian)
-
-```powershell
-# Install via Chocolatey/Cimian
-choco install ReportMate --source="path\to\package"
-
-# Or install with cimipkg directly
-cimipkg install ReportMate-1.0.0.nupkg
-```
-
-#### 2. MSI Installer
-
-```powershell
-# Download and install
-Invoke-WebRequest -Uri "https://releases.reportmate.io/ReportMate-1.0.0.msi" -OutFile "reportmate.msi"
-msiexec /i reportmate.msi /quiet /l*v install.log
-
-# Configure
-Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https://your-api.azurewebsites.net"
-```
-
-#### 3. Manual Installation
-
-```powershell
-# Extract ZIP to correct locations
-Expand-Archive "ReportMate-1.0.0.zip" -DestinationPath "C:\Temp\ReportMate"
-
-# Copy binaries to Program Files
-Copy-Item "C:\Temp\ReportMate\Program Files\ReportMate\*" "C:\Program Files\ReportMate\" -Recurse -Force
-
-# Copy working files to ProgramData  
-Copy-Item "C:\Temp\ReportMate\ProgramData\ManagedReports\*" "C:\ProgramData\ManagedReports\" -Recurse -Force
-
-# Copy Cimian integration
-Copy-Item "C:\Temp\ReportMate\Program Files\Cimian\*" "C:\Program Files\Cimian\" -Recurse -Force
-
-# Run post-installation configuration
-Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https://your-api.azurewebsites.net"
-```
-
-#### 2. Silent Deployment
-
-```batch
-@echo off
-REM MDM configuration or SCCM deployment
-msiexec /i "ReportMate-1.0.0.msi" /quiet /l*v "%TEMP%\reportmate-install.log"
-"C:\Program Files\ReportMate\managedreportsrunner.exe" install --api-url "https://your-api.azurewebsites.net"
-```
-
-#### 3. PowerShell DSC
-
-```pwsh
-Configuration ReportMateClient {
-    Node "localhost" {
-        Package ReportMate {
-            Name = "ReportMate"
-            Path = "\\server\share\ReportMate-1.0.0.msi"
-            ProductId = "{12345678-1234-1234-1234-123456789012}"
-            Ensure = "Present"
-        }
-        
-        Registry ReportMateApiUrl {
-            Key = "HKLM:\SOFTWARE\ReportMate"
-            ValueName = "ApiUrl"
-            ValueData = "https://your-api.azurewebsites.net"
-            ValueType = "String"
-            Ensure = "Present"
-            DependsOn = "[Package]ReportMate"
-        }
-    }
-}
-```
+- **Use Case**: Manual deployment and testing
+- **Installation**: Extract and run the generated `install.bat` as administrator
 
 ## Configuration
 
 ### Registry Settings
 
-All configuration is stored in `HKLM:\SOFTWARE\ReportMate`:
+Configuration is read from `HKLM\SOFTWARE\ReportMate`, and then from `HKLM\SOFTWARE\Config\ReportMate` (CSP/MDM), which takes precedence. These value names are mapped explicitly:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -626,16 +370,9 @@ All configuration is stored in `HKLM:\SOFTWARE\ReportMate`:
 | `LogLevel` | Logging level | Information |
 | `OsQueryPath` | Path to osquery executable | `C:\Program Files\osquery\osqueryi.exe` |
 
-### Enterprise Configuration via CSP/OMA-URI
+Under the CSP key, `ServerUrl` is also accepted as an alias for `ApiUrl`. Any other value name is passed through as `ReportMate:<ValueName>`.
 
-ReportMate supports enterprise configuration management through Configuration Service Provider (CSP) and OMA-URI profiles, enabling centralized management via Microsoft Intune, System Center Configuration Manager (SCCM), or MDM configuration.
-
-#### Registry Configuration Paths
-
-The application reads configuration from the following Windows Registry locations:
-
-1. **Standard Registry**: `HKLM\SOFTWARE\ReportMate`
-2. **CSP/MDM configuration**: `HKLM\SOFTWARE\Config\ReportMate` (higher precedence)
+Every configuration key the client reads is listed on the [Configuration](https://github.com/reportmate/reportmate-client-win/wiki/Configuration) wiki page.
 
 #### OMA-URI Configuration for Microsoft Intune
 
@@ -647,23 +384,24 @@ The application reads configuration from the following Windows Registry location
    - Profile type: **Custom**
    - Name: **ReportMate Client Configuration**
 
-**OMA-URI Settings:**
-
 **API Configuration:**
+
 ```
 OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl
 Data type: String
-Value: https://api.reportmate.yourdomain.com
+Value: https://api.example.com
 ```
 
 **Device ID (Optional - auto-generated if not specified):**
+
 ```
 OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/DeviceId
 Data type: String
-Value: {custom-device-identifier}
+Value: WS-0001
 ```
 
 **API Authentication Key (Optional):**
+
 ```
 OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiKey
 Data type: String
@@ -671,6 +409,7 @@ Value: {your-api-key}
 ```
 
 **Client Passphrase (Optional - for restricted access/reporting):**
+
 ```
 OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase
 Data type: String
@@ -678,6 +417,7 @@ Value: {client-passphrase}
 ```
 
 **Collection Interval (Optional - default: 3600 seconds):**
+
 ```
 OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/CollectionInterval
 Data type: Integer
@@ -685,49 +425,24 @@ Value: 7200
 ```
 
 **Log Level (Optional - default: Information):**
+
 ```
 OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/LogLevel
 Data type: String
 Value: Information
 ```
 
-#### MDM configuration Configuration
+#### Group Policy Preferences
 
-**Using MDM configuration Registry Editor:**
-
-1. Open **MDM configuration Management Console**
-2. Edit the desired GPO
-3. Navigate to **Computer Configuration** > **Preferences** > **Windows Settings** > **Registry**
-4. Create new registry items with the following details:
-
-**Registry Key Configuration:**
-- **Hive**: HKEY_LOCAL_MACHINE
-- **Key Path**: SOFTWARE\Config\ReportMate
-- **Action**: Update
-
-**Registry Values:**
-| Value Name | Type | Data |
-|------------|------|------|
-| ApiUrl | REG_SZ | https://api.reportmate.yourdomain.com |
-| DeviceId | REG_SZ | {custom-device-identifier} |
-| ApiKey | REG_SZ | {your-api-key} |
-| Passphrase | REG_SZ | {client-passphrase} |
-| CollectionInterval | REG_DWORD | 7200 |
-| LogLevel | REG_SZ | Information |
-| OsQueryPath | REG_SZ | C:\Program Files\osquery\osqueryi.exe |
-| ForceCollection | REG_DWORD | 0 |
-| ValidateSslCert | REG_DWORD | 1 |
+Registry items can equally be delivered through **Computer Configuration** > **Preferences** > **Windows Settings** > **Registry**, using hive `HKEY_LOCAL_MACHINE` and key path `SOFTWARE\Config\ReportMate` with the value names from the table above.
 
 #### PowerShell Script for Mass Deployment
 
 ```powershell
-# ReportMate Enterprise Configuration Script
-# Run with administrative privileges
-
 param(
     [Parameter(Mandatory=$true)]
     [string]$ApiUrl,
-    
+
     [string]$DeviceId = "",
     [string]$ApiKey = "",
     [string]$Passphrase = "",
@@ -737,244 +452,124 @@ param(
 
 $RegistryPath = "HKLM:\SOFTWARE\Config\ReportMate"
 
-# Create registry key if it doesn't exist
 if (-not (Test-Path $RegistryPath)) {
     New-Item -Path $RegistryPath -Force | Out-Null
 }
 
-# Set configuration values
 Set-ItemProperty -Path $RegistryPath -Name "ApiUrl" -Value $ApiUrl -Type String
-Write-Host "✅ Set API URL: $ApiUrl"
 
 if ($DeviceId) {
     Set-ItemProperty -Path $RegistryPath -Name "DeviceId" -Value $DeviceId -Type String
-    Write-Host "✅ Set Device ID: $DeviceId"
 }
 
 if ($ApiKey) {
     Set-ItemProperty -Path $RegistryPath -Name "ApiKey" -Value $ApiKey -Type String
-    Write-Host "✅ Set API Key: [REDACTED]"
 }
 
 if ($Passphrase) {
     Set-ItemProperty -Path $RegistryPath -Name "Passphrase" -Value $Passphrase -Type String
-    Write-Host "✅ Set Client Passphrase: [REDACTED]"
 }
 
 Set-ItemProperty -Path $RegistryPath -Name "CollectionInterval" -Value $CollectionInterval -Type DWord
-Write-Host "✅ Set Collection Interval: $CollectionInterval seconds"
-
 Set-ItemProperty -Path $RegistryPath -Name "LogLevel" -Value $LogLevel -Type String
-Write-Host "✅ Set Log Level: $LogLevel"
-
-Write-Host "`n🎉 ReportMate configuration completed successfully!"
-Write-Host "Configuration will take effect on the next ReportMate run."
 ```
 
 #### Configuration Validation Commands
 
-**Test Configuration:**
+Verify the registry configuration:
+
 ```powershell
-# Verify registry configuration
 Get-ItemProperty -Path "HKLM:\SOFTWARE\Config\ReportMate" -ErrorAction SilentlyContinue
+```
 
-# Test ReportMate configuration
-& "C:\Program Files\ReportMate\managedreportsrunner.exe" test --verbose
+View the configuration the client actually resolved:
 
-# View current configuration
+```powershell
 & "C:\Program Files\ReportMate\managedreportsrunner.exe" info
 ```
 
-**Monitor Configuration Application:**
+Check the Windows Event Log for ReportMate events:
+
 ```powershell
-# Check Windows Event Log for ReportMate events
-Get-WinEvent -LogName Application -Source "ReportMate" -MaxEvents 10
+Get-WinEvent -LogName Application -ProviderName "ReportMate" -MaxEvents 10
 ```
-
-#### Troubleshooting Enterprise Configuration
-
-**Common Issues:**
-
-1. **Registry Access Denied**: Ensure the profile is applied to computer configuration, not user configuration
-2. **Configuration Not Applied**: Check that the device is receiving and processing the policy
-3. **Invalid API URL**: Ensure the URL includes the protocol (https://) and is accessible from the client
-
-**Validation Steps:**
-
-1. Verify registry values are created correctly
-2. Test API connectivity: `managedreportsrunner.exe test`
-3. Check Windows Event Log for ReportMate entries
-4. Review configuration hierarchy: `managedreportsrunner.exe info`
 
 #### Security Considerations
 
 - Store sensitive values (API keys, passphrases) securely using Intune's encrypted storage
 - Use HTTPS endpoints for all API communications
-- Implement certificate pinning in high-security environments
 - Regularly rotate API keys and passphrases, updating configurations accordingly
 - Monitor configuration compliance through Intune reporting
 
 ## Troubleshooting
 
-### Common Issues
+The [Troubleshooting](https://github.com/reportmate/reportmate-client-win/wiki/Troubleshooting) wiki page covers the failure modes visible in the code. The most common starting points:
 
-1. **"API URL not configured"**
-   ```pwsh
-   # Set the API URL
-   & "C:\Program Files\ReportMate\managedreportsrunner.exe" install --api-url "https://your-api.azurewebsites.net"
-   ```
+**"API URL not configured"** — set it and write the registry key:
 
-2. **"osquery not found"**
-   ```pwsh
-   # Install osquery or set custom path
-   Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "OsQueryPath" -Value "C:\Tools\osquery\osqueryi.exe"
-   ```
-
-3. **"API connectivity failed"**
-   ```pwsh
-   # Test network connectivity
-   Test-NetConnection -ComputerName "your-reportmate-api.azurewebsites.net" -Port 443
-   
-   # Test with verbose logging
-   & "C:\Program Files\ReportMate\managedreportsrunner.exe" test --verbose
-   ```
-
-4. **"Access denied" errors**
-   ```pwsh
-   # Run as administrator
-   Start-Process -FilePath "C:\Program Files\ReportMate\managedreportsrunner.exe" -Verb RunAs -ArgumentList "run", "--force"
-   ```
-
-### Debug Mode
-
-Enable detailed logging:
-```pwsh
-Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "LogLevel" -Value "DEBUG"
-& "C:\Program Files\ReportMate\managedreportsrunner.exe" --debug
+```powershell
+& "C:\Program Files\ReportMate\managedreportsrunner.exe" install --api-url "https://api.example.com"
 ```
 
-## Building from Source
+**"osquery not found"** — install osquery, or point the client at a custom path:
 
-### Development Build
-
-```bash
-# Clone repository
-git clone <repository-url>
-cd reportmate-client-win
-
-# Build the executable
-chmod +x build/build.sh
-./build/build.sh
+```powershell
+Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "OsQueryPath" -Value "C:\Tools\osquery\osqueryi.exe"
 ```
 
-### Production Build
+**API connectivity** — collect without transmitting and inspect the payload:
 
-```pwsh
-# Create MSI installer
-cd build
-.\create-installer.ps1 -Version "1.0.0" -ApiUrl "https://your-api.azurewebsites.net"
-
-# Sign installer (production)
-signtool sign /f certificate.pfx /p password /t http://timestamp.digicert.com output/ReportMate-1.0.0.msi
+```powershell
+& "C:\Program Files\ReportMate\managedreportsrunner.exe" run --collect-only -vvv
 ```
 
-### Project Structure
+**"Access denied" errors** — the agent requires administrator rights:
+
+```powershell
+Start-Process -FilePath "C:\Program Files\ReportMate\managedreportsrunner.exe" -Verb RunAs -ArgumentList "run", "--force"
+```
+
+### Logs
+
+The rolling Serilog file is `C:\ProgramData\ManagedReports\logs\reportmate-<yyyyMMdd>.log`. Per-run module output and the merged payload are written under `C:\ProgramData\ManagedReports\cache\<timestamp>\`. Verbosity is raised with `-v`, `-vv` or `-vvv` on the run itself; see the [Logging](https://github.com/reportmate/reportmate-client-win/wiki/Logging) wiki page.
+
+## Project Structure
 
 ```
 reportmate-client-win/
-├── src/                           # Source code
-│   ├── Program.cs                 # Main application entry point
-│   ├── ReportMate.WindowsClient.csproj  # Project file
-│   ├── appsettings.json          # Configuration settings
-│   ├── appsettings.yaml          # YAML configuration
-│   ├── osquery-queries.json      # osquery query definitions
-│   ├── app.manifest              # Windows application manifest
-│   ├── Configuration/            # Configuration management
-│   │   ├── ReportMateClientConfiguration.cs
-│   │   └── WindowsRegistryConfigurationProvider.cs
-│   └── Services/                 # Core services
-│       ├── ApiService.cs         # API communication
-│       ├── ConfigurationService.cs  # Configuration management
-│       ├── DataCollectionService.cs # Main data collection orchestration
-│       ├── DeviceInfoService.cs  # Device information gathering
-│       └── OsQueryService.cs     # osquery execution and management
-├── build/                        # Build and packaging scripts
-│   ├── build_exe.sh              # Cross-platform executable build script
-│   ├── build_msi.ps1             # MSI installer creation
-│   └── build_nupkg.ps1           # NUPKG package creation
-├── nupkg/                        # Unified package structure (canonical)
-│   ├── build-info.yaml           # Package metadata and configuration
-│   ├── payload/                  # Files to be installed (populated during build)
-│   │   ├── Program Files/
-│   │   │   ├── Cimian/
-│   │   │   │   └── postflight.ps1    # Cimian postflight integration
-│   │   │   └── ReportMate/
-│   │   │       ├── managedreportsrunner.exe         # Main executable (populated by build)
-│   │   │       ├── appsettings.yaml   # Template configuration
-│   │   │       └── version.txt        # Version information
-│   │   └── ProgramData/
-│   │       └── ManagedReports/
-│   │           ├── appsettings.yaml   # Working configuration
-│   │           └── queries.json       # OSQuery definitions
-│   └── scripts/                  # Installation scripts
-│       ├── preinstall.ps1        # Pre-installation script
-│       └── postinstall.ps1       # Post-installation script
-├── .github/workflows/            # CI/CD automation
-│   └── build-and-release.yml     # Automated builds and releases
-└── README.md                     # This documentation
+├── src/                           # Agent source code
+│   ├── Program.cs                 # Entry point and command line
+│   ├── ReportMate.WindowsClient.csproj
+│   ├── appsettings.json           # Configuration settings
+│   ├── appsettings.yaml           # YAML configuration
+│   ├── app.manifest               # Windows application manifest
+│   ├── App/                       # WinUI configuration app
+│   ├── Configuration/             # Configuration management
+│   ├── DataProcessing/            # Payload assembly
+│   ├── Models/                    # Payload models
+│   └── Services/                  # Core services
+│       ├── ApiService.cs          # API communication
+│       ├── ConfigurationService.cs
+│       ├── DataCollectionService.cs
+│       ├── ModularDataCollectionService.cs
+│       ├── ModularOsQueryService.cs
+│       ├── DeviceInfoService.cs
+│       ├── Logger.cs
+│       └── Modules/               # Per-module processors
+├── usagetracker/                  # Per-user usage tracker
+├── tests/                         # xUnit test project
+├── build/                         # Packaging inputs (see Directory Structure)
+├── build.ps1                      # Unified build script
+├── .github/workflows/             # ci.yml and release.yml
+└── README.md                      # This documentation
 ```
-
-## Performance
-
-### Optimization Features
-- **Caching**: Avoids redundant data collection within configurable intervals
-- **Parallel Processing**: Concurrent osquery execution where safe
-- **Memory Management**: Efficient JSON serialization and streaming
-- **Network Optimization**: Connection pooling and compression support
-- **Resource Limits**: Configurable timeouts and retry policies
-
-### Resource Usage
-- **Memory**: ~50-100MB during execution, ~10MB at rest
-- **CPU**: Low impact, brief spikes during data collection
-- **Network**: Varies by data volume, typically <1MB per run
-- **Disk**: Minimal, logs with automatic rotation
-
-## Benefits of This Structure
-
-- **Clear separation** between binaries and data
-- **Easy updates** - replace executable without losing configuration
-- **Secure permissions** - data directory can have restricted access
-- **Consistent with platform conventions** (Cimian/Munki pattern)
-- **Enterprise-friendly** - supports MDM configuration and Configuration Profiles
-- **Clean uninstallation** - remove program files, preserve or clean data as needed
 
 ## Permissions
 
-### Windows
-- **Program Files**: Read-only for users, Write for administrators
-- **ProgramData**: Write access for SYSTEM and ReportMate service account
+- **Program Files**: Read-only for users, write for administrators
+- **ProgramData**: Write access for SYSTEM
 
 This structure ensures ReportMate integrates cleanly with enterprise management tools while maintaining security and following platform best practices.
-
-## Next Steps
-
-### Immediate Actions
-1. **Test on a few pilot machines** before wide deployment
-2. **Verify data appears** in your ReportMate dashboard
-3. **Configure monitoring alerts** for failed data collection
-4. **Document your specific configuration** for your environment
-
-### Production Deployment
-1. **Sign the MSI installer** with your code signing certificate
-2. **Create deployment packages** for your distribution method
-3. **Schedule regular data collection** (default: every hour)
-4. **Set up centralized logging** and monitoring
-
-### Advanced Configuration
-1. **Customize osquery queries** in `osquery-queries.json`
-2. **Configure proxy settings** if needed
-3. **Set up certificate-based authentication** 
-4. **Integrate with your SIEM/monitoring tools**
 
 ## Support
 
@@ -982,5 +577,5 @@ If you encounter issues:
 
 1. **Check logs** first - they contain detailed error information
 2. **Verify configuration** with `managedreportsrunner.exe info`
-3. **Test connectivity** with `managedreportsrunner.exe test --verbose`
-4. **Review the implementation documentation** for advanced scenarios
+3. **Reproduce with verbose output** using `managedreportsrunner.exe run --collect-only -vvv`
+4. **Review the [wiki](https://github.com/reportmate/reportmate-client-win/wiki)** for advanced scenarios
