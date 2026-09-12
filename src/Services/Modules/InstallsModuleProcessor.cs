@@ -3908,64 +3908,102 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// Execute managedsoftwareupdate.exe --version to get the full version string
         /// Falls back to version transformation if command execution fails
         /// </summary>
-        private async Task<string?> ExecuteManagedsoftwareupdateVersionAsync(string executablePath)
+        private sealed record BoundedRun(int ExitCode, string Output, string Error);
+
+        /// <summary>
+        /// Run a child process and give up on it after <paramref name="timeout"/>.
+        /// Returns null when it had to be abandoned.
+        /// </summary>
+        /// <remarks>
+        /// The obvious shape for this is wrong, and it was wrong here:
+        ///
+        ///     var output = await process.StandardOutput.ReadToEndAsync();
+        ///     var completed = await Task.Run(() => process.WaitForExit(5000));
+        ///
+        /// ReadToEndAsync completes when the pipe closes, and the pipe closes when
+        /// the child exits. So a child that never exits parks on the first line
+        /// forever and the WaitForExit below it — the part carrying the timeout —
+        /// is never reached. The timeout reads as present while being unreachable.
+        ///
+        /// That cost real downtime. This runs from Cimian's postflight, and one of
+        /// its callers is schtasks.exe: on a workstation whose Task Scheduler had
+        /// degraded, schtasks stopped returning, this method never came back, the
+        /// postflight never finished, and Cimian's single-instance mutex was never
+        /// released. Every later hourly run exited with "another instance is
+        /// running", so the machine silently stopped installing anything while
+        /// reporting no errors at all.
+        ///
+        /// The ordering here is what makes the bound real: start both reads first so
+        /// the child can never block on a full pipe, then wait on exit with a
+        /// cancellation token, and only await the reads once the child is gone.
+        /// </remarks>
+        private async Task<BoundedRun?> RunBoundedAsync(ProcessStartInfo processInfo, TimeSpan timeout, string label)
         {
             try
             {
-                var processInfo = new ProcessStartInfo
-                {
-                    FileName = executablePath,
-                    Arguments = "--version",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
                 using var process = new Process { StartInfo = processInfo };
                 process.Start();
 
-                var output = await process.StandardOutput.ReadToEndAsync();
-                var error = await process.StandardError.ReadToEndAsync();
+                var stdout = process.StandardOutput.ReadToEndAsync();
+                var stderr = process.StandardError.ReadToEndAsync();
 
-                // Give the process up to 5 seconds to complete
-                var completed = await Task.Run(() => process.WaitForExit(5000));
-                
-                if (!completed)
+                using var cts = new System.Threading.CancellationTokenSource(timeout);
+
+                try
                 {
-                    try
-                    {
-                        process.Kill(true);
-                    }
-                    catch
-                    {
-                        // Ignore kill errors
-                    }
-                    _logger.LogDebug("managedsoftwareupdate.exe --version command timed out");
+                    await process.WaitForExitAsync(cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+
+                    // Deliberately a warning, not debug. The previous version logged
+                    // this at debug and the symptom — a machine that quietly stops
+                    // updating — took a long time to trace back to here.
+                    _logger.LogWarning("{Label} did not return within {Seconds:N0}s; abandoning it", label, timeout.TotalSeconds);
                     return null;
                 }
 
-                if (process.ExitCode == 0)
-                {
-                    var version = output?.Trim();
-                    if (!string.IsNullOrEmpty(version))
-                    {
-                        _logger.LogDebug("Successfully retrieved version from managedsoftwareupdate.exe: {Version}", version);
-                        return version;
-                    }
-                }
-                else
-                {
-                    _logger.LogDebug("managedsoftwareupdate.exe --version failed with exit code {ExitCode}: {Error}", process.ExitCode, error?.Trim());
-                }
-
-                return null;
+                return new BoundedRun(process.ExitCode, await stdout, await stderr);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Error executing managedsoftwareupdate.exe --version: {Error}", ex.Message);
+                _logger.LogDebug(ex, "Error running {Label}: {Error}", label, ex.Message);
                 return null;
             }
+        }
+
+        private async Task<string?> ExecuteManagedsoftwareupdateVersionAsync(string executablePath)
+        {
+            var processInfo = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                Arguments = "--version",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            var run = await RunBoundedAsync(processInfo, TimeSpan.FromSeconds(5), "managedsoftwareupdate.exe --version");
+            if (run == null)
+                return null;
+
+            if (run.ExitCode == 0)
+            {
+                var version = run.Output.Trim();
+                if (!string.IsNullOrEmpty(version))
+                {
+                    _logger.LogDebug("Successfully retrieved version from managedsoftwareupdate.exe: {Version}", version);
+                    return version;
+                }
+            }
+            else
+            {
+                _logger.LogDebug("managedsoftwareupdate.exe --version failed with exit code {ExitCode}: {Error}", run.ExitCode, run.Error.Trim());
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -3991,69 +4029,49 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         private async Task TryScheduledTasksCommand(CimianInfo cimianInfo)
         {
-            try
+            var processInfo = new ProcessStartInfo
             {
-                var processInfo = new ProcessStartInfo
+                FileName = "schtasks.exe",
+                Arguments = "/query /tn \"Cimian Managed Software Update Hourly\" /fo list",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            // schtasks is an RPC client of the Task Scheduler service, and that
+            // service is exactly what stops answering on an affected machine, so this
+            // call is the one most likely to hang. TryScheduledTasksRegistry runs
+            // after it and reads the same information out of TaskCache without the
+            // service, so abandoning this costs nothing.
+            var run = await RunBoundedAsync(processInfo, TimeSpan.FromSeconds(5), "schtasks /query for the Cimian hourly task");
+            if (run == null)
+                return;
+
+            if (run.ExitCode == 0 && !string.IsNullOrEmpty(run.Output))
+            {
+                var lines = run.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                string? status = null;
+
+                foreach (var line in lines)
                 {
-                    FileName = "schtasks.exe",
-                    Arguments = "/query /tn \"Cimian Managed Software Update Hourly\" /fo list",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-
-                using var process = new Process { StartInfo = processInfo };
-                process.Start();
-
-                var output = await process.StandardOutput.ReadToEndAsync();
-                var error = await process.StandardError.ReadToEndAsync();
-
-                var completed = await Task.Run(() => process.WaitForExit(5000));
-
-                if (!completed)
-                {
-                    try
+                    var trimmedLine = line.Trim();
+                    if (trimmedLine.StartsWith("Status:", StringComparison.OrdinalIgnoreCase))
                     {
-                        process.Kill(true);
-                    }
-                    catch
-                    {
-                        // Ignore kill errors
-                    }
-                    _logger.LogDebug("schtasks command timed out");
-                    return;
-                }
-
-                if (process.ExitCode == 0 && !string.IsNullOrEmpty(output))
-                {
-                    var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                    string? status = null;
-
-                    foreach (var line in lines)
-                    {
-                        var trimmedLine = line.Trim();
-                        if (trimmedLine.StartsWith("Status:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            status = trimmedLine.Substring(7).Trim();
-                            break;
-                        }
-                    }
-
-                    if (!string.IsNullOrEmpty(status))
-                    {
-                        cimianInfo.Services.Add($"CimianHourlyRunTask: {status.ToUpperInvariant()}");
-                        _logger.LogDebug("Found Cimian scheduled task with status: {Status}", status);
+                        status = trimmedLine.Substring(7).Trim();
+                        break;
                     }
                 }
-                else
+
+                if (!string.IsNullOrEmpty(status))
                 {
-                    _logger.LogDebug("schtasks query for specific task failed with exit code {ExitCode}", process.ExitCode);
+                    cimianInfo.Services.Add($"CimianHourlyRunTask: {status.ToUpperInvariant()}");
+                    _logger.LogDebug("Found Cimian scheduled task with status: {Status}", status);
                 }
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogDebug(ex, "Error checking scheduled task via schtasks: {Error}", ex.Message);
+                _logger.LogDebug("schtasks query for specific task failed with exit code {ExitCode}", run.ExitCode);
             }
         }
 
