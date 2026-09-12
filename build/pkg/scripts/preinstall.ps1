@@ -24,23 +24,63 @@ $InstallDir = 'C:\Program Files\ReportMate'
 # 1. Disable scheduled tasks first.
 #    Stopping a running task does not prevent Task Scheduler from launching
 #    it again seconds later, so disable each task before killing processes.
+#
+#    Every call here is bounded, and that is not defensive padding.
+#    Get-ScheduledTask talks to the Task Scheduler service, and on a machine
+#    whose scheduler has degraded it never returns. -ErrorAction
+#    SilentlyContinue suppresses errors and does nothing whatsoever about a
+#    hang. Unbounded, this line stops the whole install: cimipkg has already
+#    removed the previous payload by the time a preinstall runs, so the MSI
+#    never completes and the machine is left with no managedreportsrunner.exe
+#    at all. Observed on a workstation whose scheduler was wedged -- the
+#    install sat here for thirty minutes with the binary gone.
+#
+#    A skipped disable is survivable: the process kill below still frees the
+#    file handles, which is what the payload replacement actually needs.
 # ----------------------------------------------------------------------------
-$reportMateTasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-    $_.TaskName -like '*ReportMate*' -or
-    $_.Description -like '*ReportMate*' -or
-    $_.TaskName -like '*Report*Mate*'
+$taskQueryTimeout = [TimeSpan]::FromSeconds(20)
+
+function Invoke-Bounded {
+    param(
+        [Parameter(Mandatory)] [scriptblock] $Action,
+        [Parameter(Mandatory)] [string]      $What
+    )
+
+    $job = Start-Job -ScriptBlock $Action
+    try {
+        if (Wait-Job -Job $job -Timeout $taskQueryTimeout.TotalSeconds) {
+            return Receive-Job -Job $job -ErrorAction SilentlyContinue
+        }
+
+        Write-Host "  Task Scheduler did not answer within $([int]$taskQueryTimeout.TotalSeconds)s; skipping $What and continuing."
+        Stop-Job -Job $job -ErrorAction SilentlyContinue
+        return $null
+    }
+    finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
 }
 
+$reportMateTasks = @(Invoke-Bounded -What 'the ReportMate scheduled-task lookup' -Action {
+    Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+        $_.TaskName -like '*ReportMate*' -or
+        $_.Description -like '*ReportMate*' -or
+        $_.TaskName -like '*Report*Mate*'
+    } | Select-Object TaskName, TaskPath, State
+})
+
 foreach ($task in $reportMateTasks) {
-    try {
-        Disable-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue | Out-Null
-        if ($task.State -eq 'Running') {
-            Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+    if (-not $task) { continue }
+
+    $state = $task.State
+    Invoke-Bounded -What "disabling task '$($task.TaskName)'" -Action {
+        Disable-ScheduledTask -TaskName $using:task.TaskName -TaskPath $using:task.TaskPath -ErrorAction SilentlyContinue | Out-Null
+        if ($using:state -eq 'Running') {
+            Stop-ScheduledTask -TaskName $using:task.TaskName -TaskPath $using:task.TaskPath -ErrorAction SilentlyContinue
         }
-        Write-Host "  Disabled task: $($task.TaskName)"
-    } catch {
-        Write-Warning "  Failed to disable task '$($task.TaskName)': $_"
-    }
+    } | Out-Null
+
+    Write-Host "  Disabled task: $($task.TaskName)"
 }
 
 # ----------------------------------------------------------------------------
