@@ -747,7 +747,14 @@ if ($oa3Key -and $oa3Key.Trim().Length -ge 25 -and $oa3Key -match '^[A-Z0-9]{5}-
 }
 
 # Reliable: Get license info via slmgr (faster and more reliable than SoftwareLicensingProduct CIM query)
-$slmgrOutput = cscript //nologo C:\Windows\System32\slmgr.vbs /dli 2>&1
+# sppsvc stops itself when idle, and a query that lands while it is shutting down fails with
+# 0xC004F075. It restarts on the next request, so retry before reporting the state as unknown.
+$slmgrOutput = ''
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $slmgrOutput = (cscript //nologo C:\Windows\System32\slmgr.vbs /dli 2>&1) -join ""`n""
+    if ($slmgrOutput -notmatch '0xC004F075|service is stopping') { break }
+    if ($attempt -lt 3) { Start-Sleep -Seconds 5 }
+}
 $licStatus = -1
 $licName = 'Unknown'
 $partialKey = ''
@@ -772,12 +779,23 @@ foreach ($line in $slmgrOutput -split ""`n"") {
     elseif ($line -match '^Description:\s*(.+)$') {
         $desc = $Matches[1].Trim()
         if ($desc -match 'OEM|DM channel|UEFI|firmware') { $licSource = 'Firmware' }
+        elseif ($desc -match 'KMSCLIENT') { $licSource = 'GVLK' }
         elseif ($desc -match 'KMS') { $licSource = 'KMS' }
         elseif ($desc -match 'MAK|Multiple Activation') { $licSource = 'MAK' }
         elseif ($desc -match 'RETAIL') { $licSource = 'Retail' }
         elseif ($desc -match 'VOLUME') { $licSource = 'Volume' }
     }
 }
+
+# A volume client key (GVLK) activates against either a KMS host or an Activation Object in
+# Active Directory, and only the most recent activation block says which. The two behave very
+# differently when a device leaves the domain: AD-Based Activation stops renewing at once.
+if ($licSource -eq 'GVLK') {
+    if ($slmgrOutput -match 'AD Activation client information') { $licSource = 'ADBA' }
+    elseif ($slmgrOutput -match 'Key Management Service client information') { $licSource = 'KMS' }
+}
+
+if ($licStatus -eq -1 -and $slmgrOutput -match '0xC004F075|service is stopping') { $licSource = 'Unavailable' }
 
 Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmwareEdition""
 ";
