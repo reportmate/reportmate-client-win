@@ -18,6 +18,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<NetworkRoute> Routes { get; set; } = new();
         public string PrimaryInterface { get; set; } = string.Empty;
         public ActiveConnectionInfo ActiveConnection { get; set; } = new();
+        /// <summary>Usable addresses currently assigned to any local interface, including tunnels.</summary>
+        public List<string> LocalIpAddresses { get; set; } = new();
+        /// <summary>Usable addresses returned when resolving this device's own host names.</summary>
+        public List<string> HostnameAddresses { get; set; } = new();
+        /// <summary>A hostname-resolved address that is also assigned locally; empty when DNS and interfaces do not agree.</summary>
+        public string ManagementAddress { get; set; } = string.Empty;
         public string Hostname { get; set; } = string.Empty;
         public string Domain { get; set; } = string.Empty;
         public NetworkQualityData? NetworkQuality { get; set; }
