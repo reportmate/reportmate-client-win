@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -64,6 +65,11 @@ namespace ReportMate.WindowsClient.Services.Modules
             
             // Collect hostname and domain information
             CollectHostnameInformation(data, osqueryResults);
+
+            // Keep the default-route address separate from the address by which the
+            // hostname can currently be reached. A VPN/tunnel and its physical adapter
+            // can legitimately have different roles.
+            await CollectAddressInventoryAsync(data);
 
             // Collect enhanced DNS configuration
             await CollectEnhancedDnsConfiguration(data, osqueryResults);
@@ -2046,6 +2052,75 @@ try {
             {
                 _logger.LogWarning(ex, "Failed to collect hostname information");
             }
+        }
+
+        private async Task CollectAddressInventoryAsync(NetworkData data)
+        {
+            var localAddresses = data.Interfaces.SelectMany(networkInterface => networkInterface.IpAddresses).ToList();
+
+            try
+            {
+                localAddresses.AddRange(System.Net.NetworkInformation.NetworkInterface
+                    .GetAllNetworkInterfaces()
+                    .SelectMany(networkInterface => networkInterface.GetIPProperties().UnicastAddresses)
+                    .Select(address => address.Address.ToString()));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Native local-address enumeration failed; using collected interfaces");
+            }
+
+            data.LocalIpAddresses = NetworkAddressSelection.Normalize(localAddresses);
+
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!string.IsNullOrWhiteSpace(data.Hostname))
+            {
+                names.Add(data.Hostname);
+            }
+
+            try
+            {
+                var systemHostname = Dns.GetHostName();
+                if (!string.IsNullOrWhiteSpace(systemHostname))
+                {
+                    names.Add(systemHostname);
+                }
+
+                var dnsSuffix = System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().DomainName;
+                if (!string.IsNullOrWhiteSpace(systemHostname) && !string.IsNullOrWhiteSpace(dnsSuffix))
+                {
+                    names.Add($"{systemHostname}.{dnsSuffix.Trim('.')}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not determine the system hostname and DNS suffix");
+            }
+
+            var resolutions = names.Select(async name =>
+            {
+                try
+                {
+                    return await Dns.GetHostAddressesAsync(name).WaitAsync(TimeSpan.FromSeconds(3));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Could not resolve local hostname {Hostname}", name);
+                    return Array.Empty<IPAddress>();
+                }
+            });
+
+            data.HostnameAddresses = NetworkAddressSelection.Normalize(
+                (await Task.WhenAll(resolutions)).SelectMany(addresses => addresses).Select(address => address.ToString()));
+            data.ManagementAddress = NetworkAddressSelection.SelectManagementAddress(
+                data.LocalIpAddresses,
+                data.HostnameAddresses);
+
+            _logger.LogInformation(
+                "Address inventory collected: {LocalCount} local, {HostnameCount} hostname-resolved, management address {ManagementAddress}",
+                data.LocalIpAddresses.Count,
+                data.HostnameAddresses.Count,
+                string.IsNullOrEmpty(data.ManagementAddress) ? "none" : data.ManagementAddress);
         }
         
         /// <summary>
