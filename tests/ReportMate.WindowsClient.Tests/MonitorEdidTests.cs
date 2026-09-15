@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using ReportMate.WindowsClient.Services;
 using ReportMate.WindowsClient.Services.Modules;
 using Xunit;
@@ -260,5 +262,131 @@ public class MonitorEdidTests
 
         Assert.NotNull(monitor);
         Assert.Null(monitor!.Manufacturer);
+    }
+
+    // A synthetic 128-byte EDID with one descriptor written into the first slot. Only
+    // the descriptor area matters here; the rest stays zero because nothing downstream
+    // reads it.
+    private static string SyntheticEdid(byte[]? descriptor)
+    {
+        var edid = new byte[128];
+        if (descriptor is not null)
+        {
+            Array.Copy(descriptor, 0, edid, 54, descriptor.Length);
+        }
+        return string.Concat(edid.Select(b => b.ToString("x2")));
+    }
+
+    // 00 00 00 FF 00, then 13 bytes of text: the full field when the serial fills it,
+    // 0x0A terminated and space padded when it does not - both shapes ship in the wild.
+    private static byte[] SerialDescriptor(string serial)
+    {
+        var descriptor = new byte[18];
+        descriptor[3] = 0xFF;
+        for (var i = 0; i < 13; i++)
+        {
+            descriptor[5 + i] = i < serial.Length ? (byte)serial[i] : (i == serial.Length ? (byte)0x0A : (byte)0x20);
+        }
+        return descriptor;
+    }
+
+    [Fact]
+    public void SerialFromDescriptors_reads_a_serial_that_fills_the_field()
+    {
+        var edid = MonitorEdidReader.ParseEdidHex(SyntheticEdid(SerialDescriptor("ABC1234567890")));
+
+        Assert.Equal("ABC1234567890", MonitorEdidReader.SerialFromDescriptors(edid));
+    }
+
+    [Fact]
+    public void SerialFromDescriptors_stops_at_the_terminator_of_a_shorter_serial()
+    {
+        var edid = MonitorEdidReader.ParseEdidHex(SyntheticEdid(SerialDescriptor("ABC12345")));
+
+        Assert.Equal("ABC12345", MonitorEdidReader.SerialFromDescriptors(edid));
+    }
+
+    // Not every panel publishes a serial descriptor. Null says so; the numeric header
+    // serial four bytes into the EDID is not a substitute, because it is not unique.
+    [Fact]
+    public void SerialFromDescriptors_returns_null_without_a_serial_descriptor()
+    {
+        var edid = MonitorEdidReader.ParseEdidHex(SyntheticEdid(null));
+
+        Assert.Null(MonitorEdidReader.SerialFromDescriptors(edid));
+    }
+
+    // The descriptor can sit in any of the four slots.
+    [Theory]
+    [InlineData(54)]
+    [InlineData(72)]
+    [InlineData(90)]
+    [InlineData(108)]
+    public void SerialFromDescriptors_finds_the_descriptor_in_any_slot(int offset)
+    {
+        var edid = new byte[128];
+        Array.Copy(SerialDescriptor("SN0000001"), 0, edid, offset, 18);
+
+        Assert.Equal("SN0000001", MonitorEdidReader.SerialFromDescriptors(edid));
+    }
+
+    // A detailed timing block opens with a non-zero pixel clock, so its bytes must not
+    // be mistaken for a descriptor no matter what happens to sit at the tag position.
+    [Fact]
+    public void SerialFromDescriptors_ignores_a_detailed_timing_block()
+    {
+        var edid = new byte[128];
+        edid[54] = 0x01;
+        edid[57] = 0xFF;
+        for (var i = 0; i < 13; i++)
+        {
+            edid[59 + i] = (byte)'X';
+        }
+
+        Assert.Null(MonitorEdidReader.SerialFromDescriptors(edid));
+    }
+
+    // The defect this guards: for some panels the WMI serial is a numeric fragment of
+    // the real one, which collides across every unit of the model. With raw EDID in
+    // hand the descriptor wins outright.
+    [Fact]
+    public void ResolveSerial_prefers_the_descriptor_over_the_wmi_serial()
+    {
+        var hex = SyntheticEdid(SerialDescriptor("ABC20330003"));
+
+        Assert.Equal("ABC20330003", MonitorEdidReader.ResolveSerial(hex, "335"));
+    }
+
+    // Readable EDID with no descriptor means the panel has no serial to report. Falling
+    // back to the fragment here would republish exactly the value being fixed.
+    [Fact]
+    public void ResolveSerial_reports_nothing_when_readable_edid_has_no_descriptor()
+    {
+        Assert.Equal(string.Empty, MonitorEdidReader.ResolveSerial(SyntheticEdid(null), "335"));
+    }
+
+    // Unreadable EDID is the only case the WMI value is used, and only when it is long
+    // enough to identify a panel.
+    [Theory]
+    [InlineData(null, "ABC1234567", "ABC1234567")]
+    [InlineData("", "ABC1234567", "ABC1234567")]
+    [InlineData("not hex at all", "ABC1234567", "ABC1234567")]
+    [InlineData(null, "335", "")]
+    [InlineData(null, "1234", "")]
+    [InlineData(null, "12345", "12345")]
+    [InlineData(null, "", "")]
+    public void ResolveSerial_falls_back_only_to_a_long_enough_wmi_serial(string? edidHex, string wmiSerial, string expected)
+    {
+        Assert.Equal(expected, MonitorEdidReader.ResolveSerial(edidHex, wmiSerial));
+    }
+
+    // A truncated registry read is not an EDID. Treating it as one would report no
+    // serial for a panel that has one.
+    [Theory]
+    [InlineData("00ffffffffffff00")]
+    [InlineData("abc")]
+    public void ParseEdidHex_rejects_anything_short_of_a_whole_block(string hex)
+    {
+        Assert.Null(MonitorEdidReader.ParseEdidHex(hex));
     }
 }

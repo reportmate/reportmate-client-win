@@ -111,6 +111,12 @@ namespace ReportMate.WindowsClient.Services
                 $size = @{}
                 Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue |
                     ForEach-Object { $size[$_.InstanceName] = @($_.MaxHorizontalImageSize, $_.MaxVerticalImageSize) }
+                $edid = @{}
+                Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue | ForEach-Object {
+                    $node = $_.InstanceName -replace '_\d+$', ''
+                    $bytes = (Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Enum\$node\Device Parameters" -Name EDID -ErrorAction SilentlyContinue).EDID
+                    if ($bytes) { $edid[$_.InstanceName] = (($bytes | ForEach-Object { $_.ToString('x2') }) -join '') }
+                }
                 @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction SilentlyContinue | ForEach-Object {
                     $wh = $size[$_.InstanceName]
                     [PSCustomObject]@{
@@ -126,6 +132,7 @@ namespace ReportMate.WindowsClient.Services
                         Resolution   = $res[$_.InstanceName]
                         WidthCm      = if ($wh) { $wh[0] } else { $null }
                         HeightCm     = if ($wh) { $wh[1] } else { $null }
+                        Edid         = $edid[$_.InstanceName]
                     }
                 }) | ConvertTo-Json -Compress -Depth 3
                 """;
@@ -151,7 +158,7 @@ namespace ReportMate.WindowsClient.Services
                     monitors.Add(new MonitorEdid(
                         (string?)item["InstanceName"] ?? string.Empty,
                         Clean((string?)item["Name"]),
-                        Clean((string?)item["Serial"]),
+                        ResolveSerial((string?)item["Edid"], (string?)item["Serial"]),
                         Clean((string?)item["Pnp"]),
                         Clean((string?)item["Product"]),
                         (int?)item["Year"],
@@ -168,6 +175,117 @@ namespace ReportMate.WindowsClient.Services
             }
 
             return monitors;
+        }
+
+        /// The four 18-byte descriptor blocks of a 128-byte EDID.
+        private static readonly int[] DescriptorOffsets = { 54, 72, 90, 108 };
+
+        // 00 00 00 FF marks the descriptor that carries the display serial as text.
+        private const byte DescriptorTagSerial = 0xFF;
+
+        // Below this length a value is not an identity key - the server discards it, and
+        // a fragment that looks like a serial is worse than none, because it collides
+        // with every other panel of the same model.
+        private const int MinimumUsableSerialLength = 5;
+
+        /// <summary>
+        /// The serial to report for one panel.
+        ///
+        /// WmiMonitorID.SerialNumberID is whatever the driver chose to surface, and for
+        /// some panels that is the four-byte numeric serial from the EDID header rendered
+        /// as a short decimal rather than the full text serial printed on the label. That
+        /// fragment is not unique across a model, so keying an asset on it merges panels
+        /// that are not the same monitor.
+        ///
+        /// The 0xFF descriptor is the authoritative text serial and is what the macOS
+        /// client reads, so prefer it, and report nothing when the panel publishes none.
+        /// SerialNumberID is used only when the raw EDID could not be read at all, and
+        /// then only when it is long enough to be an identity key.
+        /// </summary>
+        public static string ResolveSerial(string? edidHex, string? wmiSerial)
+        {
+            var edid = ParseEdidHex(edidHex);
+            if (edid is not null)
+            {
+                return SerialFromDescriptors(edid) ?? string.Empty;
+            }
+
+            var fallback = Clean(wmiSerial);
+            return fallback.Length >= MinimumUsableSerialLength ? fallback : string.Empty;
+        }
+
+        /// <summary>
+        /// The 0xFF descriptor's text, or null when the block does not carry one.
+        /// </summary>
+        public static string? SerialFromDescriptors(byte[]? edid)
+        {
+            if (edid is null || edid.Length < 128)
+            {
+                return null;
+            }
+
+            foreach (var offset in DescriptorOffsets)
+            {
+                // Bytes 0-2 zero are what distinguish a descriptor from a detailed timing
+                // block, whose first two bytes are a non-zero pixel clock.
+                if (edid[offset] != 0 || edid[offset + 1] != 0 || edid[offset + 2] != 0)
+                {
+                    continue;
+                }
+
+                if (edid[offset + 3] != DescriptorTagSerial)
+                {
+                    continue;
+                }
+
+                // 13 bytes of text, terminated with 0x0A when shorter and padded after.
+                var text = new char[13];
+                var length = 0;
+                for (var i = 0; i < 13; i++)
+                {
+                    var value = edid[offset + 5 + i];
+                    if (value is 0x0A or 0x00)
+                    {
+                        break;
+                    }
+                    text[length++] = (char)value;
+                }
+
+                var serial = Clean(new string(text, 0, length));
+                return serial.Length > 0 ? serial : null;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Decode the hex the reader carries the raw EDID across in. Anything that is not
+        /// a whole EDID block returns null, so the caller can tell "no raw EDID" from
+        /// "raw EDID with no serial descriptor" - the two take different fallbacks.
+        /// </summary>
+        public static byte[]? ParseEdidHex(string? hex)
+        {
+            if (string.IsNullOrWhiteSpace(hex))
+            {
+                return null;
+            }
+
+            hex = hex.Trim();
+            if (hex.Length % 2 != 0 || hex.Length < 256)
+            {
+                return null;
+            }
+
+            var bytes = new byte[hex.Length / 2];
+            for (var i = 0; i < bytes.Length; i++)
+            {
+                if (!byte.TryParse(hex.AsSpan(i * 2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out bytes[i]))
+                {
+                    return null;
+                }
+            }
+
+            return bytes;
         }
 
         /// <summary>
