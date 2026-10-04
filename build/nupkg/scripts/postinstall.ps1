@@ -190,7 +190,8 @@ if (Test-Path $envFile) {
 
 $PROD_API_URL = if ($env:REPORTMATE_API_URL) { $env:REPORTMATE_API_URL } else { $env:PROD_API_URL }
 $PROD_PASSPHRASE = if ($env:REPORTMATE_PASSPHRASE) { $env:REPORTMATE_PASSPHRASE } else { $env:PROD_PASSPHRASE }
-$AUTO_CONFIGURE = if (-not [string]::IsNullOrEmpty($env:REPORTMATE_AUTO_CONFIGURE)) { [bool]::Parse($env:REPORTMATE_AUTO_CONFIGURE) } else { $true }
+# [bool]::Parse throws on anything but true/false; accept the usual spellings.
+$AUTO_CONFIGURE = $env:REPORTMATE_AUTO_CONFIGURE -notmatch '^\s*(false|0|no|off)\s*$'
 
 if ([string]::IsNullOrEmpty($env:PROD_API_URL) -and [string]::IsNullOrEmpty($PROD_API_URL)) {
     Write-Warning "PROD_API_URL environment variable not provided. ReportMate will rely on existing registry or manual configuration."

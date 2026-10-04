@@ -453,3 +453,6 @@ osquery-temp/
 # Agent session scratch. Caches internal-only material (boards playbook,
 # org URLs, area paths) that must never reach this public repository.
 .agents/
+
+# Git worktrees
+/.worktrees/
