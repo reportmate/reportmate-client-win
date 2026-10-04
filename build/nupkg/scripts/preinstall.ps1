@@ -111,17 +111,22 @@ if (Test-Path $OldBinaryPath) {
     }
 }
 
-# Check available disk space
-$SystemDrive = Get-WmiObject -Class Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $env:SystemDrive }
-$FreeSpaceGB = [math]::Round($SystemDrive.FreeSpace / 1GB, 2)
+# Check available disk space.
+# DriveInfo reads the volume directly. The old Win32_LogicalDisk query failed
+# the install whenever WMI was broken: a failed query left FreeSpace empty,
+# which rounded to 0 GB and tripped the insufficient-space exit. A check that
+# cannot measure now warns instead.
 $RequiredSpaceGB = 0.5  # 500MB minimum
-
-if ($FreeSpaceGB -lt $RequiredSpaceGB) {
-    Write-Error "Insufficient disk space. Required: ${RequiredSpaceGB}GB, Available: ${FreeSpaceGB}GB"
-    exit 1
+try {
+    $FreeSpaceGB = [math]::Round(([System.IO.DriveInfo]::new($env:SystemDrive)).AvailableFreeSpace / 1GB, 2)
+    if ($FreeSpaceGB -lt $RequiredSpaceGB) {
+        Write-Error "Insufficient disk space. Required: ${RequiredSpaceGB}GB, Available: ${FreeSpaceGB}GB"
+        exit 1
+    }
+    Write-Host "Disk space check passed: ${FreeSpaceGB}GB available"
+} catch {
+    Write-Warning "Could not measure free disk space, continuing: $_"
 }
-
-Write-Host "Disk space check passed: ${FreeSpaceGB}GB available"
 
 # Check network connectivity (if API URL is provided)
 $ApiUrl = $env:REPORTMATE_API_URL

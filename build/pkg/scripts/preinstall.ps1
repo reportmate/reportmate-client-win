@@ -61,26 +61,41 @@ function Invoke-Bounded {
     }
 }
 
-$reportMateTasks = @(Invoke-Bounded -What 'the ReportMate scheduled-task lookup' -Action {
-    Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-        $_.TaskName -like '*ReportMate*' -or
-        $_.Description -like '*ReportMate*' -or
-        $_.TaskName -like '*Report*Mate*'
-    } | Select-Object TaskName, TaskPath, State
+# Tasks are looked up by exact name through the Task Scheduler COM API, never
+# by enumerating the store. One broken entry anywhere in the store (another
+# product's task whose definition file is gone) makes every enumeration
+# throw, and with -ErrorAction SilentlyContinue the old lookup returned a
+# truncated list that silently missed every ReportMate task. Keep the name
+# list in step with postinstall.ps1.
+$ReportMateTaskNames = @(
+    'ReportMate Hourly Collection'
+    'ReportMate 4-Hourly Collection'
+    'ReportMate Daily Collection'
+    'ReportMate All Modules Collection'
+    'ReportMate User Session Tracker'
+    # Retired names an older build may have left behind
+    'ReportMate Data Collection'
+    'ReportMate Data Transmission'
+    'ReportMate Usage Tracker'
+)
+
+$disabled = @(Invoke-Bounded -What 'disabling the ReportMate scheduled tasks' -Action {
+    $service = New-Object -ComObject Schedule.Service
+    $service.Connect()
+    $folder = $service.GetFolder('\')
+    foreach ($name in $using:ReportMateTaskNames) {
+        try { $task = $folder.GetTask($name) } catch { continue }
+        try {
+            $task.Enabled = $false
+            # TASK_STATE_RUNNING
+            if ($task.State -eq 4) { $task.Stop(0) }
+            $name
+        } catch { }
+    }
 })
 
-foreach ($task in $reportMateTasks) {
-    if (-not $task) { continue }
-
-    $state = $task.State
-    Invoke-Bounded -What "disabling task '$($task.TaskName)'" -Action {
-        Disable-ScheduledTask -TaskName $using:task.TaskName -TaskPath $using:task.TaskPath -ErrorAction SilentlyContinue | Out-Null
-        if ($using:state -eq 'Running') {
-            Stop-ScheduledTask -TaskName $using:task.TaskName -TaskPath $using:task.TaskPath -ErrorAction SilentlyContinue
-        }
-    } | Out-Null
-
-    Write-Host "  Disabled task: $($task.TaskName)"
+foreach ($name in $disabled) {
+    if ($name) { Write-Host "  Disabled task: $name" }
 }
 
 # ----------------------------------------------------------------------------

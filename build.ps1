@@ -169,7 +169,10 @@ function Get-SigningCertThumbprint {
     # and match any certificate in the store, so refuse rather than sign with
     # whatever happens to be first.
     if ([string]::IsNullOrWhiteSpace($Global:EnterpriseCertCN)) {
-        Write-Error "ENTERPRISE_CERT_CN is not set; cannot select a signing certificate."
+        # Write-Host, not this script's Write-Error: that one is redefined above
+        # to Write-Output, so its message became the function's return value and
+        # was used as a thumbprint.
+        Write-Host "ENTERPRISE_CERT_CN is not set; cannot select a signing certificate." -ForegroundColor Yellow
         return $null
     }
 
@@ -424,7 +427,8 @@ if (-not $Version) {
 # ──────────────────────────  SIGNING DECISION  ─────────────────
 # Auto-detect enterprise certificate if available and enforce signing by default
 $autoDetectedThumbprint = $null
-if (-not $NoSign) {
+# An explicit -Thumbprint wins; auto-detection only fills in a missing one.
+if (-not $NoSign -and -not $Thumbprint) {
     try {
         $autoDetectedThumbprint = Get-SigningCertThumbprint
         if ($autoDetectedThumbprint) {
@@ -1005,12 +1009,18 @@ $coreTaskLogic
     Write-Host "✅ Scheduled tasks installed successfully"
     
 } catch {
-    Write-Warning "Failed to create scheduled tasks: `$_"
+    # Task registration is must-have, as in the MSI postinstall: without the
+    # tasks the client never runs, so fail the install rather than warn.
+    Write-Host "Failed to create scheduled tasks: `$_" -ForegroundColor Red
+    exit 1
 }
 "@
         
         # Replace the placeholder with the comprehensive logic
-        $enhancedPostinstallContent = $basePostinstallContent -replace 'INLINE_SCHEDULED_TASKS_PLACEHOLDER', $scheduledTasksContent
+        # String.Replace, not -replace: in a regex replacement `$_` means the whole
+        # input, so every `$_` in the inlined task code pasted a full copy of the
+        # template there and the generated postinstall did not parse.
+        $enhancedPostinstallContent = $basePostinstallContent.Replace('INLINE_SCHEDULED_TASKS_PLACEHOLDER', $scheduledTasksContent)
         
         # Write the enhanced postinstall.ps1 (will be restored to clean template after NUPKG build)
         Set-Content $postinstallTemplatePath $enhancedPostinstallContent -Encoding UTF8 -NoNewline

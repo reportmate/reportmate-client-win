@@ -18,6 +18,56 @@ Write-Host "============================================="
 
 $InstallDir = "C:\Program Files\ReportMate"
 
+# ----------------------------------------------------------------------------
+# ReportMate scheduled tasks are addressed by exact name through the Task
+# Scheduler COM API, never found by enumerating the task store. One broken
+# entry anywhere in the store -- typically another product's task whose
+# definition file is gone ("Task cannot be loaded") -- makes every
+# enumeration throw 0x80070002. Get-ScheduledTask -TaskName and
+# Unregister-ScheduledTask enumerate underneath, so they fail too, while
+# GetTask/DeleteTask by name are unaffected. Before this, that one entry
+# failed every install with 1603 and left the device without a runner.
+# Keep this block in step with build/resources/install-tasks.ps1,
+# build/resources/uninstall-tasks.ps1 and preinstall.ps1.
+# ----------------------------------------------------------------------------
+$ReportMateTaskNames = @(
+    'ReportMate Hourly Collection'
+    'ReportMate 4-Hourly Collection'
+    'ReportMate Daily Collection'
+    'ReportMate All Modules Collection'
+    'ReportMate User Session Tracker'
+    # Retired names an older build may have left behind
+    'ReportMate Data Collection'
+    'ReportMate Data Transmission'
+    'ReportMate Usage Tracker'
+)
+
+function Get-ReportMateTaskFolder {
+    $service = New-Object -ComObject Schedule.Service
+    $service.Connect()
+    return $service.GetFolder('\')
+}
+
+function Get-ReportMateTask {
+    param($Folder, [string]$Name)
+    try { return $Folder.GetTask($Name) } catch { return $null }
+}
+
+function Remove-ReportMateTask {
+    param($Folder, [string]$Name)
+    try {
+        $Folder.DeleteTask($Name, 0)
+        Write-Host "  Removed existing task: $Name"
+    } catch {
+        # 0x80070002 is "no task by that name", the normal case. DeleteTask
+        # also clears a ReportMate entry that is itself broken, which
+        # Register-ScheduledTask -Force cannot replace.
+        if ($_.Exception.HResult -ne -2147024894) {
+            Write-Warning "Could not remove task '$Name': $($_.Exception.Message)"
+        }
+    }
+}
+
 try {
 
 # ----------------------------------------------------------------------------
@@ -148,7 +198,9 @@ if (Test-Path $envFile) {
 
 $PROD_API_URL = if ($env:REPORTMATE_API_URL) { $env:REPORTMATE_API_URL } else { $env:PROD_API_URL }
 $PROD_PASSPHRASE = if ($env:REPORTMATE_PASSPHRASE) { $env:REPORTMATE_PASSPHRASE } else { $env:PROD_PASSPHRASE }
-$AUTO_CONFIGURE = if (-not [string]::IsNullOrEmpty($env:REPORTMATE_AUTO_CONFIGURE)) { [bool]::Parse($env:REPORTMATE_AUTO_CONFIGURE) } else { $true }
+# [bool]::Parse throws on anything but true/false, and under Stop that turned a
+# value such as "1" in the environment into a failed install.
+$AUTO_CONFIGURE = $env:REPORTMATE_AUTO_CONFIGURE -notmatch '^\s*(false|0|no|off)\s*$'
 
 if ([string]::IsNullOrEmpty($env:PROD_API_URL) -and [string]::IsNullOrEmpty($PROD_API_URL)) {
     Write-Warning "PROD_API_URL environment variable not provided. ReportMate will rely on existing registry or manual configuration."
@@ -361,16 +413,18 @@ Write-Host "Installing ReportMate scheduled tasks..."
 try {
     $InstallPath = "C:\Program Files\ReportMate"
     
-    # Remove any existing ReportMate tasks
-    Get-ScheduledTask | Where-Object { 
-        $_.TaskName -like "*ReportMate*" -or 
-        $_.Description -like "*ReportMate*" -or
-        $_.TaskName -like "*Report*Mate*"
-    } | ForEach-Object {
-        Write-Host "  Removing existing task: $($_.TaskName)"
-        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    # Remove existing ReportMate tasks by name. A removal that fails only
+    # warns: -Force on Register replaces a healthy task anyway, and a real
+    # problem surfaces as a registration error below.
+    try {
+        $taskFolder = Get-ReportMateTaskFolder
+        foreach ($taskName in $ReportMateTaskNames) {
+            Remove-ReportMateTask -Folder $taskFolder -Name $taskName
+        }
+    } catch {
+        Write-Warning "Could not remove existing ReportMate tasks: $_"
     }
-    
+
     # Load module schedules configuration. Guaranteed present by the
     # payload presence check at the top of this script.
     $scheduleConfigPath = Join-Path $InstallPath "module-schedules.json"
@@ -530,19 +584,25 @@ $cimianDestination = "C:\Program Files\Cimian"
 
 if (Test-Path $cimianReportMateDir) {
     Write-Host "Setting up Cimian integration..."
-    
-    # Create Cimian destination directory
-    New-Item -ItemType Directory -Path $cimianDestination -Force | Out-Null
-    
-    # Copy files from ReportMate\cimian to C:\Program Files\Cimian
-    Get-ChildItem $cimianReportMateDir -File | ForEach-Object {
-        $destPath = Join-Path $cimianDestination $_.Name
-        Copy-Item $_.FullName $destPath -Force
-        Write-Host "Copied $($_.Name) from ReportMate\cimian to C:\Program Files\Cimian"
+
+    # Nice-to-have: a file held open in the Cimian directory must not fail
+    # the ReportMate install. Each file is copied on its own so one lock
+    # costs only that file.
+    try {
+        New-Item -ItemType Directory -Path $cimianDestination -Force | Out-Null
+        Get-ChildItem $cimianReportMateDir -File | ForEach-Object {
+            $destPath = Join-Path $cimianDestination $_.Name
+            try {
+                Copy-Item $_.FullName $destPath -Force
+                Write-Host "Copied $($_.Name) from ReportMate\cimian to C:\Program Files\Cimian"
+            } catch {
+                Write-Warning "Could not copy $($_.Name) to C:\Program Files\Cimian: $_"
+            }
+        }
+        Write-Host "Cimian integration files installed"
+    } catch {
+        Write-Warning "Cimian integration setup failed: $_"
     }
-    
-    Write-Host "Cimian integration files installed successfully"
-    Write-Host "   Final location: C:\Program Files\Cimian (single copy only)"
 } else {
     Write-Verbose "No Cimian integration directory found at: $cimianReportMateDir"
 }
@@ -618,21 +678,33 @@ if (-not (Test-Path $osqueryPath)) {
 }
 
 # VALIDATION & TESTING
-$TestResult = & "C:\Program Files\ReportMate\managedreportsrunner.exe" info 2>&1
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "Installation test successful"
-} else {
-    Write-Warning "Installation test failed: $TestResult"
+# Both steps only report. Under Stop, Windows PowerShell turns any stderr
+# line from a native command redirected with 2>&1 into a terminating error,
+# so an unguarded smoke test could fail an install whose tasks are already
+# registered.
+try {
+    $TestResult = & "C:\Program Files\ReportMate\managedreportsrunner.exe" info 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Installation test successful"
+    } else {
+        Write-Warning "Installation test failed: $TestResult"
+    }
+} catch {
+    Write-Warning "Installation test could not run: $_"
 }
 
 # Run initial collection immediately so the device appears in ReportMate right away
 Write-Host "Running initial inventory and system collection..."
-$logDir = "C:\ProgramData\ManagedReports\logs"
-if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
-Start-Process -FilePath "C:\Program Files\ReportMate\managedreportsrunner.exe" `
-    -ArgumentList "--run-modules", "inventory,system" `
-    -WindowStyle Hidden `
-    -PassThru | Out-Null
+try {
+    $logDir = "C:\ProgramData\ManagedReports\logs"
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    Start-Process -FilePath "C:\Program Files\ReportMate\managedreportsrunner.exe" `
+        -ArgumentList "--run-modules", "inventory,system" `
+        -WindowStyle Hidden `
+        -PassThru | Out-Null
+} catch {
+    Write-Warning "Could not start the initial collection; the scheduled tasks will run it: $_"
+}
 
 Write-Host "Post-installation script completed"
 Write-Host ""
@@ -669,11 +741,13 @@ catch {
     # still exist so the worst case after a failed install is the previous
     # task set running against whichever binary is on disk.
     try {
-        Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
-            $_.TaskName -like '*ReportMate*' -and -not $_.Settings.Enabled
-        } | ForEach-Object {
-            Enable-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction SilentlyContinue | Out-Null
-            Write-Host "Re-enabled task after failed install: $($_.TaskName)"
+        $taskFolder = Get-ReportMateTaskFolder
+        foreach ($taskName in $ReportMateTaskNames) {
+            $task = Get-ReportMateTask -Folder $taskFolder -Name $taskName
+            if ($task -and -not $task.Enabled) {
+                $task.Enabled = $true
+                Write-Host "Re-enabled task after failed install: $taskName"
+            }
         }
     } catch {
         Write-Warning "Could not re-enable scheduled tasks after failure: $_"
@@ -682,4 +756,4 @@ catch {
     exit 1
 }
 
-exit 0
+exit 0

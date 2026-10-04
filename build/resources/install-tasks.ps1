@@ -44,17 +44,50 @@ function Enable-ReportMateKernelProcessLog {
 $ProcessLogEnabled = Enable-ReportMateKernelProcessLog
 
 try {
-    # First, remove any existing ReportMate tasks to prevent duplicates
+    # First, remove any existing ReportMate tasks to prevent duplicates.
+    #
+    # build.ps1 inlines everything from the line above into the NUPKG
+    # postinstall, so the helpers below live inside it.
+    #
+    # Tasks are addressed by exact name through the Task Scheduler COM API,
+    # never found by enumerating the store. One broken entry anywhere in the
+    # store -- typically another product's task whose definition file is
+    # gone -- makes every enumeration throw 0x80070002, and that includes
+    # Get-ScheduledTask -TaskName and Unregister-ScheduledTask, which
+    # enumerate underneath. GetTask/DeleteTask by name are unaffected. Keep
+    # this in step with build/pkg/scripts/postinstall.ps1.
+    $ReportMateTaskNames = @(
+        'ReportMate Hourly Collection'
+        'ReportMate 4-Hourly Collection'
+        'ReportMate Daily Collection'
+        'ReportMate All Modules Collection'
+        'ReportMate User Session Tracker'
+        # Retired names an older build may have left behind
+        'ReportMate Data Collection'
+        'ReportMate Data Transmission'
+        'ReportMate Usage Tracker'
+    )
+
     Write-Host "Removing any existing ReportMate tasks..."
-    Get-ScheduledTask | Where-Object { 
-        $_.TaskName -like "*ReportMate*" -or 
-        $_.Description -like "*ReportMate*" -or
-        $_.TaskName -like "*Report*Mate*"
-    } | ForEach-Object {
-        Write-Host "  Removing existing task: $($_.TaskName)"
-        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    try {
+        $taskService = New-Object -ComObject Schedule.Service
+        $taskService.Connect()
+        $taskFolder = $taskService.GetFolder('\')
+        foreach ($taskName in $ReportMateTaskNames) {
+            try {
+                $taskFolder.DeleteTask($taskName, 0)
+                Write-Host "  Removed existing task: $taskName"
+            } catch {
+                # 0x80070002 is "no task by that name", the normal case.
+                if ($_.Exception.HResult -ne -2147024894) {
+                    Write-Warning "Could not remove task '$taskName': $($_.Exception.Message)"
+                }
+            }
+        }
+    } catch {
+        Write-Warning "Could not remove existing ReportMate tasks: $_"
     }
-    
+
     # Load module schedules configuration
     $scheduleConfigPath = Join-Path $InstallPath "module-schedules.json"
     if (Test-Path $scheduleConfigPath) {
@@ -129,7 +162,7 @@ try {
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable -Hidden -AllowStartIfOnBatteries
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     
-    Register-ScheduledTask -TaskName "ReportMate Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits security-critical device data hourly, at a per-device random offset within the hour" -Force
+    Register-ScheduledTask -TaskName "ReportMate Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits security-critical device data hourly, at a per-device random offset within the hour" -Force -ErrorAction Stop
     
     # Create 4-hourly collection task  
     Write-Host "Creating 4-hourly collection task..."
@@ -139,7 +172,7 @@ try {
     $fourHourlyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.every4hours 55
     $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 4) -RandomDelay $fourHourlyDelay
     
-    Register-ScheduledTask -TaskName "ReportMate 4-Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits moderately changing device data every 4 hours, at a per-device random offset" -Force
+    Register-ScheduledTask -TaskName "ReportMate 4-Hourly Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits moderately changing device data every 4 hours, at a per-device random offset" -Force -ErrorAction Stop
     
     # Create daily collection task
     Write-Host "Creating daily collection task..."
@@ -149,7 +182,7 @@ try {
     $dailyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.daily 120
     $trigger = New-ScheduledTaskTrigger -Daily -At "09:00" -RandomDelay $dailyDelay
     
-    Register-ScheduledTask -TaskName "ReportMate Daily Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits static device data once daily, at a per-device random offset within 2 hours of 09:00" -Force
+    Register-ScheduledTask -TaskName "ReportMate Daily Collection" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "Collects and transmits static device data once daily, at a per-device random offset within 2 hours of 09:00" -Force -ErrorAction Stop
     
     # Create all modules collection task (if configured)
     if ($scheduleConfig.schedules.all) {
@@ -186,7 +219,7 @@ try {
         $allModulesSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable -Hidden -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
         $windowEnd = $startAt.AddMinutes($randomDelayMinutes)
-        Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $allModulesSettings -Principal $principal -Description "Collects and transmits data from all available modules, once daily between $($startAt.ToString('HH:mm')) and $($windowEnd.ToString('HH:mm'))" -Force
+        Register-ScheduledTask -TaskName "ReportMate All Modules Collection" -Action $action -Trigger $trigger -Settings $allModulesSettings -Principal $principal -Description "Collects and transmits data from all available modules, once daily between $($startAt.ToString('HH:mm')) and $($windowEnd.ToString('HH:mm'))" -Force -ErrorAction Stop
     }
     
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -229,7 +262,7 @@ try {
                 -Settings $trackerSettings `
                 -Principal $trackerPrincipal `
                 -Description "Tracks per-user foreground + active application time so utilization reports reflect actual use rather than process lifetime." `
-                -Force | Out-Null
+                -Force -ErrorAction Stop | Out-Null
             Write-Host "✅ User session tracker task registered"
         } catch {
             Write-Warning "Failed to register user session tracker task: $_"
