@@ -71,11 +71,10 @@ namespace ReportMate.WindowsClient.Models.Modules
 
         /// <summary>
         /// Drive letters of the volumes carved out of this physical disk ("C", "D"),
-        /// from the partition map. Working state used to find the disk that hosts the
-        /// system volume - the reported Name is a hardware model and cannot identify it.
-        /// Not serialized: the wire shape stays identical for both platforms.
+        /// from the partition map. Finds the disk that hosts the system volume - the
+        /// reported Name is a hardware model and cannot identify it - and lets reports
+        /// label which disk is C:. Windows only; other platforms leave it empty.
         /// </summary>
-        [JsonIgnore]
         public List<string> VolumeLetters { get; set; } = new();
 
         // Storage Management - Directory-level analysis
