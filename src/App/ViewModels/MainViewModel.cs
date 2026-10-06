@@ -73,39 +73,43 @@ public partial class MainViewModel : ObservableObject
     // ── Unlock ───────────────────────────────────────────────────
 
     /// <summary>
-    /// Whether the app runs elevated. Credentials live in a key only SYSTEM and
-    /// Administrators can read, so their saved state is shown only once unlocked.
+    /// Settings and credentials live in HKLM, so only an elevated app can change them or see
+    /// whether a credential is saved. Unelevated, Prefs is read-only and Unlock relaunches
+    /// the app through UAC on this tab.
     /// </summary>
-    public bool IsElevated { get; } = DetectElevation();
+    public bool IsElevated { get; } = PrefsElevation.IsProcessElevated();
 
-    public bool CanUnlock => !IsElevated;
+    public bool IsReadOnly => !IsElevated;
 
-    private static bool DetectElevation()
-    {
-        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-        return new System.Security.Principal.WindowsPrincipal(identity)
-            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
-    }
+    [ObservableProperty] private string _unlockError = "";
 
-    /// <summary>Restarts the app elevated; stays open if the UAC prompt is declined.</summary>
+    public bool HasUnlockError => !string.IsNullOrEmpty(UnlockError);
+
+    partial void OnUnlockErrorChanged(string value) => OnPropertyChanged(nameof(HasUnlockError));
+
+    /// <summary>Relaunches the app elevated on Prefs and closes this one; stays open if UAC is declined.</summary>
     [RelayCommand]
     private void Unlock()
     {
+        UnlockError = "";
         try
         {
-            var path = Environment.ProcessPath;
-            if (path is null) return;
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(exe))
             {
-                FileName = path,
-                UseShellExecute = true,
-                Verb = "runas",
-            });
+                UnlockError = "Could not find the app's own executable to relaunch.";
+                return;
+            }
+            System.Diagnostics.Process.Start(PrefsElevation.BuildElevatedRelaunch(exe));
             Microsoft.UI.Xaml.Application.Current.Exit();
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (Exception ex) when (PrefsElevation.IsElevationCancelled(ex))
         {
-            // Elevation declined.
+            // UAC prompt dismissed: stay read-only.
+        }
+        catch (Exception ex)
+        {
+            UnlockError = $"Could not relaunch as administrator: {ex.Message}";
         }
     }
 
@@ -156,6 +160,24 @@ public partial class MainViewModel : ObservableObject
     public bool IsMaxRetryLocked => _managedKeys.Contains("MaxRetryAttempts");
     public bool IsUserAgentLocked => _managedKeys.Contains("UserAgent");
     public bool IsProxyUrlLocked => _managedKeys.Contains("ProxyUrl");
+
+    // ── Edit State (for x:Bind): elevated and not managed by policy ──
+
+    public bool CanEditApiUrl => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ApiUrl"));
+    public bool CanEditApiKey => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ApiKey"));
+    public bool CanEditPassphrase => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("Passphrase"));
+    public bool CanEditDeviceId => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("DeviceId"));
+    public bool CanEditCollectionInterval => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("CollectionIntervalSeconds"));
+    public bool CanEditMaxDataAge => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("MaxDataAgeMinutes"));
+    public bool CanEditApiTimeout => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ApiTimeoutSeconds"));
+    public bool CanEditOsQueryPath => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("OsQueryPath"));
+    public bool CanEditStorageMode => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("StorageMode"));
+    public bool CanEditDebugLogging => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("DebugLogging"));
+    public bool CanEditCimianIntegration => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("CimianIntegrationEnabled"));
+    public bool CanEditSkipCertValidation => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("SkipCertificateValidation"));
+    public bool CanEditMaxRetry => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("MaxRetryAttempts"));
+    public bool CanEditUserAgent => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("UserAgent"));
+    public bool CanEditProxyUrl => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ProxyUrl"));
 
     // ── Save Status Display (for x:Bind) ────────────────────────
 
@@ -229,6 +251,7 @@ public partial class MainViewModel : ObservableObject
         nameof(ApiKeyPlaceholderText), nameof(PassphrasePlaceholderText),
         nameof(CollectionIntervalValue), nameof(MaxDataAgeValue),
         nameof(ApiTimeoutValue), nameof(MaxRetryValue), nameof(VersionDisplay),
+        nameof(UnlockError), nameof(HasUnlockError),
         "", // string.Empty from Load's bulk notify
     ];
 
@@ -236,7 +259,8 @@ public partial class MainViewModel : ObservableObject
     {
         base.OnPropertyChanged(e);
 
-        if (_isLoading || _nonSettingProperties.Contains(e.PropertyName ?? ""))
+        // Read-only until unlocked: nothing is saved from an unelevated app.
+        if (_isLoading || !IsElevated || _nonSettingProperties.Contains(e.PropertyName ?? ""))
             return;
 
         _autoSaveTimer?.Dispose();

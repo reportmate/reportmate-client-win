@@ -3,6 +3,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ReportMate.App.Services;
+using ReportMate.Shared;
 
 namespace ReportMate.App.ViewModels;
 
@@ -112,12 +113,14 @@ public partial class LogsViewModel : ObservableObject
         catch (IOException) { }
     }
 
-    private static LogLineColor GetLineColor(string line)
+    // The runner's log tags levels Serilog-style ([ERR], [WRN], ...), which the old
+    // checks never matched, so every line rendered in the default colour.
+    private static LogLineColor GetLineColor(string line) => LogLineLevel.Classify(line) switch
     {
-        if (line.Contains("[Error]") || line.Contains("[ERROR]") || line.Contains("[X]")) return LogLineColor.Error;
-        if (line.Contains("[Warning]") || line.Contains("[WARNING]") || line.Contains("[!]")) return LogLineColor.Warning;
-        if (line.Contains("[Success]") || line.Contains("[SUCCESS]") || line.Contains("[+]")) return LogLineColor.Success;
-        if (line.Contains("[Debug]") || line.Contains("[DEBUG]") || line.Contains("[DBG]")) return LogLineColor.Debug;
-        return LogLineColor.Default;
-    }
+        LogLineKind.Error => LogLineColor.Error,
+        LogLineKind.Warning => LogLineColor.Warning,
+        LogLineKind.Success => LogLineColor.Success,
+        LogLineKind.Debug => LogLineColor.Debug,
+        _ => LogLineColor.Default,
+    };
 }
