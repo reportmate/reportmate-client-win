@@ -279,11 +279,16 @@ public class OsQueryService : IOsQueryService
                 return false;
             }
 
-            // Try to execute a simple query to verify osquery works
+            // `--version` only proves the file is executable. It exits 0 on a
+            // binary that can no longer open its database or run a query on this
+            // OS, which is how a broken osquery stayed invisible: every module
+            // fell through to its fallback and the device reported almost nothing
+            // while still checking in on schedule. Ask the SQL engine to answer a
+            // real query against a real virtual table instead.
             var startInfo = new ProcessStartInfo
             {
                 FileName = _osqueryPath,
-                Arguments = "--version",
+                Arguments = "--json \"SELECT version FROM osquery_info;\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -292,25 +297,79 @@ public class OsQueryService : IOsQueryService
 
             using var process = new Process { StartInfo = startInfo };
             process.Start();
-            
-            var completed = await Task.Run(() => process.WaitForExit(5000));
-            
+
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+
+            // A wedged osquery must not stall the whole collection run.
+            var completed = await Task.Run(() => process.WaitForExit(20000));
+
             if (!completed)
             {
                 try { process.Kill(true); } catch { }
+                _logger.LogWarning(
+                    "osquery did not respond within 20s at {Path} - modules will fall back and may report no data",
+                    _osqueryPath);
                 return false;
             }
 
-            var isAvailable = process.ExitCode == 0;
-            _logger.LogDebug("osquery availability check: {IsAvailable}", isAvailable);
-            
-            return isAvailable;
+            var output = await outputTask;
+            var error = await errorTask;
+
+            if (process.ExitCode != 0)
+            {
+                _logger.LogWarning(
+                    "osquery canary query failed with exit {ExitCode}: {Error} - modules will fall back and may report no data",
+                    process.ExitCode, error?.Trim());
+                return false;
+            }
+
+            var version = ParseCanaryVersion(output);
+            if (string.IsNullOrWhiteSpace(version))
+            {
+                _logger.LogWarning(
+                    "osquery ran but the canary query returned no usable rows - modules will fall back and may report no data");
+                return false;
+            }
+
+            _logger.LogDebug("osquery availability check: healthy, version {Version}", version);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Error checking osquery availability");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Pull the version out of the canary query's JSON. Returns null when the
+    /// output is not the single-row result the query should produce.
+    /// </summary>
+    private static string ParseCanaryVersion(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(output);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
+            foreach (var row in doc.RootElement.EnumerateArray())
+            {
+                if (row.TryGetProperty("version", out var v) &&
+                    v.ValueKind == JsonValueKind.String)
+                {
+                    var s = v.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) return s;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
     }
 
     public async Task<string> GetOsQueryVersionAsync()
