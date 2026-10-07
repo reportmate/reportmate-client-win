@@ -22,16 +22,12 @@
     <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
   </PropertyGroup>
 
-  <!-- Build timestamp for version display -->
+  <!-- Version: build.ps1 passes the release stamp as VersionPrefix, the same one the
+       runner and the packages get; a local build stamps the current time. The app shows
+       the informational version, so it matches the files. -->
   <PropertyGroup>
-    <BuildTimestamp>$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</BuildTimestamp>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">$([System.DateTime]::Now.ToString("yyyy.MM.dd.HHmm"))</VersionPrefix>
   </PropertyGroup>
-  <ItemGroup>
-    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
-      <_Parameter1>BuildTimestamp</_Parameter1>
-      <_Parameter2>$(BuildTimestamp)</_Parameter2>
-    </AssemblyAttribute>
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.7.250401001" />
@@ -44,10 +40,9 @@
     <Compile Include="..\Shared\**\*.cs" LinkBase="Shared" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('Assets\ReportMate.png')">
+  <!-- The window and the Prefs header use these; the build fails if they are missing. -->
+  <ItemGroup>
     <Content Include="Assets\ReportMate.png" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-  <ItemGroup Condition="Exists('Assets\ReportMate.ico')">
     <Content Include="Assets\ReportMate.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

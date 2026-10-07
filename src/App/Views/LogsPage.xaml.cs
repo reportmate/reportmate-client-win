@@ -14,11 +14,12 @@ public sealed partial class LogsPage : Page
     public LogsPage()
     {
         InitializeComponent();
-        _vm.FilteredLines.CollectionChanged += (_, _) => RenderContent();
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(LogsViewModel.SelectedLog))
                 SyncSelection();
+            else if (e.PropertyName == nameof(LogsViewModel.Lines))
+                RenderContent();
         };
     }
 
@@ -72,7 +73,17 @@ public sealed partial class LogsPage : Page
     private void RenderContent()
     {
         LogContent.Blocks.Clear();
-        foreach (var line in _vm.FilteredLines)
+        if (_vm.MatchingLines > _vm.Lines.Count)
+        {
+            var note = new Paragraph { Margin = new Thickness(0, 0, 0, 8) };
+            note.Inlines.Add(new Run
+            {
+                Text = $"Showing the last {_vm.Lines.Count:N0} of {_vm.MatchingLines:N0} lines. Open in Editor to see them all.",
+            });
+            note.Foreground = BrushForColor(LogsViewModel.LogLineColor.Debug);
+            LogContent.Blocks.Add(note);
+        }
+        foreach (var line in _vm.Lines)
         {
             var paragraph = new Paragraph();
             paragraph.Inlines.Add(new Run { Text = line.Text });

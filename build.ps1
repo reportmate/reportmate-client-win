@@ -831,7 +831,7 @@ $AppProject = Join-Path $SrcDir "App\ReportMate.App.csproj"
 $AppProjectDir = Split-Path $AppProject
 $AppPublishDir = Join-Path $RootDir ".publish-app"
 $AppExeName = "Managed Reports Runner.exe"
-$AppRequiredFiles = @($AppExeName, "resources.pri")
+$AppRequiredFiles = @($AppExeName, "resources.pri", "Assets\ReportMate.png", "Assets\ReportMate.ico")
 
 function Publish-AppResources {
     param(

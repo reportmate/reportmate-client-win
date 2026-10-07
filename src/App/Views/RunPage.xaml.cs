@@ -11,13 +11,16 @@ public sealed partial class RunPage : Page
 {
     private readonly RunViewModel _vm;
 
+    // The console keeps the newest lines only; the full run is in the log on the Logs tab.
+    private const int MaxConsoleLines = 2000;
+
     public RunPage()
     {
         InitializeComponent();
 
         _vm = new RunViewModel(DispatcherQueue.GetForCurrentThread());
         _vm.PropertyChanged += OnViewModelPropertyChanged;
-        _vm.OutputLines.CollectionChanged += (_, _) => ScrollToBottom();
+        _vm.LinesAppended += OnLinesAppended;
 
         ModuleRepeater.ItemsSource = _vm.Modules;
     }
@@ -152,17 +155,36 @@ public sealed partial class RunPage : Page
         ResultBanner.IsOpen = true;
     }
 
+    // Rebuilds the console: only when the filter changes or the output is cleared.
     private void UpdateConsoleItems()
     {
         ConsoleOutput.Blocks.Clear();
-        foreach (var line in _vm.FilteredLines)
+        foreach (var line in _vm.FilteredLines.TakeLast(MaxConsoleLines))
+            ConsoleOutput.Blocks.Add(ParagraphFor(line));
+        ScrollToBottom();
+    }
+
+    // Each batch from the run is appended, so the cost of a line does not grow with the
+    // length of the run.
+    private void OnLinesAppended(IReadOnlyList<RunViewModel.OutputLine> lines)
+    {
+        foreach (var line in lines)
         {
-            var paragraph = new Paragraph();
-            paragraph.Inlines.Add(new Run { Text = line.Text });
-            paragraph.Foreground = BrushForLevel(line.Level);
-            paragraph.Margin = new Thickness(0, 1, 0, 1);
-            ConsoleOutput.Blocks.Add(paragraph);
+            if (!_vm.ShowDebug && line.Level == RunViewModel.LogLevel.Debug) continue;
+            ConsoleOutput.Blocks.Add(ParagraphFor(line));
         }
+        while (ConsoleOutput.Blocks.Count > MaxConsoleLines)
+            ConsoleOutput.Blocks.RemoveAt(0);
+        ScrollToBottom();
+    }
+
+    private static Paragraph ParagraphFor(RunViewModel.OutputLine line)
+    {
+        var paragraph = new Paragraph();
+        paragraph.Inlines.Add(new Run { Text = line.Text });
+        paragraph.Foreground = BrushForLevel(line.Level);
+        paragraph.Margin = new Thickness(0, 1, 0, 1);
+        return paragraph;
     }
 
     private void ScrollToBottom()
