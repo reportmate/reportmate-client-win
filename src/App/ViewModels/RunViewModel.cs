@@ -168,8 +168,9 @@ public partial class RunViewModel : ObservableObject
 
             AppendLine($"[i] managedreportsrunner started (PID: {_cliProcess.Id})", LogLevel.Info);
 
-            // Tail the log file in background
-            var tailTask = TailLogFileAsync(logDir, existingLogs, runStartUtc, _cts.Token);
+            // Tail the log file on a worker thread
+            var token = _cts.Token;
+            var tailTask = Task.Run(() => TailLogFileAsync(logDir, existingLogs, runStartUtc, token), CancellationToken.None);
 
             await _cliProcess.WaitForExitAsync(_cts.Token);
             LastExitCode = _cliProcess.ExitCode;
@@ -233,6 +234,8 @@ public partial class RunViewModel : ObservableObject
 
     // ── Log File Tailer ────────────────────────────────────────────
 
+    // Runs on a worker thread: reading the log and classifying lines never blocks the UI,
+    // and each poll hands the UI one batch rather than one dispatch per line.
     private async Task TailLogFileAsync(string logDir, IReadOnlyDictionary<string, long> existingLogs, DateTime runStartUtc, CancellationToken ct)
     {
         // Wait for the run's first log line, for as long as the run lasts: at the default
@@ -251,55 +254,67 @@ public partial class RunViewModel : ObservableObject
             return;
         }
 
-        var logFile = runLog.Path;
-        AppendLine($"[i] Tailing: {Path.GetFileName(logFile)}", LogLevel.Debug);
+        var seen = new List<string>(existingLogs.Keys) { runLog.Path };
+        var tail = new LogTail(runLog.Path, runLog.StartOffset);
+        AppendLine($"[i] Tailing: {Path.GetFileName(tail.Path)}", LogLevel.Debug);
 
-        long lastPosition = runLog.StartOffset;
-        while (!ct.IsCancellationRequested)
+        while (true)
         {
-            try
+            var lines = tail.ReadNewLines();
+            if (lines.Count > 0)
             {
-                using var fs = new FileStream(logFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                if (fs.Length > lastPosition)
-                {
-                    fs.Position = lastPosition;
-                    using var reader = new StreamReader(fs);
-                    string? line;
-                    while ((line = await reader.ReadLineAsync(ct)) is not null)
-                    {
-                        if (!string.IsNullOrWhiteSpace(line))
-                            AppendLine(line, ParseLogLevel(line));
-                    }
-                    lastPosition = fs.Position;
-                }
+                AppendLines(lines.Select(line => new OutputLine(line, ParseLogLevel(line))).ToList());
             }
-            catch (IOException) { }
+            else if (RunLogLocator.FindNewerLog(logDir, seen, runStartUtc) is { } next)
+            {
+                // The runner moved on to a new file (day rollover or size limit).
+                seen.Add(next);
+                tail = new LogTail(next, 0);
+                AppendLine($"[i] Tailing: {Path.GetFileName(next)}", LogLevel.Debug);
+                continue;
+            }
 
-            await Task.Delay(300, ct);
+            if (ct.IsCancellationRequested) break;
+            try { await Task.Delay(300, ct); }
+            catch (OperationCanceledException) { }
         }
+
+        // One last read after the run ends, so its final lines are not lost.
+        var last = tail.ReadNewLines();
+        if (last.Count > 0)
+            AppendLines(last.Select(line => new OutputLine(line, ParseLogLevel(line))).ToList());
     }
 
     // ── Helpers ──────────────────────────────────────────────────
 
-    private void AppendLine(string text, LogLevel level)
+    private void AppendLine(string text, LogLevel level) => AppendLines([new OutputLine(text, level)]);
+
+    /// <summary>Raised on the UI thread with each batch of lines added to <see cref="OutputLines"/>.</summary>
+    public event Action<IReadOnlyList<OutputLine>>? LinesAppended;
+
+    private void AppendLines(IReadOnlyList<OutputLine> lines)
     {
+        if (lines.Count == 0) return;
         _dispatcher.TryEnqueue(() =>
         {
-            OutputLines.Add(new OutputLine(text, level));
-            OnPropertyChanged(nameof(FilteredLines));
-
-            // Track progress from [PROGRESS] lines
-            if (text.Contains("[PROGRESS]"))
+            foreach (var line in lines)
             {
-                StepCount++;
-                var idx = text.IndexOf("[PROGRESS]", StringComparison.Ordinal) + "[PROGRESS]".Length;
-                var detail = text[idx..].TrimStart(':', ' ');
-                if (!string.IsNullOrWhiteSpace(detail))
-                    CurrentItemName = detail;
-            }
+                OutputLines.Add(line);
 
-            if (level == LogLevel.Error)
-                ErrorCount++;
+                // Track progress from [PROGRESS] lines
+                if (line.Text.Contains("[PROGRESS]"))
+                {
+                    StepCount++;
+                    var idx = line.Text.IndexOf("[PROGRESS]", StringComparison.Ordinal) + "[PROGRESS]".Length;
+                    var detail = line.Text[idx..].TrimStart(':', ' ');
+                    if (!string.IsNullOrWhiteSpace(detail))
+                        CurrentItemName = detail;
+                }
+
+                if (line.Level == LogLevel.Error)
+                    ErrorCount++;
+            }
+            LinesAppended?.Invoke(lines);
         });
     }
 

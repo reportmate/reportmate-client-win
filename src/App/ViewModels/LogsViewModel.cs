@@ -15,7 +15,16 @@ public partial class LogsViewModel : ObservableObject
     [ObservableProperty] private string _filterText = string.Empty;
 
     public ObservableCollection<LogFile> LogFiles { get; } = [];
-    public ObservableCollection<LogLine> FilteredLines { get; } = [];
+
+    /// <summary>The lines shown: the newest that match the filter, up to <see cref="MaxShownLines"/>.</summary>
+    public IReadOnlyList<LogLine> Lines { get; private set; } = [];
+
+    /// <summary>How many lines matched in all, which can be more than are shown.</summary>
+    public int MatchingLines { get; private set; }
+
+    public const int MaxShownLines = 2000;
+
+    private CancellationTokenSource? _loadCts;
 
     // ── Log File Model ───────────────────────────────────────────
 
@@ -90,27 +99,35 @@ public partial class LogsViewModel : ObservableObject
     partial void OnSelectedLogChanged(LogFile? value) => LoadLogContent();
     partial void OnFilterTextChanged(string value) => LoadLogContent();
 
-    private void LoadLogContent()
+    // The file is read on a worker thread and shown in one pass, so a large log does not
+    // block the window, and selecting another log cancels a read still in progress.
+    private async void LoadLogContent()
     {
-        FilteredLines.Clear();
+        _loadCts?.Cancel();
+        var cts = _loadCts = new CancellationTokenSource();
+        var path = SelectedLog?.FullPath;
+        var filter = FilterText;
 
-        if (SelectedLog is null) return;
-
-        try
+        IReadOnlyList<LogLine> lines = [];
+        var matching = 0;
+        if (path is not null)
         {
-            using var fs = new FileStream(SelectedLog.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var reader = new StreamReader(fs);
-            string? line;
-            while ((line = reader.ReadLine()) is not null)
+            try
             {
-                if (!string.IsNullOrWhiteSpace(FilterText)
-                    && !line.Contains(FilterText, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                FilteredLines.Add(new LogLine(line, GetLineColor(line)));
+                var result = await Task.Run(() => LogFileReader.ReadLast(path, filter, MaxShownLines, cts.Token), cts.Token);
+                lines = result.Lines.Select(line => new LogLine(line, GetLineColor(line))).ToList();
+                matching = result.MatchingLines;
+            }
+            catch (OperationCanceledException)
+            {
+                return;
             }
         }
-        catch (IOException) { }
+        if (cts.IsCancellationRequested) return;
+
+        Lines = lines;
+        MatchingLines = matching;
+        OnPropertyChanged(nameof(Lines));
     }
 
     // The runner's log tags levels Serilog-style ([ERR], [WRN], ...), which the old

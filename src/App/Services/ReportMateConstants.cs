@@ -52,14 +52,6 @@ public static class ReportMateConstants
         ["system"]       = "System",
     };
 
-    public static string Version
-    {
-        get
-        {
-            var asm = Assembly.GetExecutingAssembly();
-            var ts = asm.GetCustomAttributes<AssemblyMetadataAttribute>()
-                        .FirstOrDefault(a => a.Key == "BuildTimestamp")?.Value;
-            return ts ?? asm.GetName().Version?.ToString() ?? "dev";
-        }
-    }
+    /// <summary>The build version, the same YYYY.MM.DD.HHMM stamp as the runner and installer.</summary>
+    public static string Version => ReportMate.Shared.AppVersion.Display(Assembly.GetExecutingAssembly());
 }

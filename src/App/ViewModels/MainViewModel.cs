@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Dispatching;
 using ReportMate.Shared;
 using ReportMate.App.Services;
 
@@ -11,8 +12,14 @@ namespace ReportMate.App.ViewModels;
 /// </summary>
 public partial class MainViewModel : ObservableObject
 {
-    private System.Threading.Timer? _autoSaveTimer;
+    // Bound properties change only on the UI thread: x:Bind updates from any other thread
+    // throw RPC_E_WRONG_THREAD. The save timer and the status reset both run on it.
+    private readonly DispatcherQueue _dispatcher = DispatcherQueue.GetForCurrentThread();
+    private DispatcherQueueTimer? _autoSaveTimer;
     private bool _isLoading;
+
+    // Settings the user changed since the last save; only these are written.
+    private readonly HashSet<string> _changedSettings = new(StringComparer.Ordinal);
 
     // ── Connection ───────────────────────────────────────────────
 
@@ -239,43 +246,47 @@ public partial class MainViewModel : ObservableObject
         // Notify all bindings
         OnPropertyChanged(string.Empty);
 
+        _changedSettings.Clear();
         _isLoading = false;
     }
 
     // ── Auto-Save ─────────────────────────────────────────────────
-
-    private static readonly HashSet<string> _nonSettingProperties =
-    [
-        nameof(SaveStatus), nameof(SaveStatusGlyph), nameof(SaveStatusMessage),
-        nameof(IsSaveStatusVisible), nameof(HasExistingApiKey), nameof(HasExistingPassphrase),
-        nameof(ApiKeyPlaceholderText), nameof(PassphrasePlaceholderText),
-        nameof(CollectionIntervalValue), nameof(MaxDataAgeValue),
-        nameof(ApiTimeoutValue), nameof(MaxRetryValue), nameof(VersionDisplay),
-        nameof(UnlockError), nameof(HasUnlockError),
-        "", // string.Empty from Load's bulk notify
-    ];
 
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
 
         // Read-only until unlocked: nothing is saved from an unelevated app.
-        if (_isLoading || !IsElevated || _nonSettingProperties.Contains(e.PropertyName ?? ""))
-            return;
+        if (_isLoading || !IsElevated) return;
+        if (PrefsSettingWrites.SettingFor(e.PropertyName) is not { } setting) return;
 
-        _autoSaveTimer?.Dispose();
-        _autoSaveTimer = new System.Threading.Timer(_ =>
+        _changedSettings.Add(setting);
+        if (_autoSaveTimer is null)
         {
-            try
-            {
-                ConfigManager.SaveUserSettings(BuildConfig());
-                SetSaveStatus(SaveState.Saved);
-            }
-            catch
-            {
-                SetSaveStatus(SaveState.Failed);
-            }
-        }, null, 500, System.Threading.Timeout.Infinite);
+            _autoSaveTimer = _dispatcher.CreateTimer();
+            _autoSaveTimer.Interval = TimeSpan.FromMilliseconds(500);
+            _autoSaveTimer.IsRepeating = false;
+            _autoSaveTimer.Tick += (_, _) => SaveChanges();
+        }
+        _autoSaveTimer.Stop();
+        _autoSaveTimer.Start();
+    }
+
+    private void SaveChanges()
+    {
+        var changed = new HashSet<string>(_changedSettings, StringComparer.Ordinal);
+        _changedSettings.Clear();
+        try
+        {
+            ConfigManager.SaveUserSettings(BuildConfig(), changed);
+            SetSaveStatus(SaveState.Saved);
+        }
+        catch
+        {
+            // Keep them, so the next edit tries them again.
+            _changedSettings.UnionWith(changed);
+            SetSaveStatus(SaveState.Failed);
+        }
     }
 
     private void SetSaveStatus(SaveState state)
@@ -283,11 +294,16 @@ public partial class MainViewModel : ObservableObject
         SaveStatus = state;
         if (state is SaveState.Saved or SaveState.Failed)
         {
-            _ = Task.Delay(3000).ContinueWith(_ =>
+            var reset = _dispatcher.CreateTimer();
+            reset.Interval = TimeSpan.FromSeconds(3);
+            reset.IsRepeating = false;
+            reset.Tick += (_, _) =>
             {
+                reset.Stop();
                 if (SaveStatus == state)
                     SaveStatus = SaveState.Idle;
-            }, TaskScheduler.Default);
+            };
+            reset.Start();
         }
     }
 

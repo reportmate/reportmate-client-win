@@ -71,6 +71,27 @@ public static class RunLogLocator
         return grown is null ? null : new RunLog(grown, existing[grown]);
     }
 
+    /// <summary>
+    /// A log created during the run that the app is not already streaming, or null. The
+    /// runner moves to a new file when the day rolls over or the daily file reaches its
+    /// size limit; the app follows it from the start of that file.
+    /// </summary>
+    public static string? FindNewerLog(string logDirectory, IReadOnlyCollection<string> seen, DateTime runStartUtc)
+    {
+        if (!Directory.Exists(logDirectory))
+            return null;
+
+        var notBefore = runStartUtc - TimeSpan.FromSeconds(2);
+        var known = new HashSet<string>(seen, StringComparer.OrdinalIgnoreCase);
+        return Candidates(logDirectory)
+            .Where(path => !known.Contains(path))
+            .Select(path => (Path: path, Created: CreatedUtc(path)))
+            .Where(entry => entry.Created >= notBefore)
+            .OrderBy(entry => entry.Created)
+            .Select(entry => entry.Path)
+            .FirstOrDefault();
+    }
+
     private static IEnumerable<string> Candidates(string logDirectory)
     {
         IEnumerable<string> sessions, flat;

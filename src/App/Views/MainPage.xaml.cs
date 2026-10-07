@@ -17,7 +17,7 @@ public sealed partial class MainPage : Page
             AppContext.BaseDirectory, "Assets", "ReportMate.png");
         if (System.IO.File.Exists(iconPath))
         {
-            AppIcon.Source = new BitmapImage(new Uri(iconPath));
+            AppIcon.Source = new BitmapImage(new Uri(iconPath)) { DecodePixelWidth = 128 };
         }
     }
 

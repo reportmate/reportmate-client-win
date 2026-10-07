@@ -42,53 +42,58 @@ public sealed class ConfigManager
         Config = config;
     }
 
-    /// <summary>
-    /// Save user-editable settings to HKLM\SOFTWARE\ReportMate\Settings. Skips any
-    /// setting policy manages: policy wins anyway, and its field is locked.
-    /// </summary>
-    public static void SaveUserSettings(ReportMateConfig config)
+    // Values written as DWORDs; everything else is a string.
+    private static readonly HashSet<string> DwordValues = new(StringComparer.Ordinal)
     {
-        try
+        "CollectionIntervalSeconds", "MaxDataAgeMinutes", "ApiTimeoutSeconds", "MaxRetryAttempts",
+        "DebugLogging", "CimianIntegrationEnabled", "SkipCertificateValidation",
+    };
+
+    // An empty field for these means "leave the saved value alone".
+    private static readonly HashSet<string> SkipWhenEmpty = new(StringComparer.Ordinal)
+    {
+        "ApiKey", "Passphrase", "DeviceId", "ProxyUrl",
+    };
+
+    /// <summary>
+    /// Save the settings the user changed to HKLM\SOFTWARE\ReportMate\Settings. Writes
+    /// nothing else, and skips any setting policy manages: policy wins anyway, and its
+    /// field is locked. Credentials go to the protected store instead.
+    /// </summary>
+    public static void SaveUserSettings(ReportMateConfig config, IReadOnlySet<string> changed)
+    {
+        var values = new (string Name, object? Value)[]
         {
-            using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
-            using var key = hklm.CreateSubKey(ReportMateConstants.SettingsRegistryPath, true);
-            var policy = PolicyDetector.Instance;
+            ("ApiUrl", config.ApiUrl ?? ""),
+            ("ApiKey", config.ApiKey),
+            ("Passphrase", config.Passphrase),
+            ("DeviceId", config.DeviceId),
+            ("CollectionIntervalSeconds", config.CollectionIntervalSeconds),
+            ("MaxDataAgeMinutes", config.MaxDataAgeMinutes),
+            ("ApiTimeoutSeconds", config.ApiTimeoutSeconds),
+            ("OsQueryPath", config.OsQueryPath ?? ""),
+            ("StorageMode", config.StorageMode ?? "auto"),
+            ("DebugLogging", config.DebugLogging ? 1 : 0),
+            ("CimianIntegrationEnabled", config.CimianIntegrationEnabled ? 1 : 0),
+            ("SkipCertificateValidation", config.SkipCertificateValidation ? 1 : 0),
+            ("MaxRetryAttempts", config.MaxRetryAttempts),
+            ("UserAgent", config.UserAgent ?? ""),
+            ("ProxyUrl", config.ProxyUrl),
+        };
 
-            void Set(string name, object value, RegistryValueKind kind = RegistryValueKind.String)
-            {
-                if (policy.IsManagedByPolicy(name)) return;
-                // Credentials never go to the readable settings key.
-                if (SecretStore.IsSecret(name))
-                    SecretStore.Write(name, value.ToString());
-                else
-                    key.SetValue(name, value, kind);
-            }
+        var policy = PolicyDetector.Instance;
+        var writes = PrefsSettingWrites.Select(values, changed, policy.IsManagedByPolicy, SkipWhenEmpty);
+        if (writes.Count == 0) return;
 
-            Set("ApiUrl", config.ApiUrl ?? "");
-            if (!string.IsNullOrWhiteSpace(config.ApiKey))
-                Set("ApiKey", config.ApiKey);
-            if (!string.IsNullOrWhiteSpace(config.Passphrase))
-                Set("Passphrase", config.Passphrase);
-            if (!string.IsNullOrWhiteSpace(config.DeviceId))
-                Set("DeviceId", config.DeviceId);
-
-            Set("CollectionIntervalSeconds", config.CollectionIntervalSeconds, RegistryValueKind.DWord);
-            Set("MaxDataAgeMinutes", config.MaxDataAgeMinutes, RegistryValueKind.DWord);
-            Set("ApiTimeoutSeconds", config.ApiTimeoutSeconds, RegistryValueKind.DWord);
-            Set("OsQueryPath", config.OsQueryPath ?? "");
-            Set("StorageMode", config.StorageMode ?? "auto");
-            Set("DebugLogging", config.DebugLogging ? 1 : 0, RegistryValueKind.DWord);
-            Set("CimianIntegrationEnabled", config.CimianIntegrationEnabled ? 1 : 0, RegistryValueKind.DWord);
-            Set("SkipCertificateValidation", config.SkipCertificateValidation ? 1 : 0, RegistryValueKind.DWord);
-            Set("MaxRetryAttempts", config.MaxRetryAttempts, RegistryValueKind.DWord);
-            Set("UserAgent", config.UserAgent ?? "");
-            if (!string.IsNullOrWhiteSpace(config.ProxyUrl))
-                Set("ProxyUrl", config.ProxyUrl);
-        }
-        catch (UnauthorizedAccessException)
+        using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+        using var key = hklm.CreateSubKey(ReportMateConstants.SettingsRegistryPath, true);
+        foreach (var (name, value) in writes)
         {
-            // Writing to HKLM requires elevation — may fail from unelevated GUI
-            throw;
+            // Credentials never go to the readable settings key.
+            if (SecretStore.IsSecret(name))
+                SecretStore.Write(name, value.ToString());
+            else
+                key.SetValue(name, value, DwordValues.Contains(name) ? RegistryValueKind.DWord : RegistryValueKind.String);
         }
     }
 
