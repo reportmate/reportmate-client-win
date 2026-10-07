@@ -1273,17 +1273,8 @@ if (-not $SkipNUPKG) {
                     Write-Success "NUPKG created: $newFileName ($([math]::Round($nupkgSize, 2)) MB)"
                 }
                 
-                # Clean up executable from payload after successful NUPKG creation
-                $payloadExe = Join-Path $ProgramFilesPayloadDir "managedreportsrunner.exe"
-                if (Test-Path $payloadExe) {
-                    try {
-                        Remove-Item $payloadExe -Force
-                        Write-Verbose "Cleaned up managedreportsrunner.exe from payload after successful build"
-                    } catch {
-                        Write-Warning "Could not remove managedreportsrunner.exe from payload: $_"
-                    }
-                }
-                
+                # The payload stays as it is: the ZIP below is built from it, and the
+                # cleanup at the end of the build removes it.
                 if (-not $nupkgFiles) {
                     Write-Warning "No .nupkg files found after cimipkg execution"
                 }
