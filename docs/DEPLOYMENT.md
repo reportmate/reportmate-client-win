@@ -118,7 +118,7 @@ ReportMate:
 
 ### Registry Configuration
 
-Settings can also be managed via registry at `HKLM\SOFTWARE\Config\ReportMate`:
+Settings can also be managed via registry: MDM writes `HKLM\SOFTWARE\Policies\ReportMate`, and local administrators write `HKLM\SOFTWARE\ReportMate\Settings`. The client moves `Passphrase` and `ApiKey` into `HKLM\SOFTWARE\ReportMate\Secrets`, which only SYSTEM and Administrators can read. `HKLM\SOFTWARE\Config\ReportMate` is deprecated and only read as a fallback.
 
 | Value | Type | Description |
 |-------|------|-------------|
@@ -131,11 +131,11 @@ Settings can also be managed via registry at `HKLM\SOFTWARE\Config\ReportMate`:
 For Intune or other MDM solutions, use OMA-URI settings:
 
 ```
-./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl
+./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/ApiUrl
 Type: String
 Value: https://reportmate.example.edu
 
-./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase
+./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/Passphrase
 Type: String
 Value: your-passphrase
 ```
@@ -199,6 +199,7 @@ msiexec /x "{ProductCode}" /qn
 Unregister-ScheduledTask -TaskName "ReportMate Data Collection" -Confirm:$false
 Remove-Item "C:\Program Files\ReportMate" -Recurse -Force
 Remove-Item "C:\ProgramData\ManagedReports" -Recurse -Force
+Remove-Item "HKLM:\SOFTWARE\ReportMate" -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item "HKLM:\SOFTWARE\Config\ReportMate" -Recurse -Force -ErrorAction SilentlyContinue
 ```
 

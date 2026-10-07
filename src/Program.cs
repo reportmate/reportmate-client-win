@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using ReportMate.WindowsClient.Services;
 using ReportMate.WindowsClient.Services.Modules;
 using ReportMate.WindowsClient.Configuration;
+using ReportMate.Shared;
 using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Models.Modules;
 using System.CommandLine;
@@ -103,7 +104,8 @@ public class Program
             }
             
             // Build configuration from multiple sources
-            var configuration = BuildConfiguration(verboseLevel);
+            var settingsNotes = new List<string>();
+            var configuration = BuildConfiguration(args, settingsNotes, verboseLevel);
             
             if (isVerbose)
             {
@@ -116,6 +118,11 @@ public class Program
 
             _logger.LogInformation("ReportMate v{Version} starting", 
                 System.Reflection.Assembly.GetExecutingAssembly().GetName().Version);
+
+            foreach (var note in settingsNotes)
+            {
+                _logger.LogWarning("Settings: {Note}", note);
+            }
 
             // Log command line args
             _logger.LogInformation("Command line args: {Args}", string.Join(" ", args));
@@ -202,155 +209,35 @@ public class Program
         }
     }
 
-    private static IConfiguration BuildConfiguration(int verboseLevel = 0)
+    private static IConfiguration BuildConfiguration(string[] args, List<string> settingsNotes, int verboseLevel = 0)
     {
-        var builder = new ConfigurationBuilder();
         var isVerbose = verboseLevel > 0;
-        
-        // Configuration hierarchy (lowest to highest precedence):
+
+        // Precedence, highest first: --api-url/--device-id for this run, policy,
+        // ReportMate\Settings, legacy registry values, environment, the legacy YAML file
+        // (only when admin-only), built-in defaults. See ReportMateSettingsKeys.
         if (isVerbose)
         {
             Logger.Section("Configuration Sources", "Loading settings from multiple sources in order of precedence");
-            Logger.Info("1. Application defaults: Embedded in binary (no JSON dependency)");
+            Logger.Info("1. Command-line overrides: --api-url, --device-id");
+            Logger.Info("2. Policy: HKLM\\{0}", ReportMateSettingsKeys.PolicyRegistryPath);
+            Logger.Info("3. Settings: HKLM\\{0}", ReportMateSettingsKeys.SettingsRegistryPath);
+            Logger.Info("4. Legacy registry: HKLM\\{0}, then HKLM\\{1}", ReportMateSettingsKeys.LegacyConfigRegistryPath, ReportMateSettingsKeys.LegacyRegistryPath);
+            Logger.Info("5. Environment variables with {0} prefix", ReportMateSettingsKeys.EnvironmentPrefix);
+            Logger.Info("6. Legacy file: {0}", Path.Combine(ReportMateSettingsKeys.DataDirectory, ReportMateSettingsKeys.LegacySettingsFileName));
+            Logger.Info("7. Application defaults: Embedded in binary");
         }
-        
-        // 2. YAML configuration from ProgramData (runtime/user editable)
-        var programDataPath = ConfigurationService.GetWorkingDataDirectory();
+
+        var inputs = SettingsLoader.ReadMachine(SettingsLoader.CommandLineOverrides(args), settingsNotes);
         if (isVerbose)
         {
-            Logger.Info("2. YAML configuration from: {0}", programDataPath);
-        }
-        if (Directory.Exists(programDataPath))
-        {
-            builder.SetBasePath(programDataPath)
-                   .AddYamlFile("appsettings.yaml", optional: true, reloadOnChange: false);
-        }
-        
-        // 3. Environment variables (prefix: REPORTMATE_)
-        if (isVerbose)
-        {
-            Logger.Info("3. Environment variables with REPORTMATE_ prefix");
-        }
-        builder.AddEnvironmentVariables("REPORTMATE_");
-        
-        // 4. Check for default API URL from environment if not set
-        var tempConfig = builder.Build();
-        var apiUrl = tempConfig["ReportMate:ApiUrl"];
-        if (string.IsNullOrEmpty(apiUrl))
-        {
-            // Try common environment variables
-            var envApiUrl = Environment.GetEnvironmentVariable("REPORTMATE_API_URL") ?? 
-                           Environment.GetEnvironmentVariable("API_URL") ?? 
-                           Environment.GetEnvironmentVariable("SERVER_URL");
-            
-            if (!string.IsNullOrEmpty(envApiUrl))
+            foreach (var note in settingsNotes)
             {
-                if (isVerbose)
-                {
-                    Logger.Info("Using API URL from environment: {0}", envApiUrl);
-                }
-                builder.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["ReportMate:ApiUrl"] = envApiUrl
-                });
-            }
-        }
-        
-        // 5. Windows Registry (highest precedence - CSP/Group Policy)
-        if (isVerbose)
-        {
-            Logger.Info("4. Windows Registry (HIGHEST PRECEDENCE)");
-            Logger.Debug("HKLM\\SOFTWARE\\ReportMate (standard)");
-            Logger.Debug("HKLM\\SOFTWARE\\Config\\ReportMate (CSP/Group Policy)");
-        }
-        
-        // Add registry configuration for both standard and policy locations
-        try
-        {
-            // Standard ReportMate registry key
-            using (var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\ReportMate"))
-            {
-                if (key != null)
-                {
-                    var registryDict = new Dictionary<string, string?>();
-                    foreach (var valueName in key.GetValueNames())
-                    {
-                        var value = key.GetValue(valueName)?.ToString();
-                        if (!string.IsNullOrEmpty(value))
-                        {
-                            // Map registry values to configuration keys
-                            string configKey = valueName switch
-                            {
-                                "ApiUrl" => "ReportMate:ApiUrl",
-                                "DeviceId" => "ReportMate:DeviceId",
-                                "ApiKey" => "ReportMate:ApiKey",
-                                "Passphrase" => "ReportMate:Passphrase",
-                                "CollectionInterval" => "ReportMate:CollectionIntervalSeconds",
-                                "LogLevel" => "Logging:LogLevel:Default",
-                                "OsQueryPath" => "ReportMate:OsQueryPath",
-                                _ => $"ReportMate:{valueName}"
-                            };
-                            registryDict[configKey] = value;
-                            if (isVerbose)
-                            {
-                                Logger.Debug("Registry: {0} -> {1}", valueName, configKey);
-                            }
-                        }
-                    }
-                    if (registryDict.Count > 0)
-                    {
-                        builder.AddInMemoryCollection(registryDict);
-                    }
-                }
-            }
-            
-            // Policy registry key (CSP/Group Policy) - highest precedence
-            using (var policyKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Config\ReportMate"))
-            {
-                if (policyKey != null)
-                {
-                    var policyDict = new Dictionary<string, string?>();
-                    foreach (var valueName in policyKey.GetValueNames())
-                    {
-                        var value = policyKey.GetValue(valueName)?.ToString();
-                        if (!string.IsNullOrEmpty(value))
-                        {
-                            // Map policy registry values to configuration keys
-                            string configKey = valueName switch
-                            {
-                                "ServerUrl" => "ReportMate:ApiUrl",
-                                "ApiUrl" => "ReportMate:ApiUrl",
-                                "DeviceId" => "ReportMate:DeviceId",
-                                "ApiKey" => "ReportMate:ApiKey",
-                                "Passphrase" => "ReportMate:Passphrase",
-                                "CollectionInterval" => "ReportMate:CollectionIntervalSeconds",
-                                "LogLevel" => "Logging:LogLevel:Default",
-                                "OsQueryPath" => "ReportMate:OsQueryPath",
-                                _ => $"ReportMate:{valueName}"
-                            };
-                            policyDict[configKey] = value;
-                            if (isVerbose)
-                            {
-                                Logger.Debug("Policy: {0} -> {1}", valueName, configKey);
-                            }
-                        }
-                    }
-                    if (policyDict.Count > 0)
-                    {
-                        builder.AddInMemoryCollection(policyDict);
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            if (isVerbose)
-            {
-                Logger.Warning("Could not read registry: {0}", ex.Message);
+                Logger.Warning("{0}", note);
             }
         }
 
-        var config = builder.Build();
+        var config = SettingsLoader.Build(inputs);
         
         // Log the final configuration source for key settings only in verbose mode
         if (isVerbose)

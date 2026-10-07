@@ -12,11 +12,11 @@ public sealed class PolicyDetector
 
     /// <summary>
     /// Known key aliases — maps canonical key to all variant names that may appear in policy.
-    /// Mirrors the registry key mappings from WindowsRegistryConfigurationProvider.
+    /// Matches ReportMateSettingsKeys.ValueNameAliases, which the runner uses.
     /// </summary>
     private static readonly Dictionary<string, string[]> KeyAliases = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["ApiUrl"]                    = ["ApiUrl"],
+        ["ApiUrl"]                    = ["ApiUrl", "ServerUrl"],
         ["ApiKey"]                    = ["ApiKey"],
         ["Passphrase"]               = ["Passphrase"],
         ["DeviceId"]                  = ["DeviceId"],
@@ -68,7 +68,8 @@ public sealed class PolicyDetector
     {
         try
         {
-            using var key = Registry.LocalMachine.OpenSubKey(ReportMateConstants.PolicyRegistryPath, false);
+            using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+            using var key = hklm.OpenSubKey(ReportMateConstants.PolicyRegistryPath, false);
             if (key is null) return null;
 
             foreach (var alias in aliases)

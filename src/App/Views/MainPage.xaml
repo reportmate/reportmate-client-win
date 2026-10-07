@@ -71,6 +71,10 @@
                         <FontIcon Glyph="&#xE943;" FontSize="20"
                                   Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
                         <TextBlock Text="Connection" Style="{StaticResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                        <Button Content="Unlock" Command="{x:Bind ViewModel.UnlockCommand}"
+                                ToolTipService.ToolTip="Restart as administrator to see and change saved credentials"
+                                Visibility="{x:Bind ViewModel.CanUnlock, Mode=OneWay, Converter={StaticResource BoolToVisibility}}"
+                                VerticalAlignment="Center" />
                     </StackPanel>
 
                     <!-- API URL -->

@@ -1,4 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using ReportMate.Shared;
 using ReportMate.App.Services;
 
 namespace ReportMate.App.ViewModels;
@@ -64,13 +66,48 @@ public partial class MainViewModel : ObservableObject
 
     public string VersionDisplay => $"Version {ReportMateConstants.Version}";
 
-    public string ApiKeyPlaceholderText => HasExistingApiKey
-        ? "Key saved — enter new to replace"
-        : "API authentication key";
+    public string ApiKeyPlaceholderText => CredentialStatus.Describe(IsElevated, HasExistingApiKey);
 
-    public string PassphrasePlaceholderText => HasExistingPassphrase
-        ? "Passphrase saved — enter new to replace"
-        : "Client passphrase for restricted access";
+    public string PassphrasePlaceholderText => CredentialStatus.Describe(IsElevated, HasExistingPassphrase);
+
+    // ── Unlock ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Whether the app runs elevated. Credentials live in a key only SYSTEM and
+    /// Administrators can read, so their saved state is shown only once unlocked.
+    /// </summary>
+    public bool IsElevated { get; } = DetectElevation();
+
+    public bool CanUnlock => !IsElevated;
+
+    private static bool DetectElevation()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return new System.Security.Principal.WindowsPrincipal(identity)
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+    }
+
+    /// <summary>Restarts the app elevated; stays open if the UAC prompt is declined.</summary>
+    [RelayCommand]
+    private void Unlock()
+    {
+        try
+        {
+            var path = Environment.ProcessPath;
+            if (path is null) return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true,
+                Verb = "runas",
+            });
+            Microsoft.UI.Xaml.Application.Current.Exit();
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Elevation declined.
+        }
+    }
 
     partial void OnHasExistingApiKeyChanged(bool value) => OnPropertyChanged(nameof(ApiKeyPlaceholderText));
     partial void OnHasExistingPassphraseChanged(bool value) => OnPropertyChanged(nameof(PassphrasePlaceholderText));

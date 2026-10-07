@@ -217,70 +217,182 @@ $Passphrase = ""
 $ProcessLogEnabled = Enable-ReportMateKernelProcessLog
 
 # REGISTRY CONFIGURATION
-# Check for CSP OMA-URI first (management configs)
-$CSPRegistryPath = "HKLM\SOFTWARE\Config\ReportMate"
-if (Test-Path $CSPRegistryPath) {
-    Write-Host "Found CSP OMA-URI configuration"
-    $CSPApiUrl = Get-ItemProperty -Path $CSPRegistryPath -Name "ApiUrl" -ErrorAction SilentlyContinue
-    if ($CSPApiUrl -and -not [string]::IsNullOrEmpty($CSPApiUrl.ApiUrl)) {
-        $ApiUrl = $CSPApiUrl.ApiUrl
-        Write-Host "Using CSP-configured API URL"
-    }
-    
-    $CSPPassphrase = Get-ItemProperty -Path $CSPRegistryPath -Name "Passphrase" -ErrorAction SilentlyContinue
-    if ($CSPPassphrase -and -not [string]::IsNullOrEmpty($CSPPassphrase.Passphrase)) {
-        $Passphrase = $CSPPassphrase.Passphrase
-        Write-Host "Using CSP-configured Passphrase"
-    }
+# Standard keys: MDM sets HKLM\SOFTWARE\Policies\ReportMate; the installer and local
+# administrators use HKLM\SOFTWARE\ReportMate\Settings. Credentials (Passphrase, ApiKey)
+# live in HKLM\SOFTWARE\ReportMate\Secrets, readable by SYSTEM and Administrators only.
+# HKLM\SOFTWARE\Config\ReportMate and the values directly under HKLM\SOFTWARE\ReportMate
+# are deprecated: still read as fallbacks and copied into Settings here where Settings
+# lacks them. The only change made to them is removing Passphrase and ApiKey once they
+# are safely in the secrets key.
+$PolicyPath = "HKLM:\SOFTWARE\Policies\ReportMate"
+$SettingsPath = "HKLM:\SOFTWARE\ReportMate\Settings"
+$SecretsPath = "HKLM:\SOFTWARE\ReportMate\Secrets"
+$LegacyPaths = @("HKLM:\SOFTWARE\Config\ReportMate", "HKLM:\SOFTWARE\ReportMate")
+$SecretNames = @("Passphrase", "ApiKey")
+$StateNames = @("LastRunTime", "InstallTime", "Version")
+$Aliases = @{ "ServerUrl" = "ApiUrl"; "CollectionInterval" = "CollectionIntervalSeconds" }
+
+function Get-CanonicalName([string]$Name) {
+    if ($Aliases.ContainsKey($Name)) { return $Aliases[$Name] }
+    return $Name
 }
 
-# Create registry key if it doesn't exist
-$RegistryPath = "HKLM\SOFTWARE\ReportMate"
-if (-not (Test-Path $RegistryPath)) {
-    try {
-        New-Item -Path $RegistryPath -Force | Out-Null
-        Write-Host "Created registry key: $RegistryPath"
-    } catch {
-        Write-Warning "Failed to create registry key: $_"
-    }
+# Names a key holds, under their current spelling.
+function Get-CanonicalNames([string]$Path) {
+    $key = Get-Item -Path $Path -ErrorAction SilentlyContinue
+    if (-not $key) { return @() }
+    return @($key.GetValueNames() | ForEach-Object { Get-CanonicalName $_ })
 }
 
-# Set default configuration values
 try {
-    Set-ItemProperty -Path $RegistryPath -Name "CollectionInterval" -Value 3600 -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $RegistryPath -Name "LogLevel" -Value "Information" -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $RegistryPath -Name "OsQueryPath" -Value "C:\Program Files\osquery\osqueryi.exe" -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path $RegistryPath -Name "OsQueryConfigPath" -Value "C:\ProgramData\ManagedReports\osquery" -ErrorAction SilentlyContinue
-    Write-Host "Set default configuration values"
+    if (-not (Test-Path $SettingsPath)) {
+        New-Item -Path $SettingsPath -Force | Out-Null
+        Write-Host "Created registry key: $SettingsPath"
+    }
 } catch {
-    Write-Warning "Failed to set default configuration: $_"
+    Write-Warning "Failed to create registry key: $_"
 }
 
-# Set API URL
-if (-not [string]::IsNullOrEmpty($PROD_API_URL)) {
-    $ApiUrl = $PROD_API_URL
+# The secrets key gets its own ACL every time: SYSTEM and Administrators, nothing inherited.
+# Nothing is written to it unless this succeeds.
+$SecretsSecured = $false
+try {
+    $hklm64 = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+    $secretsKey = $hklm64.CreateSubKey('SOFTWARE\ReportMate\Secrets', $true)
+    $SecretsAcl = New-Object System.Security.AccessControl.RegistrySecurity
+    $SecretsAcl.SetAccessRuleProtection($true, $false)
+    foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+        $SecretsAcl.AddAccessRule((New-Object System.Security.AccessControl.RegistryAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier $sid), 'FullControl', 'ContainerInherit', 'None', 'Allow')))
+    }
+    $secretsKey.SetAccessControl($SecretsAcl)
+    $secretsKey.Dispose()
+    $SecretsSecured = $true
+    Write-Host "Secured $SecretsPath (SYSTEM and Administrators only)"
+} catch {
+    Write-Warning "Failed to secure registry key ${SecretsPath}; no credential will be written: $_"
 }
-if (-not [string]::IsNullOrEmpty($ApiUrl)) {
+
+# Credentials in the deprecated keys move to the secrets key, and only those two values are
+# deleted from the legacy keys, never before the secrets key reads back what was stored.
+# A legacy value is stored only when policy and Settings do not hold the name and the
+# secrets key is empty (Config\ReportMate first); otherwise the stored value already
+# wins, and the legacy copy is just removed. Values are never printed.
+if ($SecretsSecured) {
+    foreach ($name in $SecretNames) {
+        try {
+            $legacyWith = @()
+            foreach ($legacyPath in $LegacyPaths) {
+                $v = (Get-ItemProperty -Path $legacyPath -Name $name -ErrorAction SilentlyContinue).$name
+                if (-not [string]::IsNullOrEmpty($v)) { $legacyWith += , @($legacyPath, $v) }
+            }
+            if ($legacyWith.Count -eq 0) { continue }
+
+            $claimed = ((Get-CanonicalNames $PolicyPath) -contains $name) -or ((Get-CanonicalNames $SettingsPath) -contains $name)
+            $stored = (Get-ItemProperty -Path $SecretsPath -Name $name -ErrorAction SilentlyContinue).$name
+            $written = $null
+            if (-not $claimed -and [string]::IsNullOrEmpty($stored)) {
+                $written = $legacyWith[0][1]
+                New-ItemProperty -Path $SecretsPath -Name $name -Value $written -PropertyType String -Force | Out-Null
+            }
+
+            $readBack = (Get-ItemProperty -Path $SecretsPath -Name $name -ErrorAction SilentlyContinue).$name
+            $verified = if ($null -ne $written) { $readBack -ceq $written } else { -not [string]::IsNullOrEmpty($readBack) }
+            if (-not $verified) {
+                Write-Warning "Could not verify $name in $SecretsPath; readable copies in the deprecated keys were left in place"
+                continue
+            }
+            if ($null -ne $written) { Write-Host "Stored $name from $($legacyWith[0][0]) in $SecretsPath" }
+            foreach ($entry in $legacyWith) {
+                Remove-ItemProperty -Path $entry[0] -Name $name -ErrorAction Stop
+                Write-Host "Deleted the readable $name from the deprecated key $($entry[0])"
+            }
+        } catch {
+            Write-Warning "Failed to move $name to ${SecretsPath}: $_"
+        }
+    }
+}
+
+# Copy legacy settings into Settings where Settings lacks them. Config\ReportMate first:
+# it outranks the top-level key, as when the runner reads them. Credentials were handled
+# above and are never copied into Settings.
+$LegacyInUse = $false
+foreach ($legacyPath in $LegacyPaths) {
+    $legacy = Get-Item -Path $legacyPath -ErrorAction SilentlyContinue
+    if (-not $legacy) { continue }
+    $present = Get-CanonicalNames $SettingsPath
+    # Current spellings before older ones, so ApiUrl wins over ServerUrl.
+    $names = @($legacy.GetValueNames() | Where-Object { $_ } | Sort-Object { if ($Aliases.ContainsKey($_)) { 1 } else { 0 } })
+    foreach ($name in $names) {
+        $canonical = Get-CanonicalName $name
+        if ($StateNames -contains $canonical) { continue }
+        $LegacyInUse = $true
+        if ($SecretNames -contains $canonical -or $present -contains $canonical) { continue }
+        try {
+            $value = $legacy.GetValue($name, $null, 'DoNotExpandEnvironmentNames')
+            if ($null -eq $value -or "$value" -eq "") { continue }
+            $kind = $legacy.GetValueKind($name)
+            New-ItemProperty -Path $SettingsPath -Name $canonical -Value $value -PropertyType $kind -Force | Out-Null
+            $present += $canonical
+            Write-Host "Copied $canonical from $legacyPath to $SettingsPath"
+        } catch {
+            Write-Warning "Failed to copy $name from ${legacyPath}: $_"
+        }
+    }
+}
+if ($LegacyInUse) {
+    Write-Warning "Legacy ReportMate registry keys are deprecated ($($LegacyPaths -join ', ')). Use $PolicyPath for MDM and $SettingsPath locally. They are still read as fallbacks; only credentials were moved out of them."
+}
+
+# API URL and passphrase supplied with this package, where nothing already sets them.
+# A legacy passphrase left in place (the secrets key could not be secured) still counts.
+$settingsNames = Get-CanonicalNames $SettingsPath
+$policyNames = Get-CanonicalNames $PolicyPath
+$legacyNames = @($LegacyPaths | ForEach-Object { Get-CanonicalNames $_ })
+if (-not [string]::IsNullOrEmpty($PROD_API_URL) -and $settingsNames -notcontains "ApiUrl") {
     try {
-        Set-ItemProperty -Path $RegistryPath -Name "ApiUrl" -Value $ApiUrl
-        Write-Host "Set API URL: $ApiUrl"
+        New-ItemProperty -Path $SettingsPath -Name "ApiUrl" -Value $PROD_API_URL -PropertyType String -Force | Out-Null
+        Write-Host "Set API URL: $PROD_API_URL"
     } catch {
         Write-Warning "Failed to set API URL: $_"
     }
 }
-
-# Set Passphrase
-if (-not [string]::IsNullOrEmpty($PROD_PASSPHRASE)) {
-    $Passphrase = $PROD_PASSPHRASE
-}
-if (-not [string]::IsNullOrEmpty($Passphrase)) {
+if ($SecretsSecured -and -not [string]::IsNullOrEmpty($PROD_PASSPHRASE) -and $policyNames -notcontains "Passphrase" -and $settingsNames -notcontains "Passphrase" -and $legacyNames -notcontains "Passphrase") {
     try {
-        Set-ItemProperty -Path $RegistryPath -Name "Passphrase" -Value $Passphrase
-        Write-Host "Set Client Passphrase: [CONFIGURED]"
+        $stored = (Get-ItemProperty -Path $SecretsPath -Name "Passphrase" -ErrorAction SilentlyContinue).Passphrase
+        if ([string]::IsNullOrEmpty($stored)) {
+            New-ItemProperty -Path $SecretsPath -Name "Passphrase" -Value $PROD_PASSPHRASE -PropertyType String -Force | Out-Null
+            Write-Host "Set Client Passphrase: [CONFIGURED]"
+        }
     } catch {
         Write-Warning "Failed to set Client Passphrase: $_"
     }
 }
+
+# Defaults, only where Settings has no value after the copy above, so an upgrade never
+# resets what an administrator or the app set.
+$Defaults = @(
+    @{ Name = "CollectionIntervalSeconds"; Value = 3600; Type = "DWord" },
+    @{ Name = "LogLevel"; Value = "Information"; Type = "String" },
+    @{ Name = "OsQueryPath"; Value = "C:\Program Files\osquery\osqueryi.exe"; Type = "String" },
+    @{ Name = "OsQueryConfigPath"; Value = "C:\ProgramData\ManagedReports\osquery"; Type = "String" }
+)
+$settingsNames = Get-CanonicalNames $SettingsPath
+foreach ($default in $Defaults) {
+    if ($settingsNames -contains $default.Name) { continue }
+    try {
+        New-ItemProperty -Path $SettingsPath -Name $default.Name -Value $default.Value -PropertyType $default.Type -Force | Out-Null
+        Write-Host "Set default $($default.Name)"
+    } catch {
+        Write-Warning "Failed to set default $($default.Name): $_"
+    }
+}
+
+# For the summary below: the API URL the runner will use, highest source first, and
+# whether a passphrase is set anywhere. The passphrase value is never printed.
+$EffectivePaths = @($PolicyPath, $SettingsPath) + $LegacyPaths
+$ApiUrl = @($EffectivePaths | ForEach-Object { (Get-ItemProperty -Path $_ -Name ApiUrl -ErrorAction SilentlyContinue).ApiUrl } | Where-Object { $_ })[0]
+$Passphrase = @((@($SecretsPath) + $EffectivePaths) | ForEach-Object { (Get-ItemProperty -Path $_ -Name Passphrase -ErrorAction SilentlyContinue).Passphrase } | Where-Object { $_ })[0]
 
 # DIRECTORY STRUCTURE & FILE MANAGEMENT
 $DataDirectories = @(
@@ -302,17 +414,35 @@ foreach ($Directory in $DataDirectories) {
     }
 }
 
-# Set permissions on data directory
+# Lock down the data directory. The runner runs as SYSTEM and trusts what it reads here,
+# so only SYSTEM and Administrators may write: full control for both, read for Users,
+# no inheritance from ProgramData (which lets any user create files). Explicit entries are
+# cleared and children reset to inherit this ACL. Owners below the folder are left alone:
+# the runner rejects a settings file a non-administrator owns. Well-known SIDs keep this
+# working on non-English Windows.
+$DataRoot = "C:\ProgramData\ManagedReports"
 try {
-    $Acl = Get-Acl "C:\ProgramData\ManagedReports"
-    $AccessRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        "SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
-    )
-    $Acl.SetAccessRule($AccessRule)
-    Set-Acl -Path "C:\ProgramData\ManagedReports" -AclObject $Acl
-    Write-Host "Set permissions on data directory"
+    & icacls.exe $DataRoot /reset /Q | Out-Null
+    & icacls.exe $DataRoot /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX" /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls exited with $LASTEXITCODE" }
+    & icacls.exe $DataRoot /setowner "*S-1-5-32-544" /C /Q | Out-Null
+    & icacls.exe "$DataRoot\*" /reset /T /C /Q | Out-Null
+    Write-Host "Locked down $DataRoot (SYSTEM and Administrators full control, Users read)"
 } catch {
     Write-Warning "Failed to set permissions on data directory: $_"
+}
+
+# usagetracker.exe runs as each signed-in user and writes its own JSON file here, so
+# Users may create files in this one folder, and each user may change only the file
+# they created (CREATOR OWNER).
+$TrackerDir = Join-Path $DataRoot "usagetracker"
+try {
+    if (-not (Test-Path $TrackerDir)) { New-Item -ItemType Directory -Path $TrackerDir -Force | Out-Null }
+    & icacls.exe $TrackerDir /grant "*S-1-5-32-545:(WD)" "*S-1-3-0:(OI)(IO)M" /Q | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls exited with $LASTEXITCODE" }
+    Write-Host "Allowed users to write their own usage tracker files"
+} catch {
+    Write-Warning "Failed to set permissions on usage tracker directory: $_"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -716,8 +846,10 @@ Write-Host "  osquery: $(if (Test-Path 'C:\Program Files\osquery\osqueryi.exe') 
 Write-Host "  Kernel Process Telemetry Log: $(if ($ProcessLogEnabled) { 'Enabled' } else { 'Unavailable' })"
 Write-Host ""
 Write-Host "Registry Locations:"
-Write-Host "  CSP/Policy: HKLM\SOFTWARE\Config\ReportMate (highest precedence)"
-Write-Host "  Standard: HKLM\SOFTWARE\ReportMate"
+Write-Host "  Policy (MDM): HKLM\SOFTWARE\Policies\ReportMate (highest precedence)"
+Write-Host "  Settings (local): HKLM\SOFTWARE\ReportMate\Settings"
+Write-Host "  Credentials: HKLM\SOFTWARE\ReportMate\Secrets (SYSTEM and Administrators only)"
+Write-Host "  Deprecated fallbacks: HKLM\SOFTWARE\Config\ReportMate, HKLM\SOFTWARE\ReportMate"
 Write-Host ""
 Write-Host "Environment Variables (override defaults):"
 Write-Host "  REPORTMATE_API_URL - Override production API URL"
