@@ -418,10 +418,16 @@ function signPackage {
     throw "signtool failed with all timestamp authorities."
 }
 
-# Generate version if not provided (YYYY.MM.DD.HHMM format)
+# Generate version if not provided (YYYY.MM.DD.HHMM format). A release passes its tag,
+# so the files, the app header and the packages all carry the tag rather than the
+# time the runner happened to build it.
 if (-not $Version) {
     $Version = Get-Date -Format "yyyy.MM.dd.HHmm"
     Write-Info "Auto-generated version: $Version"
+}
+$Version = $Version -replace '^v', ''
+if ($Version -notmatch '^\d{4}\.\d{2}\.\d{2}(\.\d{1,4})?$') {
+    throw "Version '$Version' is not in YYYY.MM.DD[.HHMM] form"
 }
 
 # ──────────────────────────  SIGNING DECISION  ─────────────────
@@ -728,7 +734,7 @@ if (-not $SkipBuild) {
     
     # Build
     Write-Verbose "Building in $Configuration configuration..."
-    dotnet build $csprojPath --configuration $Configuration --no-restore --verbosity quiet -p:VersionPrefix=$Version
+    dotnet build $csprojPath --configuration $Configuration --no-restore --verbosity quiet -p:VersionPrefix=$Version -p:Version=$Version
     
     # Publish self-contained executable
     Write-Verbose "Publishing self-contained executable..."
@@ -741,6 +747,7 @@ if (-not $SkipBuild) {
         -p:PublishTrimmed=true `
         -p:IncludeNativeLibrariesForSelfExtract=true `
         -p:VersionPrefix=$Version `
+        -p:Version=$Version `
         --verbosity quiet
     
     if ($LASTEXITCODE -eq 0) {
@@ -793,6 +800,7 @@ if (Test-Path $usageTrackerProj) {
         -p:PublishSingleFile=true `
         -p:PublishTrimmed=true `
         -p:VersionPrefix=$Version `
+        -p:Version=$Version `
         --verbosity quiet
     if ($LASTEXITCODE -ne 0) {
         Write-Error "usagetracker build failed (exit $LASTEXITCODE)"
@@ -914,6 +922,7 @@ dotnet publish $AppProject `
     --self-contained true `
     --output $AppPublishDir `
     -p:VersionPrefix=$Version `
+    -p:Version=$Version `
     --verbosity quiet
 if ($LASTEXITCODE -ne 0) {
     Write-Error "App build failed (exit $LASTEXITCODE)"
