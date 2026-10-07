@@ -45,3 +45,10 @@ try {
     Write-Error "Failed to remove scheduled tasks: $_"
     # Don't exit with error during uninstall to avoid blocking removal
 }
+
+# The installer adds a Start Menu shortcut to the app; remove it with the tasks.
+$shortcutPath = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Managed Reports Runner.lnk"
+if (Test-Path $shortcutPath) {
+    Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+    Write-Host "Removed Start Menu shortcut"
+}

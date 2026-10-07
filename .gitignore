@@ -417,6 +417,7 @@ build/**/bin/
 build/**/*.wixobj
 build/**/*.wixpdb
 .publish/
+.publish-app/
 release/
 installer/
 
