@@ -82,6 +82,8 @@ $expectedPayload = @(
     'usagetracker.exe'
     'appsettings.yaml'
     'module-schedules.json'
+    'Managed Reports Runner.exe'
+    'resources.pri'
 )
 # appsettings.json is not required: build.ps1 copies it with
 # -ErrorAction SilentlyContinue, so the source may legitimately not ship one.
@@ -112,6 +114,28 @@ try {
 } catch {
     Write-Warning "Could not add to PATH: $_"
     Write-Host "  You can manually add '$InstallDir' to your system PATH"
+}
+
+# ----------------------------------------------------------------------------
+# START MENU: shortcut to the Managed Reports Runner app for every user
+# ----------------------------------------------------------------------------
+try {
+    $appExe = Join-Path $InstallDir "Managed Reports Runner.exe"
+    $shortcutPath = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\Managed Reports Runner.lnk"
+    if (Test-Path $appExe) {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = $appExe
+        $shortcut.WorkingDirectory = $InstallDir
+        $shortcut.Description = "Managed Reports Runner"
+        $shortcut.Save()
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
+        Write-Host "Start Menu shortcut: $shortcutPath"
+    } else {
+        Write-Warning "App not found at $appExe; Start Menu shortcut not created"
+    }
+} catch {
+    Write-Warning "Could not create the Start Menu shortcut: $_"
 }
 
 function Enable-ReportMateKernelProcessLog {
@@ -888,4 +912,4 @@ catch {
     exit 1
 }
 
-exit 0
+exit 0

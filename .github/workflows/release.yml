@@ -38,6 +38,45 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -NoSign
 
+      # Each package must ship the Managed Reports Runner app beside the CLI. The
+      # app cannot load its XAML without resources.pri, so both are required.
+      - name: Verify the app is in every package
+        shell: pwsh
+        run: |
+          $required = @('Managed Reports Runner.exe', 'resources.pri', 'managedreportsrunner.exe')
+          $failures = @()
+
+          $msi = Get-ChildItem -Path release -Filter 'ReportMate-*.msi' | Select-Object -First 1
+          if (-not $msi) { throw 'No MSI produced by build.ps1' }
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.OpenDatabase($msi.FullName, 0)
+          $view = $db.OpenView('SELECT FileName FROM File')
+          $view.Execute($null)
+          $msiNames = while ($record = $view.Fetch()) { ($record.StringData(1) -split '\|')[-1] }
+          $view.Close()
+          foreach ($name in $required) {
+            if ($msiNames -notcontains $name) { $failures += "$($msi.Name): $name" }
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archives = @(Get-ChildItem -Path release -Recurse -Include 'ReportMate-*.nupkg', 'ReportMate-*.zip')
+          if ($archives.Count -eq 0) { throw 'No nupkg or zip produced by build.ps1' }
+          foreach ($archive in $archives) {
+            $zip = [IO.Compression.ZipFile]::OpenRead($archive.FullName)
+            try {
+              $names = $zip.Entries | ForEach-Object { [Uri]::UnescapeDataString($_.Name) }
+              foreach ($name in $required) {
+                if ($names -notcontains $name) { $failures += "$($archive.Name): $name" }
+              }
+            } finally { $zip.Dispose() }
+          }
+
+          if ($failures.Count -gt 0) {
+            $failures | ForEach-Object { Write-Host "::error::Missing from package -- $_" }
+            throw "$($failures.Count) required file(s) missing from the release packages"
+          }
+          Write-Host "The app, resources.pri and the CLI are in $($archives.Count + 1) package(s)"
+
       - name: Capture build info
         id: version
         shell: pwsh

@@ -820,6 +820,131 @@ if (Test-Path $usageTrackerProj) {
     Write-Verbose "usagetracker project not found; skipping (legacy build path)"
 }
 
+# ─────────────── MANAGED REPORTS RUNNER APP (WinUI GUI) ───────────────
+# The app ships beside the CLI in C:\Program Files\ReportMate. It is published
+# self-contained with the WindowsAppSDK runtime, so it is a folder of files,
+# not a single exe. EnableCoreMrtTooling=false in the project means publish
+# does not build resources.pri; Publish-AppResources makes it with makepri.exe,
+# as BootstrapMate's build does. Without resources.pri the app cannot load its
+# XAML, so the build stops if either it or the exe is missing.
+$AppProject = Join-Path $SrcDir "App\ReportMate.App.csproj"
+$AppProjectDir = Split-Path $AppProject
+$AppPublishDir = Join-Path $RootDir ".publish-app"
+$AppExeName = "Managed Reports Runner.exe"
+$AppRequiredFiles = @($AppExeName, "resources.pri")
+
+function Publish-AppResources {
+    param(
+        [Parameter(Mandatory)][string]$OutputDir,
+        [Parameter(Mandatory)][string]$ProjectDir,
+        [string]$Arch = "x64"
+    )
+
+    # makepri.exe runs on the host, so prefer the host's architecture.
+    $hostArch = switch ($env:PROCESSOR_ARCHITECTURE) {
+        'AMD64' { 'x64' }
+        'ARM64' { 'arm64' }
+        default { 'x86' }
+    }
+    $toolArchOrder = @($hostArch) + (@('x64', 'arm64', 'x86') | Where-Object { $_ -ne $hostArch })
+    $sdkBinRoots = @(
+        "$env:ProgramFiles\Windows Kits\10\bin",
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    ) | Where-Object { Test-Path $_ }
+
+    $makepri = $null
+    foreach ($root in $sdkBinRoots) {
+        foreach ($toolArch in $toolArchOrder) {
+            $hit = Get-ChildItem "$root\*\$toolArch\makepri.exe" -ErrorAction SilentlyContinue |
+                Sort-Object { [version]($_.FullName -replace '.*\\(\d+\.\d+\.\d+\.\d+)\\.*', '$1') } -Descending |
+                Select-Object -First 1
+            if ($hit) { $makepri = $hit.FullName; break }
+        }
+        if ($makepri) { break }
+    }
+    if (-not $makepri) {
+        throw "makepri.exe not found; install the Windows 10/11 SDK to build the app's resources.pri"
+    }
+    Write-Verbose "makepri.exe: $makepri"
+
+    # Publish leaves the compiled XAML (XBF) under obj\<Configuration>\<tfm>\win-<arch>\.
+    $xbfFiles = @(Get-ChildItem (Join-Path $ProjectDir "obj\$Configuration") -Recurse -Filter "*.xbf" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match [regex]::Escape("\win-$Arch\") })
+    if ($xbfFiles.Count -eq 0) {
+        throw "No compiled XAML (.xbf) found under $ProjectDir\obj\$Configuration for win-$Arch"
+    }
+    $xbfRoot = ($xbfFiles[0].FullName -split [regex]::Escape("\win-$Arch\"))[0] + "\win-$Arch"
+
+    $stagingDir = Join-Path ([System.IO.Path]::GetTempPath()) "reportmate-pri-$Arch"
+    Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory $stagingDir | Out-Null
+    try {
+        # resources.pri maps XAML by relative path, and MRT opens those files beside
+        # the exe, so each XBF goes both to staging and to the publish folder.
+        foreach ($xbf in $xbfFiles) {
+            $relative = $xbf.FullName.Substring($xbfRoot.Length).TrimStart('\')
+            foreach ($dest in @((Join-Path $stagingDir $relative), (Join-Path $OutputDir $relative))) {
+                New-Item -ItemType Directory (Split-Path $dest) -Force | Out-Null
+                Copy-Item $xbf.FullName $dest -Force
+            }
+        }
+
+        # The WinUI framework PRIs carry the theme resources; makepri merges them in.
+        Get-ChildItem $OutputDir -Filter "Microsoft.*.pri" | ForEach-Object {
+            Copy-Item $_.FullName (Join-Path $stagingDir $_.Name) -Force
+        }
+
+        $priconfig = Join-Path $stagingDir "priconfig.xml"
+        & $makepri createconfig /cf $priconfig /dq "en-US" /pv "10.0.0" /o 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "makepri createconfig failed (exit $LASTEXITCODE)" }
+
+        $priOutput = & $makepri new /pr $stagingDir /cf $priconfig /in "Managed Reports Runner" /of (Join-Path $OutputDir "resources.pri") /o 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "makepri new failed (exit $LASTEXITCODE): $priOutput" }
+    } finally {
+        Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Verbose "Generated resources.pri from $($xbfFiles.Count) XBF file(s)"
+}
+
+Write-Step "Building $AppExeName..."
+Remove-Item $AppPublishDir -Recurse -Force -ErrorAction SilentlyContinue
+dotnet publish $AppProject `
+    --configuration $Configuration `
+    --runtime win-x64 `
+    --self-contained true `
+    --output $AppPublishDir `
+    -p:VersionPrefix=$Version `
+    --verbosity quiet
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "App build failed (exit $LASTEXITCODE)"
+    exit $LASTEXITCODE
+}
+try {
+    Publish-AppResources -OutputDir $AppPublishDir -ProjectDir $AppProjectDir
+} catch {
+    Write-Error "App resources failed: $_"
+    exit 1
+}
+Get-ChildItem $AppPublishDir -Filter "*.pdb" -Recurse | Remove-Item -Force
+$missingAppFiles = @($AppRequiredFiles | Where-Object { -not (Test-Path (Join-Path $AppPublishDir $_)) })
+if ($missingAppFiles.Count -gt 0) {
+    Write-Error "App publish is missing: $($missingAppFiles -join ', ')"
+    exit 1
+}
+if ($Sign) {
+    Write-Step "Signing $AppExeName..."
+    try {
+        signPackage -FilePath (Join-Path $AppPublishDir $AppExeName)
+        Write-Success "Signed $AppExeName"
+    } catch {
+        Write-Error "Failed to sign ${AppExeName}: $_"
+        exit 1
+    }
+}
+Copy-Item (Join-Path $AppPublishDir "*") $ProgramFilesPayloadDir -Recurse -Force
+$appSize = (Get-ChildItem $AppPublishDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB
+Write-Success ("$AppExeName bundled ({0:N1} MB)" -f $appSize)
+
 # Create version file in payload root
 $versionContent = @"
 ReportMate
@@ -1215,6 +1340,10 @@ if (-not $SkipMSI) {
     # Copy executable to payload (installed to Program Files/ReportMate via build-info.yaml install_location)
     Copy-Item (Join-Path $PublishDir "managedreportsrunner.exe") $PkgPayloadDir -Force
     Write-Verbose "Copied managedreportsrunner.exe to payload"
+
+    # Copy the app and its WindowsAppSDK runtime beside the executable
+    Copy-Item (Join-Path $AppPublishDir "*") $PkgPayloadDir -Recurse -Force
+    Write-Verbose "Copied $AppExeName and its runtime to payload"
 
     # Copy configuration files to payload
     Copy-Item (Join-Path $SrcDir "appsettings.json") $PkgPayloadDir -Force -ErrorAction SilentlyContinue
