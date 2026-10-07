@@ -290,18 +290,8 @@ public class OsQueryService : IOsQueryService
                 CreateNoWindow = true
             };
 
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            
-            var completed = await Task.Run(() => process.WaitForExit(5000));
-            
-            if (!completed)
-            {
-                try { process.Kill(true); } catch { }
-                return false;
-            }
-
-            var isAvailable = process.ExitCode == 0;
+            var run = await BoundedProcess.RunAsync(startInfo, TimeSpan.FromSeconds(5));
+            var isAvailable = run.Succeeded;
             _logger.LogDebug("osquery availability check: {IsAvailable}", isAvailable);
             
             return isAvailable;
@@ -332,13 +322,10 @@ public class OsQueryService : IOsQueryService
                 CreateNoWindow = true
             };
 
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            
-            var output = await process.StandardOutput.ReadToEndAsync();
-            await Task.Run(() => process.WaitForExit(5000));
+            var run = await BoundedProcess.RunAsync(startInfo, TimeSpan.FromSeconds(5));
+            var output = run.Output;
 
-            if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+            if (run.Succeeded && !string.IsNullOrWhiteSpace(output))
             {
                 // Extract version from output (usually first line)
                 var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);

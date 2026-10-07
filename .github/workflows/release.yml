@@ -34,9 +34,70 @@ jobs:
           restore-keys: |
             nuget-${{ runner.os }}-
 
+      # The tag is the version. Without it build.ps1 stamps the runner's UTC clock,
+      # which put 2026.10.07.0524 on a release tagged 2026.10.06.2223.
+      - name: Derive version from tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $version = $tag -replace '^v', ''
+          if ($version -notmatch '^\d{4}\.\d{2}\.\d{2}\.\d{4}$') { throw "Tag $tag is not YYYY.MM.DD.HHMM" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Tag: $tag -> Version: $version"
+
       - name: Build (unsigned)
         shell: pwsh
-        run: .\build.ps1 -NoSign
+        run: .\build.ps1 -NoSign -Version '${{ steps.tag.outputs.version }}'
+
+      # Every binary and the MSI must carry the tag. Windows Installer keeps only three
+      # fields with a major of 255 or less, so cimipkg maps the date into
+      # ProductVersion and keeps the whole tag in CIMIAN_PKG_FULL_VERSION.
+      - name: Verify every version matches the tag
+        shell: pwsh
+        run: |
+          $version = '${{ steps.tag.outputs.version }}'
+          $expected = [version]$version
+          $failures = @()
+
+          $zip = Get-ChildItem -Path release -Filter "ReportMate-$version.zip" | Select-Object -First 1
+          if (-not $zip) { throw "No ReportMate-$version.zip produced by build.ps1" }
+          $unpacked = Join-Path $env:RUNNER_TEMP 'version-check'
+          Remove-Item $unpacked -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $zip.FullName -DestinationPath $unpacked
+
+          foreach ($exe in 'managedreportsrunner.exe', 'Managed Reports Runner.exe', 'usagetracker.exe') {
+            $file = Get-ChildItem -Path $unpacked -Recurse -Filter $exe | Select-Object -First 1
+            if (-not $file) { $failures += "$exe not found in $($zip.Name)"; continue }
+            $info = $file.VersionInfo
+            $fileVersion = [version]::new($info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart)
+            $productVersion = [version](($info.ProductVersion -split '\+')[0])
+            if ($fileVersion -ne $expected) { $failures += "$exe file version $fileVersion" }
+            if ($productVersion -ne $expected) { $failures += "$exe product version $($info.ProductVersion)" }
+          }
+
+          $msi = Get-ChildItem -Path release -Filter "ReportMate-$version.msi" | Select-Object -First 1
+          if (-not $msi) { throw "No ReportMate-$version.msi produced by build.ps1" }
+          $installer = New-Object -ComObject WindowsInstaller.Installer
+          $db = $installer.OpenDatabase($msi.FullName, 0)
+          $view = $db.OpenView("SELECT Property, Value FROM Property WHERE Property='ProductVersion' OR Property='CIMIAN_PKG_FULL_VERSION'")
+          $view.Execute($null)
+          $props = @{}
+          while ($record = $view.Fetch()) { $props[$record.StringData(1)] = $record.StringData(2) }
+          $view.Close()
+
+          $yy = $expected.Major - 2000
+          $mmdd = $expected.Minor * 100 + $expected.Build
+          $msiVersion = if ($mmdd -le 255) { "$yy.$mmdd.$($expected.Revision)" }
+                        else { "$yy.$($expected.Minor).$($expected.Build * 100 + [math]::Floor($expected.Revision / 100))" }
+          if ($props['ProductVersion'] -ne $msiVersion) { $failures += "MSI ProductVersion $($props['ProductVersion']), expected $msiVersion" }
+          if ($props['CIMIAN_PKG_FULL_VERSION'] -ne $version) { $failures += "MSI full version $($props['CIMIAN_PKG_FULL_VERSION'])" }
+
+          if ($failures.Count -gt 0) {
+            $failures | ForEach-Object { Write-Host "::error::Version mismatch -- $_" }
+            throw "$($failures.Count) version mismatch(es) against tag $version"
+          }
+          Write-Host "Binaries carry $version; MSI ProductVersion $msiVersion, full version $version"
 
       # Each package must ship the Managed Reports Runner app beside the CLI. The
       # app cannot load its XAML without resources.pri, so both are required.

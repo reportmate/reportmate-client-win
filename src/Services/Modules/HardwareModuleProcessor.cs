@@ -4066,27 +4066,18 @@ try {
                         Write-Output 0
                     }}";
 
-                using var process = new System.Diagnostics.Process();
-                process.StartInfo.FileName = "powershell.exe";
-                process.StartInfo.Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"";
-                process.StartInfo.UseShellExecute = false;
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.RedirectStandardError = true;
-                process.StartInfo.CreateNoWindow = true;
-
-                process.Start();
-
                 // Give adequate time for large directories - these can be hundreds of GB
-                var timeoutMs = 300000; // 5 minutes for large directories
-                if (!process.WaitForExit(timeoutMs))
+                var run = BoundedProcess.Run(
+                    new System.Diagnostics.ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\""),
+                    TimeSpan.FromMinutes(5));
+                if (run.TimedOut)
                 {
-                    process.Kill();
                     _logger.LogWarning("   PowerShell directory size calculation timed out after 5 minutes for {Directory}", directoryPath);
                     return 0;
                 }
 
-                var output = process.StandardOutput.ReadToEnd().Trim();
-                var error = process.StandardError.ReadToEnd();
+                var output = run.Output.Trim();
+                var error = run.Error;
 
                 if (!string.IsNullOrEmpty(error))
                 {
@@ -4485,25 +4476,17 @@ try {
                         }
                 ";
 
-                using var process = new System.Diagnostics.Process();
-                process.StartInfo.FileName = "powershell.exe";
-                process.StartInfo.Arguments = $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\"";
-                process.StartInfo.UseShellExecute = false;
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.RedirectStandardError = true;
-                process.StartInfo.CreateNoWindow = true;
-
-                process.Start();
-
-                if (!process.WaitForExit(60000)) // 60 second timeout
+                var run = BoundedProcess.Run(
+                    new System.Diagnostics.ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -Command \"{script}\""),
+                    TimeSpan.FromSeconds(60));
+                if (run.TimedOut)
                 {
-                    process.Kill();
                     _logger.LogWarning("   PowerShell other directories discovery timed out after 60 seconds");
                     return;
                 }
 
-                var output = process.StandardOutput.ReadToEnd().Trim();
-                var error = process.StandardError.ReadToEnd();
+                var output = run.Output.Trim();
+                var error = run.Error;
 
                 _logger.LogDebug("PowerShell other directories output: {Output}", output);
                 if (!string.IsNullOrEmpty(error))
