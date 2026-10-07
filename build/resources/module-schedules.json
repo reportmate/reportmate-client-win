@@ -22,7 +22,7 @@
     },
     "all": {
       "modules": ["security", "network", "applications", "inventory", "system", "hardware", "management", "peripherals", "identity"],
-      "args": "--storage-mode deep",
+      "args": "--storage-mode quick",
       "calendar_hour": 4,
       "calendar_minute": 0,
       "random_delay_minutes": 120,
@@ -40,6 +40,6 @@
     "stop_if_going_on_batteries": false,
     "disallow_start_if_on_batteries": false
   },
-  "version": "1.2.0",
-  "updated": "2026-08-25T00:00:00Z"
+  "version": "1.3.0",
+  "updated": "2026-10-07T00:00:00Z"
 }
