@@ -25,6 +25,11 @@
     <!-- Suppress trim warnings for assemblies that are not fully trim-compatible -->
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
     <NoWarn>$(NoWarn);IL2104</NoWarn>
+
+    <!-- System.Management talks to WMI through built-in COM interop, which trimming
+         turns off by default. Without it, ManagementPath's type initializer throws in
+         the published runner and every System.Management query fails. -->
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
   </PropertyGroup>
 
   <ItemGroup>
