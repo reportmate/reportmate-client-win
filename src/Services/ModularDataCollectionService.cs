@@ -955,60 +955,24 @@ namespace ReportMate.WindowsClient.Services
         }
 
         /// <summary>
-        /// Extract device serial number from osquery results
+        /// Extract device serial number from osquery results, falling back to WMI when osquery has none
         /// This method MUST return a hardware serial number only
         /// NEVER returns hostname/computer_name - device registration will fail if no valid serial found
         /// </summary>
         private string ExtractSerialNumber(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
         {
-            // Method 1: Try system_info hardware_serial (BIOS/UEFI serial - most reliable)
-            if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
+            var found = HardwareSerial.Resolve(osqueryResults, HardwareSerial.FromWmi);
+            if (found is not null)
             {
-                var firstResult = systemInfo[0];
-                if (firstResult.TryGetValue("hardware_serial", out var serial) && !string.IsNullOrEmpty(serial?.ToString()))
-                {
-                    var serialStr = serial.ToString()?.Trim();
-                    
-                    // Reject only obvious placeholder values - accept everything else
-                    if (!string.IsNullOrEmpty(serialStr) && 
-                        serialStr != "0" && 
-                        serialStr != "System Serial Number" &&
-                        serialStr != "To be filled by O.E.M." &&
-                        serialStr != "Default string" &&
-                        !serialStr.StartsWith("00000000"))
-                    {
-                        _logger.LogInformation("Using hardware_serial from system_info: {Serial}", serialStr);
-                        return serialStr;
-                    }
-                }
-            }
-
-            // Method 2: Try chassis_info serial as fallback
-            if (osqueryResults.TryGetValue("chassis_info", out var chassisInfo) && chassisInfo.Count > 0)
-            {
-                var chassis = chassisInfo[0];
-                if (chassis.TryGetValue("serial", out var chassisSerial) && !string.IsNullOrEmpty(chassisSerial?.ToString()))
-                {
-                    var chassisSerialStr = chassisSerial.ToString()?.Trim();
-                    
-                    // Reject only obvious placeholder values
-                    if (!string.IsNullOrEmpty(chassisSerialStr) && 
-                        chassisSerialStr != "0" && 
-                        chassisSerialStr != "System Serial Number" &&
-                        chassisSerialStr != "To be filled by O.E.M." &&
-                        chassisSerialStr != "Default string")
-                    {
-                        _logger.LogInformation("Using serial from chassis_info: {Serial}", chassisSerialStr);
-                        return chassisSerialStr;
-                    }
-                }
+                _logger.LogInformation("Using hardware serial from {Source}: {Serial}", found.Source, found.Serial);
+                return found.Serial;
             }
 
             // No valid hardware serial found - device cannot register with ReportMate
             // We do NOT fall back to hostname/computer_name or any other identifier
             // This ensures database integrity - only devices with valid hardware serials can register
             _logger.LogError("FATAL: No valid hardware serial number found. Device cannot register with ReportMate.");
-            _logger.LogError("Checked: system_info.hardware_serial and chassis_info.serial - both invalid or missing");
+            _logger.LogError("Checked: system_info.hardware_serial, chassis_info.serial, Win32_BIOS and Win32_SystemEnclosure - all invalid or missing");
             throw new InvalidOperationException("No valid hardware serial number found. Device requires a valid BIOS/chassis serial to register with ReportMate. Hostname-based registration is not permitted.");
         }
 
