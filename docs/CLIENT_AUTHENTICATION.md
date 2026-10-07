@@ -53,7 +53,7 @@ $env:REPORTMATE_PASSPHRASE = "your-secure-passphrase"
 
 ### Registry (for MDM/GPO)
 
-Configure via registry at `HKLM\SOFTWARE\Config\ReportMate`:
+Configure via registry at `HKLM\SOFTWARE\Policies\ReportMate` (MDM/GPO) or `HKLM\SOFTWARE\ReportMate\Settings` (local). On its next run the client moves the passphrase into `HKLM\SOFTWARE\ReportMate\Secrets`, which only SYSTEM and Administrators can read, and blanks the readable copy. `HKLM\SOFTWARE\Config\ReportMate` is deprecated.
 
 ```
 Value: Passphrase
@@ -64,7 +64,7 @@ Data: your-secure-passphrase
 ### MDM/Intune (OMA-URI)
 
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/Passphrase
 Data type: String
 Value: your-secure-passphrase
 ```

@@ -146,23 +146,28 @@ After deployment, files are organized following Windows conventions:
 
 The application uses a configuration hierarchy to support enterprise deployment and management:
 
-1. **Windows Registry** (`HKLM\SOFTWARE\Config\ReportMate`) - CSP/MDM configuration managed (highest precedence)
-2. **Environment Variables** (prefix: `REPORTMATE_`) - Container/deployment specific
-3. **Working Configuration** (`ProgramData/ManagedReports/appsettings.yaml`) - Runtime editable
-4. **Enterprise Template Configuration** (`ProgramData/ManagedReports/appsettings.template.yaml`) - CSP/OMA-URI manageable defaults
-5. **Application Defaults** (Embedded in binary) - Fallback values
+1. **Command-line flags** (`--api-url`, `--device-id`) - one run only (highest precedence)
+2. **Policy** (`HKLM\SOFTWARE\Policies\ReportMate`) - Intune CSP / Group Policy
+3. **Machine settings** (`HKLM\SOFTWARE\ReportMate\Settings`) - written by the installer, local administrators and the Managed Reports Runner app
+4. **Legacy registry values** (`HKLM\SOFTWARE\Config\ReportMate`, then the values directly under `HKLM\SOFTWARE\ReportMate`) - deprecated; read only as a fallback
+5. **Environment Variables** (prefix: `REPORTMATE_`) - never override policy
+6. **Legacy settings file** (`C:\ProgramData\ManagedReports\appsettings.yaml`) - read only when no non-administrator can change it
+7. **Application Defaults** (Embedded in binary) - Fallback values
 
-Higher priority sources override lower priority ones, allowing flexible deployment and customization.
+Higher priority sources override lower priority ones. Registry keys are read in the 64-bit view. Any setting the runner reads under `ReportMate:` can be set by a policy value of the same name.
+
+MDM sets `HKLM\SOFTWARE\Policies\ReportMate`; the installer and local administrators use `HKLM\SOFTWARE\ReportMate\Settings`. On install or upgrade, any value in a legacy key that Settings lacks is copied into Settings and a deprecation warning is logged. Apart from credentials (below), nothing in the legacy keys is changed or deleted.
+
+Credentials (`Passphrase`, `ApiKey`) are kept in `HKLM\SOFTWARE\ReportMate\Secrets`, which only SYSTEM and Administrators can read. Set them by policy as usual. On each run the runner moves a credential it finds in the policy or Settings key into `Secrets` and blanks the readable copy. A blanked policy value still marks the setting as managed. On each run and on install, a `Passphrase` or `ApiKey` found in a legacy key is moved too. It is stored when nothing else supplies one, and the legacy value is deleted only after `Secrets` reads it back. Logs name the setting and key, never the value. The app shows a credential's saved state only after **Unlock**, which restarts it as administrator. Before that it shows "Unlock to view". It never shows the value.
+
+The runner runs as SYSTEM, so the installer limits `C:\ProgramData\ManagedReports` to SYSTEM and Administrators (full control) and Users (read). If `appsettings.yaml` is owned by a non-administrator, or a non-administrator can change it, the runner ignores the file and logs why.
 
 ### Enterprise Deployment with CSP/OMA-URI
 
 For enterprise environments, configuration can be managed through:
 
-- **Configuration Service Provider (CSP)**: Deploy `appsettings.template.yaml` to `ProgramData/ManagedReports/`
-- **MDM configuration**: Set registry values under `HKLM\SOFTWARE\ReportMate`
-- **OMA-URI**: Push configuration files and registry settings remotely
-
-All configuration files are stored in `ProgramData` (not `Program Files`) to ensure they are accessible by CSP and MDM configuration management tools.
+- **MDM (Intune OMA-URI, Group Policy)**: Set registry values under `HKLM\SOFTWARE\Policies\ReportMate`
+- **Local administrators and installers**: Set registry values under `HKLM\SOFTWARE\ReportMate\Settings`
 
 #### Example Complete Configuration
 
@@ -175,19 +180,19 @@ All configuration files are stored in `ProgramData` (not `Program Files`) to ens
       <Name>ReportMate Client Configuration</Name>
       <OMAConfigurationData>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/ApiUrl</Target>
           <Data>https://api.reportmate.contoso.com</Data>
         </Item>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/Passphrase</Target>
           <Data>your-secure-passphrase</Data>
         </Item>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/CollectionInterval</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/CollectionInterval</Target>
           <Data>3600</Data>
         </Item>
         <Item>
-          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/LogLevel</Target>
+          <Target>./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/LogLevel</Target>
           <Data>Information</Data>
         </Item>
       </OMAConfigurationData>
@@ -381,13 +386,7 @@ C:\ProgramData\ManagedReports\
 
 ### Configuration Priority
 
-ReportMate uses the following configuration priority (highest to lowest):
-
-1. **Command-line arguments** (`--api-url`, `--device-id`, etc.)
-2. **Environment variables** (`REPORTMATE_API_URL`, `REPORTMATE_DEVICE_ID`, etc.)
-3. **Registry values** (Windows) / **YAML Preferences** (macOS)
-4. **YAML configuration files** in data directory
-5. **Default YAML configuration** in program directory
+See [Configuration Management](#configuration-management) for the full order. In short: command-line flags, then policy, then machine settings, then legacy registry values, then environment variables, then the legacy YAML file, then defaults.
 
 ## Package Formats
 
@@ -555,7 +554,7 @@ Invoke-WebRequest -Uri "https://releases.reportmate.io/ReportMate-1.0.0.msi" -Ou
 msiexec /i reportmate.msi /quiet /l*v install.log
 
 # Configure
-Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https://your-api.azurewebsites.net"
+Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate\Settings" -Name "ApiUrl" -Value "https://your-api.azurewebsites.net"
 ```
 
 #### 3. Manual Installation
@@ -574,7 +573,7 @@ Copy-Item "C:\Temp\ReportMate\ProgramData\ManagedReports\*" "C:\ProgramData\Mana
 Copy-Item "C:\Temp\ReportMate\Program Files\Cimian\*" "C:\Program Files\Cimian\" -Recurse -Force
 
 # Run post-installation configuration
-Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "ApiUrl" -Value "https://your-api.azurewebsites.net"
+Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate\Settings" -Name "ApiUrl" -Value "https://your-api.azurewebsites.net"
 ```
 
 #### 2. Silent Deployment
@@ -599,7 +598,7 @@ Configuration ReportMateClient {
         }
         
         Registry ReportMateApiUrl {
-            Key = "HKLM:\SOFTWARE\ReportMate"
+            Key = "HKLM:\SOFTWARE\Policies\ReportMate"
             ValueName = "ApiUrl"
             ValueData = "https://your-api.azurewebsites.net"
             ValueType = "String"
@@ -614,7 +613,7 @@ Configuration ReportMateClient {
 
 ### Registry Settings
 
-All configuration is stored in `HKLM:\SOFTWARE\ReportMate`:
+Set these under `HKLM\SOFTWARE\Policies\ReportMate` (MDM) or `HKLM\SOFTWARE\ReportMate\Settings` (local). `Passphrase` and `ApiKey` are moved to the protected `HKLM\SOFTWARE\ReportMate\Secrets` key.
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -622,7 +621,7 @@ All configuration is stored in `HKLM:\SOFTWARE\ReportMate`:
 | `DeviceId` | Custom device identifier | Auto-generated |
 | `ApiKey` | API authentication key | None |
 | `Passphrase` | Client passphrase for restricted access/reporting | None |
-| `CollectionInterval` | Data collection interval (seconds) | 3600 |
+| `CollectionIntervalSeconds` | Data collection interval (seconds) | 3600 |
 | `LogLevel` | Logging level | Information |
 | `OsQueryPath` | Path to osquery executable | `C:\Program Files\osquery\osqueryi.exe` |
 
@@ -634,8 +633,11 @@ ReportMate supports enterprise configuration management through Configuration Se
 
 The application reads configuration from the following Windows Registry locations:
 
-1. **Standard Registry**: `HKLM\SOFTWARE\ReportMate`
-2. **CSP/MDM configuration**: `HKLM\SOFTWARE\Config\ReportMate` (higher precedence)
+1. **Policy**: `HKLM\SOFTWARE\Policies\ReportMate` (highest; locks the field in the app)
+2. **Machine settings**: `HKLM\SOFTWARE\ReportMate\Settings`
+3. **Legacy (deprecated)**: `HKLM\SOFTWARE\Config\ReportMate`, then values directly under `HKLM\SOFTWARE\ReportMate`
+
+Use only the policy key for MDM, as below.
 
 #### OMA-URI Configuration for Microsoft Intune
 
@@ -651,42 +653,42 @@ The application reads configuration from the following Windows Registry location
 
 **API Configuration:**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiUrl
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/ApiUrl
 Data type: String
 Value: https://api.reportmate.yourdomain.com
 ```
 
 **Device ID (Optional - auto-generated if not specified):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/DeviceId
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/DeviceId
 Data type: String
 Value: {custom-device-identifier}
 ```
 
 **API Authentication Key (Optional):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/ApiKey
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/ApiKey
 Data type: String
 Value: {your-api-key}
 ```
 
 **Client Passphrase (Optional - for restricted access/reporting):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/Passphrase
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/Passphrase
 Data type: String
 Value: {client-passphrase}
 ```
 
 **Collection Interval (Optional - default: 3600 seconds):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/CollectionInterval
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/CollectionInterval
 Data type: Integer
 Value: 7200
 ```
 
 **Log Level (Optional - default: Information):**
 ```
-OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Config/ReportMate/LogLevel
+OMA-URI: ./Device/Vendor/MSFT/Registry/HKLM/SOFTWARE/Policies/ReportMate/LogLevel
 Data type: String
 Value: Information
 ```
@@ -702,7 +704,7 @@ Value: Information
 
 **Registry Key Configuration:**
 - **Hive**: HKEY_LOCAL_MACHINE
-- **Key Path**: SOFTWARE\Config\ReportMate
+- **Key Path**: SOFTWARE\Policies\ReportMate
 - **Action**: Update
 
 **Registry Values:**
@@ -712,7 +714,7 @@ Value: Information
 | DeviceId | REG_SZ | {custom-device-identifier} |
 | ApiKey | REG_SZ | {your-api-key} |
 | Passphrase | REG_SZ | {client-passphrase} |
-| CollectionInterval | REG_DWORD | 7200 |
+| CollectionIntervalSeconds | REG_DWORD | 7200 |
 | LogLevel | REG_SZ | Information |
 | OsQueryPath | REG_SZ | C:\Program Files\osquery\osqueryi.exe |
 | ForceCollection | REG_DWORD | 0 |
@@ -735,7 +737,7 @@ param(
     [string]$LogLevel = "Information"
 )
 
-$RegistryPath = "HKLM:\SOFTWARE\Config\ReportMate"
+$RegistryPath = "HKLM:\SOFTWARE\ReportMate\Settings"
 
 # Create registry key if it doesn't exist
 if (-not (Test-Path $RegistryPath)) {
@@ -761,7 +763,7 @@ if ($Passphrase) {
     Write-Host "✅ Set Client Passphrase: [REDACTED]"
 }
 
-Set-ItemProperty -Path $RegistryPath -Name "CollectionInterval" -Value $CollectionInterval -Type DWord
+Set-ItemProperty -Path $RegistryPath -Name "CollectionIntervalSeconds" -Value $CollectionInterval -Type DWord
 Write-Host "✅ Set Collection Interval: $CollectionInterval seconds"
 
 Set-ItemProperty -Path $RegistryPath -Name "LogLevel" -Value $LogLevel -Type String
@@ -776,7 +778,7 @@ Write-Host "Configuration will take effect on the next ReportMate run."
 **Test Configuration:**
 ```powershell
 # Verify registry configuration
-Get-ItemProperty -Path "HKLM:\SOFTWARE\Config\ReportMate" -ErrorAction SilentlyContinue
+Get-ItemProperty -Path "HKLM:\SOFTWARE\Policies\ReportMate", "HKLM:\SOFTWARE\ReportMate\Settings" -ErrorAction SilentlyContinue
 
 # Test ReportMate configuration
 & "C:\Program Files\ReportMate\managedreportsrunner.exe" test --verbose
@@ -827,7 +829,7 @@ Get-WinEvent -LogName Application -Source "ReportMate" -MaxEvents 10
 2. **"osquery not found"**
    ```pwsh
    # Install osquery or set custom path
-   Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "OsQueryPath" -Value "C:\Tools\osquery\osqueryi.exe"
+   Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate\Settings" -Name "OsQueryPath" -Value "C:\Tools\osquery\osqueryi.exe"
    ```
 
 3. **"API connectivity failed"**
@@ -849,7 +851,7 @@ Get-WinEvent -LogName Application -Source "ReportMate" -MaxEvents 10
 
 Enable detailed logging:
 ```pwsh
-Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate" -Name "LogLevel" -Value "DEBUG"
+Set-ItemProperty -Path "HKLM:\SOFTWARE\ReportMate\Settings" -Name "LogLevel" -Value "DEBUG"
 & "C:\Program Files\ReportMate\managedreportsrunner.exe" --debug
 ```
 
@@ -891,7 +893,8 @@ reportmate-client-win/
 │   ├── app.manifest              # Windows application manifest
 │   ├── Configuration/            # Configuration management
 │   │   ├── ReportMateClientConfiguration.cs
-│   │   └── WindowsRegistryConfigurationProvider.cs
+│   │   ├── SettingsLoader.cs
+│   │   └── TrustedSettingsFile.cs
 │   └── Services/                 # Core services
 │       ├── ApiService.cs         # API communication
 │       ├── ConfigurationService.cs  # Configuration management

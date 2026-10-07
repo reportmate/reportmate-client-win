@@ -39,6 +39,11 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
   </ItemGroup>
 
+  <!-- Settings keys shared with the runner -->
+  <ItemGroup>
+    <Compile Include="..\Shared\**\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('Assets\ReportMate.png')">
     <Content Include="Assets\ReportMate.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

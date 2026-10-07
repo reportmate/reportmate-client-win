@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
+using ReportMate.Shared;
 using ReportMate.WindowsClient.Configuration;
 using System;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Security.Principal;
 using System.Threading.Tasks;
@@ -168,37 +170,64 @@ public class ConfigurationService : IConfigurationService
 
             _logger.LogInformation("Installing ReportMate configuration to registry");
 
-            using var key = Registry.LocalMachine.CreateSubKey(REGISTRY_KEY_PATH, true);
-            if (key == null)
+            using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
+
+            // Legacy keys are copied into Settings where Settings lacks a value, and left as
+            // they are; credentials go to the protected store.
+            foreach (var note in LegacySettingsMigration.Migrate().Concat(SecretStore.MigrateReadableCopies()))
             {
-                throw new InvalidOperationException("Could not create registry key");
+                _logger.LogWarning("Settings: {Note}", note);
             }
 
-            // Set basic configuration
-            var apiUrl = _configuration["ReportMate:ApiUrl"];
-            if (!string.IsNullOrEmpty(apiUrl))
+            // Settings go to the machine settings key, credentials to the protected store. A
+            // value policy sets is left to policy.
+            using (var settings = hklm.CreateSubKey(ReportMateSettingsKeys.SettingsRegistryPath, true))
             {
-                key.SetValue("ApiUrl", apiUrl, RegistryValueKind.String);
+                if (settings == null)
+                {
+                    throw new InvalidOperationException("Could not create registry key");
+                }
+
+                using var policy = hklm.OpenSubKey(ReportMateSettingsKeys.PolicyRegistryPath, false);
+                bool SetByPolicy(string name, string[] aliases) =>
+                    policy != null && aliases.Prepend(name).Any(n => policy.GetValueNames().Contains(n, StringComparer.OrdinalIgnoreCase));
+
+                void Set(string name, object value, RegistryValueKind kind, params string[] aliases)
+                {
+                    if (SetByPolicy(name, aliases)) return;
+                    if (SecretStore.IsSecret(name))
+                    {
+                        SecretStore.Write(name, value.ToString());
+                        return;
+                    }
+                    settings.SetValue(name, value, kind);
+                }
+
+                var apiUrl = _configuration["ReportMate:ApiUrl"];
+                if (!string.IsNullOrEmpty(apiUrl))
+                {
+                    Set("ApiUrl", apiUrl, RegistryValueKind.String, "ServerUrl");
+                }
+
+                var deviceId = _configuration["ReportMate:DeviceId"] ?? await GenerateDeviceIdAsync();
+                Set("DeviceId", deviceId, RegistryValueKind.String);
+
+                var apiKey = _configuration["ReportMate:ApiKey"];
+                if (!string.IsNullOrEmpty(apiKey))
+                {
+                    Set("ApiKey", apiKey, RegistryValueKind.String);
+                }
+
+                var collectionInterval = int.TryParse(_configuration["ReportMate:CollectionIntervalSeconds"], out var interval) ? interval : 3600;
+                Set("CollectionIntervalSeconds", collectionInterval, RegistryValueKind.DWord, "CollectionInterval");
+                Set("LogLevel", _configuration["Logging:LogLevel:Default"] ?? "Information", RegistryValueKind.String);
+                Set("OsQueryPath", _configuration["ReportMate:OsQueryPath"] ?? @"C:\Program Files\osquery\osqueryi.exe", RegistryValueKind.String);
+                var cimianEnabled = bool.TryParse(_configuration["ReportMate:CimianIntegrationEnabled"], out var enabled) ? enabled : true;
+                Set("CimianIntegrationEnabled", cimianEnabled ? 1 : 0, RegistryValueKind.DWord);
             }
 
-            var deviceId = _configuration["ReportMate:DeviceId"] ?? await GenerateDeviceIdAsync();
-            key.SetValue("DeviceId", deviceId, RegistryValueKind.String);
-
-            var apiKey = _configuration["ReportMate:ApiKey"];
-            if (!string.IsNullOrEmpty(apiKey))
-            {
-                key.SetValue("ApiKey", apiKey, RegistryValueKind.String);
-            }
-
-            // Set default values
-            var collectionInterval = int.TryParse(_configuration["ReportMate:CollectionIntervalSeconds"], out var interval) ? interval : 3600;
-            key.SetValue("CollectionInterval", collectionInterval, RegistryValueKind.DWord);
-            key.SetValue("LogLevel", _configuration["Logging:LogLevel:Default"] ?? "Information", RegistryValueKind.String);
-            key.SetValue("OsQueryPath", _configuration["ReportMate:OsQueryPath"] ?? @"C:\Program Files\osquery\osqueryi.exe", RegistryValueKind.String);
-            var cimianEnabled = bool.TryParse(_configuration["ReportMate:CimianIntegrationEnabled"], out var enabled) ? enabled : true;
-            key.SetValue("CimianIntegrationEnabled", cimianEnabled ? 1 : 0, RegistryValueKind.DWord);
-
-            // Set installation timestamp
+            // Install time and version are state, not settings, and stay on the top-level key.
+            using var key = hklm.CreateSubKey(REGISTRY_KEY_PATH, true);
             key.SetValue("InstallTime", DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
             key.SetValue("Version", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0.0", RegistryValueKind.String);
 

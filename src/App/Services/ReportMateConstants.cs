@@ -1,4 +1,5 @@
 using System.Reflection;
+using ReportMate.Shared;
 
 namespace ReportMate.App.Services;
 
@@ -8,9 +9,10 @@ public static class ReportMateConstants
     public const string CliExecutableName = "managedreportsrunner.exe";
     public const string LogDirectory = @"C:\ProgramData\ManagedReports\logs";
     public const string CacheDirectory = @"C:\ProgramData\ManagedReports\cache";
-    public const string PolicyRegistryPath = @"SOFTWARE\Policies\ReportMate";
-    public const string SettingsRegistryPath = @"SOFTWARE\ReportMate\Settings";
-    public const string StandardRegistryPath = @"SOFTWARE\ReportMate";
+    public const string PolicyRegistryPath = ReportMateSettingsKeys.PolicyRegistryPath;
+    public const string SettingsRegistryPath = ReportMateSettingsKeys.SettingsRegistryPath;
+    public const string StandardRegistryPath = ReportMateSettingsKeys.LegacyRegistryPath;
+    public const string LegacyConfigRegistryPath = ReportMateSettingsKeys.LegacyConfigRegistryPath;
 
     public const int DefaultCollectionInterval = 3600;
     public const int DefaultMaxDataAge = 30;
