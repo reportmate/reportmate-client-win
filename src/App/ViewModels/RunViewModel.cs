@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
 using ReportMate.App.Services;
+using ReportMate.Shared;
 
 namespace ReportMate.App.ViewModels;
 
@@ -138,11 +139,11 @@ public partial class RunViewModel : ObservableObject
         AppendLine($"[DEBUG] Args: {string.Join(" ", args)}", LogLevel.Debug);
         AppendLine($"[DEBUG] Modules: {string.Join(", ", selectedModules)}", LogLevel.Debug);
 
-        // Snapshot existing log files before CLI creates a new one
+        // Snapshot every log and its length before the runner starts: the daily log may
+        // already exist, so this run's lines can be an append rather than a new file.
         var logDir = ReportMateConstants.LogDirectory;
-        var existingLogs = Directory.Exists(logDir)
-            ? new HashSet<string>(Directory.GetFiles(logDir, "*.log"))
-            : new HashSet<string>();
+        var existingLogs = RunLogLocator.Snapshot(logDir);
+        var runStartUtc = DateTime.UtcNow;
 
         try
         {
@@ -168,7 +169,7 @@ public partial class RunViewModel : ObservableObject
             AppendLine($"[i] managedreportsrunner started (PID: {_cliProcess.Id})", LogLevel.Info);
 
             // Tail the log file in background
-            var tailTask = TailLogFileAsync(logDir, existingLogs, _cts.Token);
+            var tailTask = TailLogFileAsync(logDir, existingLogs, runStartUtc, _cts.Token);
 
             await _cliProcess.WaitForExitAsync(_cts.Token);
             LastExitCode = _cliProcess.ExitCode;
@@ -232,32 +233,28 @@ public partial class RunViewModel : ObservableObject
 
     // ── Log File Tailer ────────────────────────────────────────────
 
-    private async Task TailLogFileAsync(string logDir, HashSet<string> existingLogs, CancellationToken ct)
+    private async Task TailLogFileAsync(string logDir, IReadOnlyDictionary<string, long> existingLogs, DateTime runStartUtc, CancellationToken ct)
     {
-        // Wait for the CLI to create a new log file
-        string? logFile = null;
-        for (int i = 0; i < 30 && !ct.IsCancellationRequested; i++)
+        // Wait for the run's first log line, for as long as the run lasts: at the default
+        // level the runner may write nothing for a while.
+        RunLogLocator.RunLog? runLog = null;
+        while (runLog is null && !ct.IsCancellationRequested)
         {
-            await Task.Delay(500, ct);
-            if (!Directory.Exists(logDir)) continue;
-
-            logFile = Directory.GetFiles(logDir, "*.log")
-                .Where(f => !existingLogs.Contains(f))
-                .OrderByDescending(File.GetCreationTimeUtc)
-                .FirstOrDefault();
-
-            if (logFile is not null) break;
+            try { await Task.Delay(500, ct); }
+            catch (OperationCanceledException) { break; }
+            runLog = RunLogLocator.FindRunLog(logDir, existingLogs, runStartUtc);
         }
 
-        if (logFile is null)
+        if (runLog is null)
         {
-            AppendLine("[!] Could not detect log file — output may not stream.", LogLevel.Warning);
+            AppendLine("[!] The run wrote nothing to its log.", LogLevel.Warning);
             return;
         }
 
+        var logFile = runLog.Path;
         AppendLine($"[i] Tailing: {Path.GetFileName(logFile)}", LogLevel.Debug);
 
-        long lastPosition = 0;
+        long lastPosition = runLog.StartOffset;
         while (!ct.IsCancellationRequested)
         {
             try
@@ -306,14 +303,14 @@ public partial class RunViewModel : ObservableObject
         });
     }
 
-    private static LogLevel ParseLogLevel(string line)
+    private static LogLevel ParseLogLevel(string line) => LogLineLevel.Classify(line) switch
     {
-        if (line.Contains("[Error]") || line.Contains("[ERROR]") || line.Contains("[X]")) return LogLevel.Error;
-        if (line.Contains("[Warning]") || line.Contains("[WARNING]") || line.Contains("[!]")) return LogLevel.Warning;
-        if (line.Contains("[Success]") || line.Contains("[SUCCESS]") || line.Contains("[+]")) return LogLevel.Success;
-        if (line.Contains("[Debug]") || line.Contains("[DEBUG]") || line.Contains("[DBG]")) return LogLevel.Debug;
-        return LogLevel.Info;
-    }
+        LogLineKind.Error => LogLevel.Error,
+        LogLineKind.Warning => LogLevel.Warning,
+        LogLineKind.Success => LogLevel.Success,
+        LogLineKind.Debug => LogLevel.Debug,
+        _ => LogLevel.Info,
+    };
 
     private static string? FindCliExecutable()
     {
