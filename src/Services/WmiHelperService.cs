@@ -19,7 +19,7 @@ public interface IWmiHelperService
     Task<T?> QueryWmiSingleValueAsync<T>(string query, string propertyName, string? nameSpace = null);
     Task<List<Dictionary<string, object?>>> QueryWmiMultipleAsync(string query, string? nameSpace = null);
     Task<bool> IsWmiAvailableAsync();
-    Task<string?> ExecutePowerShellCommandAsync(string command);
+    Task<string?> ExecutePowerShellCommandAsync(string command, TimeSpan? timeout = null);
 }
 
 public class WmiHelperService : IWmiHelperService
@@ -27,6 +27,10 @@ public class WmiHelperService : IWmiHelperService
     private readonly ILogger<WmiHelperService> _logger;
     private bool? _wmiAvailable;
     private static readonly object _wmiLock = new object();
+
+    // A provider that stops answering would otherwise hold the run open; each step of
+    // the enumeration gives up after this long.
+    private static readonly TimeSpan WmiQueryTimeout = TimeSpan.FromSeconds(60);
 
     public WmiHelperService(ILogger<WmiHelperService> logger)
     {
@@ -146,6 +150,7 @@ public class WmiHelperService : IWmiHelperService
 
             using (searcher)
             {
+                searcher.Options.Timeout = WmiQueryTimeout;
                 using var results = searcher.Get();
                 foreach (ManagementObject obj in results)
                 {
@@ -264,6 +269,7 @@ public class WmiHelperService : IWmiHelperService
 
             using (searcher)
             {
+                searcher.Options.Timeout = WmiQueryTimeout;
                 using var wmiResults = searcher.Get();
                 foreach (ManagementObject obj in wmiResults)
                 {
@@ -294,42 +300,29 @@ public class WmiHelperService : IWmiHelperService
         return results;
     }
 
-    public async Task<string?> ExecutePowerShellCommandAsync(string command)
+    public async Task<string?> ExecutePowerShellCommandAsync(string command, TimeSpan? timeout = null)
     {
         try
         {
             _logger.LogDebug("Executing PowerShell command: {Command}", command);
 
-            var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command));
+            var run = await BoundedProcess.RunPowerShellAsync(command, timeout ?? BoundedProcess.DefaultTimeout);
 
-            var processInfo = new ProcessStartInfo
+            if (run.TimedOut)
             {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            using var process = new Process { StartInfo = processInfo };
-            process.Start();
-
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
-
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode == 0)
-            {
-                var result = output.Trim();
-                return string.IsNullOrEmpty(result) ? null : result;
-            }
-            else
-            {
-                _logger.LogWarning("PowerShell command failed with exit code {ExitCode}: {Error}", process.ExitCode, error);
+                _logger.LogWarning("PowerShell command did not finish within {Seconds:N0}s and was stopped: {Command}",
+                    (timeout ?? BoundedProcess.DefaultTimeout).TotalSeconds, PowerShellRunner.Summarize(command));
                 return null;
             }
+
+            if (run.ExitCode == 0)
+            {
+                var result = run.Output.Trim();
+                return string.IsNullOrEmpty(result) ? null : result;
+            }
+
+            _logger.LogWarning("PowerShell command failed with exit code {ExitCode}: {Error}", run.ExitCode, run.Error);
+            return null;
         }
         catch (Exception ex)
         {

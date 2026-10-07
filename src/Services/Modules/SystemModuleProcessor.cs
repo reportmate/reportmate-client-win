@@ -802,25 +802,18 @@ Write-Output ""$licStatus|$licName|$partialKey|$hasFirmware|$licSource|$firmware
                 tempScript = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"rm_activation_{Guid.NewGuid():N}.ps1");
                 System.IO.File.WriteAllText(tempScript, scriptContent);
 
-                using var process = new System.Diagnostics.Process();
-                process.StartInfo.FileName = "powershell.exe";
-                process.StartInfo.Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{tempScript}\"";
-                process.StartInfo.UseShellExecute = false;
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.RedirectStandardError = true;
-                process.StartInfo.CreateNoWindow = true;
-
-                process.Start();
-
-                if (!process.WaitForExit(30000)) // 30 second timeout (some devices have slow CIM queries)
+                // 30 second timeout (some devices have slow CIM queries)
+                var run = BoundedProcess.Run(
+                    new System.Diagnostics.ProcessStartInfo("powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{tempScript}\""),
+                    TimeSpan.FromSeconds(30));
+                if (run.TimedOut)
                 {
-                    process.Kill();
                     _logger.LogWarning("PowerShell activation query timed out after 30 seconds");
                     return activation;
                 }
 
-                var output = process.StandardOutput.ReadToEnd().Trim();
-                var error = process.StandardError.ReadToEnd();
+                var output = run.Output.Trim();
+                var error = run.Error;
 
                 if (!string.IsNullOrEmpty(error))
                 {

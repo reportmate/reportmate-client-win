@@ -1482,22 +1482,17 @@ try {
         {
             try
             {
-                using var process = new Process();
-                process.StartInfo.FileName = fileName;
-                process.StartInfo.Arguments = arguments;
-                process.StartInfo.UseShellExecute = false;
-                process.StartInfo.RedirectStandardOutput = true;
-                process.StartInfo.CreateNoWindow = true;
-                
                 // For Windows commands like netsh, use the system's default encoding
                 // This is typically Windows-1252 or the system's ANSI code page
                 // We'll let .NET use the default encoding and then normalize the Unicode afterward
-                
-                process.Start();
-                var output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit();
-                
-                return output;
+                var run = BoundedProcess.Run(new ProcessStartInfo(fileName, arguments), CommandTimeout);
+                if (run.TimedOut)
+                {
+                    _logger.LogWarning("{FileName} {Arguments} did not finish within {Seconds:N0}s and was stopped",
+                        fileName, arguments, CommandTimeout.TotalSeconds);
+                }
+
+                return run.Output;
             }
             catch (Exception ex)
             {
@@ -1505,6 +1500,8 @@ try {
                 return string.Empty;
             }
         }
+
+        private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
 
         /// <summary>
         /// Map numeric interface types to descriptive names
@@ -1977,71 +1974,37 @@ try {
                     }
                 }
 
-                // Final fallback: Try PowerShell to get computer info
+                // Final fallback: Win32_ComputerSystem through WMI. This used to shell out to
+                // Get-ComputerInfo, which gathers far more than it returns and stalled for
+                // over 40 minutes on a VM, holding the whole run open.
                 if (string.IsNullOrEmpty(data.Hostname))
                 {
                     try
                     {
-                        var computerInfoCommand = @"
-try {
-    $computerInfo = Get-ComputerInfo -ErrorAction SilentlyContinue
-    if ($computerInfo) {
-        [PSCustomObject]@{
-            Hostname = $computerInfo.CsName
-            Domain = $computerInfo.CsDomain
-            WorkGroup = $computerInfo.CsWorkgroup
-        } | ConvertTo-Json
-    } else {
-        $env:COMPUTERNAME | ConvertTo-Json
-    }
-} catch {
-    $env:COMPUTERNAME | ConvertTo-Json
-}";
+                        var computerSystem = _wmiHelperService
+                            .QueryWmiSafeAsync("SELECT Name, Domain, Workgroup, PartOfDomain FROM Win32_ComputerSystem")
+                            .GetAwaiter().GetResult();
+                        var identity = ComputerSystemIdentity.From(computerSystem);
 
-                        var computerInfoOutput = _wmiHelperService.ExecutePowerShellCommandAsync(computerInfoCommand).Result;
-                        if (!string.IsNullOrEmpty(computerInfoOutput))
+                        data.Hostname = identity.Hostname ?? Environment.MachineName;
+                        _logger.LogDebug("Found hostname via {Source}: {Hostname}",
+                            identity.Hostname != null ? "Win32_ComputerSystem" : "the machine name", data.Hostname);
+
+                        if (identity.Domain != null)
                         {
-                            try
-                            {
-                                var computerInfo = System.Text.Json.JsonSerializer.Deserialize(
-                                    computerInfoOutput, 
-                                    ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.DictionaryStringObject);
-                                    
-                                if (computerInfo != null)
-                                {
-                                    var hostname = GetStringValue(computerInfo, "Hostname");
-                                    var domain = GetStringValue(computerInfo, "Domain");
-                                    var workgroup = GetStringValue(computerInfo, "WorkGroup");
-                                    
-                                    if (!string.IsNullOrEmpty(hostname))
-                                    {
-                                        data.Hostname = hostname;
-                                        _logger.LogDebug("Found hostname via PowerShell Get-ComputerInfo: {Hostname}", hostname);
-                                    }
-                                    
-                                    if (!string.IsNullOrEmpty(domain) && !domain.Equals(hostname, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        data.Domain = domain;
-                                        data.Dns.Domain = domain;
-                                        _logger.LogDebug("Found domain via PowerShell Get-ComputerInfo: {Domain}", domain);
-                                    }
-                                }
-                            }
-                            catch
-                            {
-                                // If it's just a simple string (from fallback), use it as hostname
-                                var simpleHostname = computerInfoOutput.Trim('"');
-                                if (!string.IsNullOrEmpty(simpleHostname) && simpleHostname != "null")
-                                {
-                                    data.Hostname = simpleHostname;
-                                    _logger.LogDebug("Found hostname via PowerShell environment variable: {Hostname}", simpleHostname);
-                                }
-                            }
+                            data.Domain = identity.Domain;
+                            data.Dns.Domain = identity.Domain;
+                            _logger.LogDebug("Found domain via Win32_ComputerSystem: {Domain}", identity.Domain);
+                        }
+                        else if (identity.Workgroup != null)
+                        {
+                            _logger.LogDebug("Not domain joined; workgroup {Workgroup}", identity.Workgroup);
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to get hostname via PowerShell");
+                        _logger.LogWarning(ex, "Failed to get hostname via Win32_ComputerSystem");
+                        data.Hostname = Environment.MachineName;
                     }
                 }
 
