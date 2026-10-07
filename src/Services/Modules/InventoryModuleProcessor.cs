@@ -233,57 +233,17 @@ namespace ReportMate.WindowsClient.Services.Modules
         }
 
         /// <summary>
-        /// Extract device serial number from osquery results
+        /// Extract device serial number from osquery results, falling back to WMI when osquery has none
         /// </summary>
         private string ExtractSerialNumber(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
         {
-            // Method 1: Try system_info hardware_serial (BIOS/UEFI serial - most reliable)
-            if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0)
+            var found = HardwareSerial.Resolve(osqueryResults, HardwareSerial.FromWmi);
+            if (found is not null)
             {
-                var firstResult = systemInfo[0];
-                if (firstResult.TryGetValue("hardware_serial", out var serial) && !string.IsNullOrEmpty(serial?.ToString()))
-                {
-                    var serialStr = serial.ToString()?.Trim();
-                    
-                    // Reject only obvious placeholder values - accept everything else as-is
-                    if (!string.IsNullOrEmpty(serialStr) && 
-                        serialStr != "0" && 
-                        serialStr != "System Serial Number" &&
-                        serialStr != "To be filled by O.E.M." &&
-                        serialStr != "Default string" &&
-                        !serialStr.StartsWith("00000000"))
-                    {
-                        // Sanitize before returning
-                        var sanitized = SanitizeSerialNumber(serialStr);
-                        _logger.LogInformation("Using hardware_serial from system_info: {Serial} (sanitized: {Sanitized})", 
-                            serialStr, sanitized);
-                        return sanitized;
-                    }
-                }
-            }
-
-            // Method 2: Try chassis_info serial as fallback
-            if (osqueryResults.TryGetValue("chassis_info", out var chassisInfo) && chassisInfo.Count > 0)
-            {
-                var chassis = chassisInfo[0];
-                if (chassis.TryGetValue("serial", out var chassisSerial) && !string.IsNullOrEmpty(chassisSerial?.ToString()))
-                {
-                    var chassisSerialStr = chassisSerial.ToString()?.Trim();
-                    
-                    // Reject only obvious placeholder values
-                    if (!string.IsNullOrEmpty(chassisSerialStr) && 
-                        chassisSerialStr != "0" && 
-                        chassisSerialStr != "System Serial Number" &&
-                        chassisSerialStr != "To be filled by O.E.M." &&
-                        chassisSerialStr != "Default string")
-                    {
-                        // Sanitize before returning
-                        var sanitized = SanitizeSerialNumber(chassisSerialStr);
-                        _logger.LogInformation("Using serial from chassis_info: {Serial} (sanitized: {Sanitized})", 
-                            chassisSerialStr, sanitized);
-                        return sanitized;
-                    }
-                }
+                var sanitized = SanitizeSerialNumber(found.Serial);
+                _logger.LogInformation("Using hardware serial from {Source}: {Serial} (sanitized: {Sanitized})",
+                    found.Source, found.Serial, sanitized);
+                return sanitized;
             }
 
             // No valid hardware serial found - device cannot register with ReportMate
