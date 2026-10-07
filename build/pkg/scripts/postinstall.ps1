@@ -611,9 +611,21 @@ try {
 
     $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
     
+    # Each schedule's "args" carries its storage mode: quick hourly, deep once a
+    # day. Registering the tasks with --run-modules alone left every run on auto,
+    # so the hourly task walked the whole system volume and hit its 30-minute
+    # limit before it could send anything.
+    function Get-ReportMateTaskArgument {
+        param($Schedule, [switch]$NoModules)
+        $parts = @()
+        if (-not $NoModules) { $parts += "--run-modules $($Schedule.modules -join ',')" }
+        if ($Schedule.args) { $parts += [string]$Schedule.args }
+        return ($parts -join ' ')
+    }
+
     # Create hourly collection task
     Write-Host "Creating hourly collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.hourly.modules -join ',')" -WorkingDirectory $InstallPath
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument (Get-ReportMateTaskArgument $scheduleConfig.schedules.hourly) -WorkingDirectory $InstallPath
     $hourlyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.hourly 55
     $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 1) -RandomDelay $hourlyDelay
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5) -RunOnlyIfNetworkAvailable -Hidden -AllowStartIfOnBatteries
@@ -623,7 +635,7 @@ try {
     
     # Create 4-hourly collection task  
     Write-Host "Creating 4-hourly collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.every4hours.modules -join ',')" -WorkingDirectory $InstallPath
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument (Get-ReportMateTaskArgument $scheduleConfig.schedules.every4hours) -WorkingDirectory $InstallPath
     $fourHourlyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.every4hours 55
     $trigger = New-ScheduledTaskTrigger -Once -At "09:00" -RepetitionInterval (New-TimeSpan -Hours 4) -RandomDelay $fourHourlyDelay
     
@@ -631,7 +643,7 @@ try {
     
     # Create daily collection task
     Write-Host "Creating daily collection task..."
-    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $($scheduleConfig.schedules.daily.modules -join ',')" -WorkingDirectory $InstallPath
+    $action = New-ScheduledTaskAction -Execute $runnerExe -Argument (Get-ReportMateTaskArgument $scheduleConfig.schedules.daily) -WorkingDirectory $InstallPath
     $dailyDelay = Get-ReportMateRandomDelay $scheduleConfig.schedules.daily 120
     $trigger = New-ScheduledTaskTrigger -Daily -At "09:00" -RandomDelay $dailyDelay
     
@@ -640,7 +652,12 @@ try {
     # Create all modules collection task (if configured)
     if ($scheduleConfig.schedules.all) {
         Write-Host "Creating all modules collection task..."
-        $action = New-ScheduledTaskAction -Execute $runnerExe -WorkingDirectory $InstallPath
+        $allArg = Get-ReportMateTaskArgument $scheduleConfig.schedules.all -NoModules
+        $action = if ($allArg) {
+            New-ScheduledTaskAction -Execute $runnerExe -Argument $allArg -WorkingDirectory $InstallPath
+        } else {
+            New-ScheduledTaskAction -Execute $runnerExe -WorkingDirectory $InstallPath
+        }
         # Full collection is expensive, so it runs once daily inside an overnight
         # maintenance window rather than on a rolling interval that drifts into
         # working hours. RandomDelay spreads the fleet across the window so the

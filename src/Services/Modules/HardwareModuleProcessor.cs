@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services.Modules;
 using ReportMate.WindowsClient.Configuration;
@@ -3486,7 +3487,7 @@ try {
                     return null;
 
                 var json = File.ReadAllText(_storageAnalysisCachePath);
-                var cached = JsonSerializer.Deserialize<List<DirectoryInformation>>(json);
+                var cached = JsonSerializer.Deserialize(json, ReportMateJsonContext.Default.ListDirectoryInformation);
                 
                 if (cached != null)
                 {
@@ -3515,10 +3516,9 @@ try {
                     Directory.CreateDirectory(cacheDir);
                 }
 
-                var json = JsonSerializer.Serialize(analysis, new JsonSerializerOptions 
-                { 
-                    WriteIndented = true 
-                });
+                // Reflection-based serialization is disabled in this build, so the cache
+                // goes through the source-generated context or it never gets written.
+                var json = JsonSerializer.Serialize(analysis, ReportMateJsonContext.Default.ListDirectoryInformation);
                 File.WriteAllText(_storageAnalysisCachePath, json);
                 
                 _logger.LogInformation("Saved storage analysis cache with {Count} items", analysis.Count);

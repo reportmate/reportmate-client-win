@@ -195,7 +195,9 @@ try {
         } else {
             # If explicit list, use --run-modules
             $modulesArg = $allModules -join ','
-            $action = New-ScheduledTaskAction -Execute $runnerExe -Argument "--run-modules $modulesArg" -WorkingDirectory $InstallPath
+            $allArg = "--run-modules $modulesArg"
+            if ($scheduleConfig.schedules.all.args) { $allArg += " $($scheduleConfig.schedules.all.args)" }
+            $action = New-ScheduledTaskAction -Execute $runnerExe -Argument $allArg -WorkingDirectory $InstallPath
         }
 
         # Full collection is expensive, so it runs once daily inside an overnight
