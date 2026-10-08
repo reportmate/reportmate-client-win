@@ -42,13 +42,6 @@ public sealed class ConfigManager
         Config = config;
     }
 
-    // Values written as DWORDs; everything else is a string.
-    private static readonly HashSet<string> DwordValues = new(StringComparer.Ordinal)
-    {
-        "CollectionIntervalSeconds", "MaxDataAgeMinutes", "ApiTimeoutSeconds", "MaxRetryAttempts",
-        "DebugLogging", "CimianIntegrationEnabled", "SkipCertificateValidation",
-    };
-
     // An empty field for these means "leave the saved value alone".
     private static readonly HashSet<string> SkipWhenEmpty = new(StringComparer.Ordinal)
     {
@@ -93,7 +86,7 @@ public sealed class ConfigManager
             if (SecretStore.IsSecret(name))
                 SecretStore.Write(name, value.ToString());
             else
-                key.SetValue(name, value, DwordValues.Contains(name) ? RegistryValueKind.DWord : RegistryValueKind.String);
+                key.SetValue(name, value, PrefsSettingWrites.DwordValueNames.Contains(name) ? RegistryValueKind.DWord : RegistryValueKind.String);
         }
     }
 
@@ -120,7 +113,7 @@ public sealed class ConfigManager
             config.SkipCertificateValidation = ReadBool(key, "SkipCertificateValidation") ?? config.SkipCertificateValidation;
             config.MaxRetryAttempts = ReadInt(key, "MaxRetryAttempts") ?? config.MaxRetryAttempts;
             config.UserAgent = ReadString(key, "UserAgent") ?? config.UserAgent;
-            config.ProxyUrl = ReadString(key, "ProxyUrl") ?? config.ProxyUrl;
+            config.ProxyUrl = ReadString(key, "ProxyUrl") ?? ReadString(key, "Proxy:Url") ?? config.ProxyUrl;
         }
         catch { }
     }

@@ -144,17 +144,15 @@ public class Program
                 .UseDefaults()
                 .AddMiddleware(async (context, next) =>
                 {
-                    // Capture storage mode from parsed result before handlers run
+                    // Capture storage mode before handlers run: an explicit --storage-mode
+                    // wins, then the StorageMode setting (policy or Prefs), then auto.
                     var storageModeOption = context.ParseResult.RootCommandResult.Command.Options
                         .FirstOrDefault(o => o.Name == "storage-mode");
-                    if (storageModeOption is not null)
-                    {
-                        var storageModeResult = context.ParseResult.FindResultFor(storageModeOption);
-                        if (storageModeResult is not null)
-                        {
-                            CurrentStorageMode = storageModeResult.GetValueOrDefault<string>() ?? "auto";
-                        }
-                    }
+                    var storageModeResult = storageModeOption is null ? null : context.ParseResult.FindResultFor(storageModeOption);
+                    CurrentStorageMode = ReportMateSettingsKeys.ResolveStorageMode(
+                        storageModeResult?.GetValueOrDefault<string>(),
+                        flagGiven: storageModeResult is { IsImplicit: false },
+                        configured: configuration["ReportMate:StorageMode"]);
 
                     var helloOption = context.ParseResult.CommandResult.Command.Options
                         .FirstOrDefault(o => o.Name == "hello");
@@ -365,6 +363,10 @@ public class Program
             OsQueryPath = configuration["ReportMate:OsQueryPath"] ?? @"C:\Program Files\osquery\osqueryi.exe"
         };
         services.AddSingleton(Microsoft.Extensions.Options.Options.Create(reportMateConfig));
+
+        // Every client from the factory honours ProxyUrl and SkipCertificateValidation.
+        services.ConfigureHttpClientDefaults(http =>
+            http.ConfigurePrimaryHttpMessageHandler(() => RunnerHttpHandler.Create(configuration)));
 
         // Register HTTP client with proper configuration
         services.AddHttpClient<IApiService, ApiService>((serviceProvider, client) =>

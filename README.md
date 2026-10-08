@@ -162,6 +162,33 @@ Credentials (`Passphrase`, `ApiKey`) are kept in `HKLM\SOFTWARE\ReportMate\Secre
 
 The runner runs as SYSTEM, so the installer limits `C:\ProgramData\ManagedReports` to SYSTEM and Administrators (full control) and Users (read). If `appsettings.yaml` is owned by a non-administrator, or a non-administrator can change it, the runner ignores the file and logs why.
 
+### Policy template (ADMX)
+
+`resources/ReportMate.admx` and `resources/en-US/ReportMate.adml` offer every setting on the app's Prefs tab as a machine policy under `HKLM\SOFTWARE\Policies\ReportMate`. The app shows each one it finds there as **Managed by Policy** and locks the field.
+
+- **Group Policy**: copy `ReportMate.admx` into `C:\Windows\PolicyDefinitions` (or the Central Store) and `ReportMate.adml` into its `en-US` folder. The settings appear under Computer Configuration > Administrative Templates > ReportMate.
+- **Intune**: Devices > Configuration > Import ADMX, upload both files, then create an Imported Administrative Templates profile.
+
+| Category | Policy | Value | Type |
+|---|---|---|---|
+| Connection | API URL | `ApiUrl` | REG_SZ |
+| Connection | API key | `ApiKey` | REG_SZ |
+| Connection | Client passphrase | `Passphrase` | REG_SZ |
+| Collection | Collection interval (seconds) | `CollectionIntervalSeconds` | REG_DWORD |
+| Collection | Maximum data age (minutes) | `MaxDataAgeMinutes` | REG_DWORD |
+| Collection | API timeout (seconds) | `ApiTimeoutSeconds` | REG_DWORD |
+| Collection | osquery path | `OsQueryPath` | REG_SZ |
+| Collection | Storage analysis mode | `StorageMode` | REG_SZ (`auto`, `quick`, `deep`) |
+| Behavior | Debug logging | `DebugLogging` | REG_DWORD 1/0 |
+| Behavior | Cimian integration | `CimianIntegrationEnabled` | REG_DWORD 1/0 |
+| Behavior | Skip certificate validation | `SkipCertificateValidation` | REG_DWORD 1/0 |
+| Behavior | Maximum retry attempts | `MaxRetryAttempts` | REG_DWORD |
+| Advanced | Device ID | `DeviceId` | REG_SZ |
+| Advanced | User agent | `UserAgent` | REG_SZ |
+| Advanced | Proxy URL | `ProxyUrl` | REG_SZ |
+
+`ApiKey` and `Passphrase` set this way are written in plain text to the policy key, which every user on the device can read, until the next elevated run moves them into `Secrets` (see above), and again whenever the policy is re-applied. They are in the template for organisations that accept that exposure.
+
 ### Enterprise Deployment with CSP/OMA-URI
 
 For enterprise environments, configuration can be managed through:

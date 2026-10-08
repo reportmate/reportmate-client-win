@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ReportMate Windows client policy template, English strings. Companion to ReportMate.admx. -->
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                           revision="1.0"
+                           schemaVersion="1.0"
+                           xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+
+  <displayName>ReportMate</displayName>
+  <description>ReportMate Windows client settings</description>
+
+  <resources>
+    <stringTable>
+      <string id="Cat_ReportMate">ReportMate</string>
+      <string id="Cat_Connection">Connection</string>
+      <string id="Cat_Collection">Collection</string>
+      <string id="Cat_Behavior">Behavior</string>
+      <string id="Cat_Advanced">Advanced</string>
+
+      <string id="ApiUrl">API URL</string>
+      <string id="ApiUrl_Help">The ReportMate API endpoint this device reports to, for example https://reportmate.example.com.
+
+Registry value: ApiUrl (REG_SZ). The older name ServerUrl is still read.
+
+Not configured: the URL saved in the Prefs tab or by the installer is used. There is no built-in default; without a URL the client collects but cannot send.
+
+A one-off --api-url on the command line still overrides this for that run.</string>
+
+      <string id="ApiKey">API key</string>
+      <string id="ApiKey_Help">The API key sent in the X-API-Key header with every request.
+
+Registry value: ApiKey (REG_SZ).
+
+Not configured: the key saved in the Prefs tab, if any. Default: none.
+
+Security: a value set by policy is written in plain text to HKLM\SOFTWARE\Policies\ReportMate, which every user on the device can read, and it is also kept in the policy source (a Group Policy Object's Registry.pol, or the Intune profile). The next elevated ReportMate run copies it into the protected store HKLM\SOFTWARE\ReportMate\Secrets (SYSTEM and Administrators only) and blanks the readable policy value, leaving the empty value in place so the setting still shows as managed. Until that run, and again whenever the policy is re-applied, the value is readable on the device. Prefer delivering this credential another way where you can; it is offered here for organisations that accept that exposure.</string>
+
+      <string id="Passphrase">Client passphrase</string>
+      <string id="Passphrase_Help">The client passphrase sent in the X-Client-Passphrase header, for servers that only accept reports from clients that know it.
+
+Registry value: Passphrase (REG_SZ).
+
+Not configured: the passphrase saved in the Prefs tab, if any. Default: none.
+
+Security: a value set by policy is written in plain text to HKLM\SOFTWARE\Policies\ReportMate, which every user on the device can read, and it is also kept in the policy source (a Group Policy Object's Registry.pol, or the Intune profile). The next elevated ReportMate run copies it into the protected store HKLM\SOFTWARE\ReportMate\Secrets (SYSTEM and Administrators only) and blanks the readable policy value, leaving the empty value in place so the setting still shows as managed. Until that run, and again whenever the policy is re-applied, the value is readable on the device. Prefer delivering this credential another way where you can; it is offered here for organisations that accept that exposure.</string>
+
+      <string id="CollectionIntervalSeconds">Collection interval (seconds)</string>
+      <string id="CollectionIntervalSeconds_Help">The collection interval, in seconds, that the client records in its configuration and reports with its Cimian integration data. The installed scheduled tasks decide when runs actually happen.
+
+Registry value: CollectionIntervalSeconds (REG_DWORD), 60 to 86400. The older name CollectionInterval is still read.
+
+Default: 3600 (one hour).</string>
+
+      <string id="MaxDataAgeMinutes">Maximum data age (minutes)</string>
+      <string id="MaxDataAgeMinutes_Help">A run that starts within this many minutes of the last successful run is treated as recent and skipped, unless it is started with --force.
+
+Registry value: MaxDataAgeMinutes (REG_DWORD), 1 to 1440.
+
+Default: 30.</string>
+
+      <string id="ApiTimeoutSeconds">API timeout (seconds)</string>
+      <string id="ApiTimeoutSeconds_Help">How long, in seconds, the client waits for the ReportMate API before giving up on a request.
+
+Registry value: ApiTimeoutSeconds (REG_DWORD), 10 to 3600.
+
+Default: 300 (five minutes).</string>
+
+      <string id="OsQueryPath">osquery path</string>
+      <string id="OsQueryPath_Help">Full path to the osqueryi executable the client runs to collect data.
+
+Registry value: OsQueryPath (REG_SZ).
+
+Default: C:\Program Files\osquery\osqueryi.exe</string>
+
+      <string id="StorageMode">Storage analysis mode</string>
+      <string id="StorageMode_Help">How the hardware module analyses storage.
+
+Auto: reuse a deep analysis less than 24 hours old, otherwise run one.
+Quick: drive totals only (about a second).
+Deep: full per-folder analysis on every run (can take minutes).
+
+Registry value: StorageMode (REG_SZ): auto, quick or deep. Any other value is treated as auto.
+
+Default: auto. A --storage-mode given on the command line still overrides this for that run.</string>
+      <string id="StorageMode_auto">Auto</string>
+      <string id="StorageMode_quick">Quick</string>
+      <string id="StorageMode_deep">Deep</string>
+
+      <string id="DebugLogging">Debug logging</string>
+      <string id="DebugLogging_Help">Enabled: the client writes debug-level detail to its log.
+Disabled: normal logging only.
+
+Registry value: DebugLogging (REG_DWORD): 1 enabled, 0 disabled.
+
+Default: disabled.</string>
+
+      <string id="CimianIntegrationEnabled">Cimian integration</string>
+      <string id="CimianIntegrationEnabled_Help">Whether the client's Cimian integration is marked enabled in the configuration it records and reports.
+
+Registry value: CimianIntegrationEnabled (REG_DWORD): 1 enabled, 0 disabled.
+
+Default: enabled.</string>
+
+      <string id="SkipCertificateValidation">Skip certificate validation</string>
+      <string id="SkipCertificateValidation_Help">Enabled: the client accepts any TLS certificate from the API, including self-signed, expired and mismatched ones. Use only for testing; it removes the protection against an interception of reports and credentials.
+Disabled: certificates are validated normally.
+
+Registry value: SkipCertificateValidation (REG_DWORD): 1 enabled, 0 disabled.
+
+Default: disabled.</string>
+
+      <string id="MaxRetryAttempts">Maximum retry attempts</string>
+      <string id="MaxRetryAttempts_Help">How many times the client retries a failed upload before giving up for this run.
+
+Registry value: MaxRetryAttempts (REG_DWORD), 0 to 10.
+
+Default: 3.</string>
+
+      <string id="DeviceId">Device ID</string>
+      <string id="DeviceId_Help">A fixed identifier for this device. Leave unset in almost every case and let the client generate one. Assign it only in a policy that targets a single device; the same ID on several devices makes them report as one.
+
+Registry value: DeviceId (REG_SZ).
+
+Default: none (the client generates one). A one-off --device-id on the command line still overrides this for that run.</string>
+
+      <string id="UserAgent">User agent</string>
+      <string id="UserAgent_Help">The User-Agent header the client sends to the API.
+
+Registry value: UserAgent (REG_SZ).
+
+Default: ReportMate/1.0</string>
+
+      <string id="ProxyUrl">Proxy URL</string>
+      <string id="ProxyUrl_Help">An HTTP proxy for the client's connections to the API, as an absolute http or https URL with its port, for example http://proxy.example.com:8080. Local addresses bypass the proxy. A value that is not an absolute http or https URL is ignored.
+
+Registry value: ProxyUrl (REG_SZ). The name Proxy:Url is also read.
+
+Default: none (the system proxy settings apply).</string>
+    </stringTable>
+
+    <presentationTable>
+      <presentation id="ApiUrl">
+        <textBox refId="ApiUrl_Value"><label>API URL:</label></textBox>
+      </presentation>
+      <presentation id="ApiKey">
+        <textBox refId="ApiKey_Value"><label>API key:</label></textBox>
+      </presentation>
+      <presentation id="Passphrase">
+        <textBox refId="Passphrase_Value"><label>Client passphrase:</label></textBox>
+      </presentation>
+      <presentation id="CollectionIntervalSeconds">
+        <decimalTextBox refId="CollectionIntervalSeconds_Value" defaultValue="3600">Collection interval (seconds):</decimalTextBox>
+      </presentation>
+      <presentation id="MaxDataAgeMinutes">
+        <decimalTextBox refId="MaxDataAgeMinutes_Value" defaultValue="30">Maximum data age (minutes):</decimalTextBox>
+      </presentation>
+      <presentation id="ApiTimeoutSeconds">
+        <decimalTextBox refId="ApiTimeoutSeconds_Value" defaultValue="300">API timeout (seconds):</decimalTextBox>
+      </presentation>
+      <presentation id="OsQueryPath">
+        <textBox refId="OsQueryPath_Value"><label>osquery path:</label></textBox>
+      </presentation>
+      <presentation id="StorageMode">
+        <dropdownList refId="StorageMode_Value" noSort="true" defaultItem="0">Storage analysis mode:</dropdownList>
+      </presentation>
+      <presentation id="MaxRetryAttempts">
+        <decimalTextBox refId="MaxRetryAttempts_Value" defaultValue="3">Maximum retry attempts:</decimalTextBox>
+      </presentation>
+      <presentation id="DeviceId">
+        <textBox refId="DeviceId_Value"><label>Device ID:</label></textBox>
+      </presentation>
+      <presentation id="UserAgent">
+        <textBox refId="UserAgent_Value"><label>User agent:</label></textBox>
+      </presentation>
+      <presentation id="ProxyUrl">
+        <textBox refId="ProxyUrl_Value"><label>Proxy URL:</label></textBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>
