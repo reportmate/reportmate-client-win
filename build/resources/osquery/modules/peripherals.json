@@ -24,9 +24,9 @@
       "description": "External monitor service information with parsed PnP IDs"
     },
     "printers_registry": {
-      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Print\\\\Printers\\\\', '') as printer_name, name, data, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Print\\\\Printers\\\\%' AND name IN ('Name', 'Printer Driver', 'Port', 'Share Name', 'Location', 'Description') AND data != '';",
+      "query": "SELECT REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Print\\\\Printers\\\\', '') as printer_name, name, data, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Control\\\\Print\\\\Printers\\\\%%' AND name IN ('Name', 'Printer Driver', 'Port', 'Share Name', 'Location', 'Description') AND data != '';",
       "interval": 3600,
-      "description": "Printer information from registry"
+      "description": "Printer information from registry. %% recurses: a single % matches one key level and returns no values"
     },
     "usb_device_registry": {
       "query": "SELECT REPLACE(REPLACE(path, 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\', ''), '\\\\DeviceDesc', '') as usb_device_id, data as device_description, path as registry_path FROM registry WHERE path LIKE 'HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\USB\\\\%\\\\%\\\\DeviceDesc' AND data != '';",
