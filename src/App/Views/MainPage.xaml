@@ -179,12 +179,24 @@
                     <NumberBox Value="{x:Bind ViewModel.MaxDataAgeValue, Mode=TwoWay}"
                                Minimum="1" Maximum="1440" SpinButtonPlacementMode="Compact"
                                IsEnabled="{x:Bind ViewModel.CanEditMaxDataAge, Mode=OneWay}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsMaxDataAgeLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
 
                     <!-- API Timeout -->
                     <TextBlock Text="API Timeout (seconds)" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />
                     <NumberBox Value="{x:Bind ViewModel.ApiTimeoutValue, Mode=TwoWay}"
                                Minimum="10" Maximum="3600" SpinButtonPlacementMode="Compact"
                                IsEnabled="{x:Bind ViewModel.CanEditApiTimeout, Mode=OneWay}" />
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                Visibility="{x:Bind ViewModel.IsApiTimeoutLocked, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                        <FontIcon Glyph="&#xE72E;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <TextBlock Text="Managed by Policy" Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
 
                     <!-- osquery Path -->
                     <TextBlock Text="osquery Path" Style="{StaticResource CaptionTextBlockStyle}" Margin="0,4,0,0" />

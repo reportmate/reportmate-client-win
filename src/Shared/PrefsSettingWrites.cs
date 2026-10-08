@@ -21,6 +21,13 @@ public static class PrefsSettingWrites
         "UserAgent", "ProxyUrl",
     };
 
+    /// <summary>The settings stored as REG_DWORD; every other setting is a REG_SZ string.</summary>
+    public static readonly IReadOnlySet<string> DwordValueNames = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "CollectionIntervalSeconds", "MaxDataAgeMinutes", "ApiTimeoutSeconds", "MaxRetryAttempts",
+        "DebugLogging", "CimianIntegrationEnabled", "SkipCertificateValidation",
+    };
+
     /// <summary>The registry value a changed property maps to, or null when it is not a setting.</summary>
     public static string? SettingFor(string? propertyName) =>
         propertyName is not null && SettingNames.Contains(propertyName) ? propertyName : null;

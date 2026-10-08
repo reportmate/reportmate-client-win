@@ -24,6 +24,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Validate policy templates
+        shell: pwsh
+        run: |
+          foreach ($f in 'resources/ReportMate.admx', 'resources/en-US/ReportMate.adml') {
+            [xml](Get-Content -Raw $f) | Out-Null
+            Write-Host "OK: $f"
+          }
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:

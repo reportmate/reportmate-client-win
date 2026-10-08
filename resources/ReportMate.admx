@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ReportMate Windows client policy template.
+
+  Every setting on the app's Prefs tab, written to HKLM\SOFTWARE\Policies\ReportMate.
+  A setting present under that key wins over the Prefs tab, and the tab shows it as
+  "Managed by Policy" and locks the field.
+
+  Group Policy: copy ReportMate.admx to C:\Windows\PolicyDefinitions (or the Central
+  Store) and en-US\ReportMate.adml to its en-US folder.
+  Intune: Devices > Configuration > Import ADMX, then create an Imported Administrative
+  Templates profile.
+-->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   revision="1.0"
+                   schemaVersion="1.0"
+                   xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+
+  <policyNamespaces>
+    <target prefix="ReportMate" namespace="ReportMate.Policies" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+
+  <resources minRequiredRevision="1.0" />
+
+  <categories>
+    <category name="ReportMate" displayName="$(string.Cat_ReportMate)" />
+    <category name="Connection" displayName="$(string.Cat_Connection)">
+      <parentCategory ref="ReportMate" />
+    </category>
+    <category name="Collection" displayName="$(string.Cat_Collection)">
+      <parentCategory ref="ReportMate" />
+    </category>
+    <category name="Behavior" displayName="$(string.Cat_Behavior)">
+      <parentCategory ref="ReportMate" />
+    </category>
+    <category name="Advanced" displayName="$(string.Cat_Advanced)">
+      <parentCategory ref="ReportMate" />
+    </category>
+  </categories>
+
+  <policies>
+
+    <!-- Connection -->
+
+    <policy name="ApiUrl"
+            class="Machine"
+            displayName="$(string.ApiUrl)"
+            explainText="$(string.ApiUrl_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.ApiUrl)">
+      <parentCategory ref="Connection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <text id="ApiUrl_Value" valueName="ApiUrl" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="ApiKey"
+            class="Machine"
+            displayName="$(string.ApiKey)"
+            explainText="$(string.ApiKey_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.ApiKey)">
+      <parentCategory ref="Connection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <text id="ApiKey_Value" valueName="ApiKey" />
+      </elements>
+    </policy>
+
+    <policy name="Passphrase"
+            class="Machine"
+            displayName="$(string.Passphrase)"
+            explainText="$(string.Passphrase_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.Passphrase)">
+      <parentCategory ref="Connection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <text id="Passphrase_Value" valueName="Passphrase" />
+      </elements>
+    </policy>
+
+
+    <!-- Collection -->
+
+    <policy name="CollectionIntervalSeconds"
+            class="Machine"
+            displayName="$(string.CollectionIntervalSeconds)"
+            explainText="$(string.CollectionIntervalSeconds_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.CollectionIntervalSeconds)">
+      <parentCategory ref="Collection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <decimal id="CollectionIntervalSeconds_Value" valueName="CollectionIntervalSeconds" required="true" minValue="60" maxValue="86400" />
+      </elements>
+    </policy>
+
+    <policy name="MaxDataAgeMinutes"
+            class="Machine"
+            displayName="$(string.MaxDataAgeMinutes)"
+            explainText="$(string.MaxDataAgeMinutes_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.MaxDataAgeMinutes)">
+      <parentCategory ref="Collection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <decimal id="MaxDataAgeMinutes_Value" valueName="MaxDataAgeMinutes" required="true" minValue="1" maxValue="1440" />
+      </elements>
+    </policy>
+
+    <policy name="ApiTimeoutSeconds"
+            class="Machine"
+            displayName="$(string.ApiTimeoutSeconds)"
+            explainText="$(string.ApiTimeoutSeconds_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.ApiTimeoutSeconds)">
+      <parentCategory ref="Collection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <decimal id="ApiTimeoutSeconds_Value" valueName="ApiTimeoutSeconds" required="true" minValue="10" maxValue="3600" />
+      </elements>
+    </policy>
+
+    <policy name="OsQueryPath"
+            class="Machine"
+            displayName="$(string.OsQueryPath)"
+            explainText="$(string.OsQueryPath_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.OsQueryPath)">
+      <parentCategory ref="Collection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <text id="OsQueryPath_Value" valueName="OsQueryPath" />
+      </elements>
+    </policy>
+
+    <policy name="StorageMode"
+            class="Machine"
+            displayName="$(string.StorageMode)"
+            explainText="$(string.StorageMode_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.StorageMode)">
+      <parentCategory ref="Collection" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <enum id="StorageMode_Value" valueName="StorageMode" required="true">
+          <item displayName="$(string.StorageMode_auto)">
+            <value><string>auto</string></value>
+          </item>
+          <item displayName="$(string.StorageMode_quick)">
+            <value><string>quick</string></value>
+          </item>
+          <item displayName="$(string.StorageMode_deep)">
+            <value><string>deep</string></value>
+          </item>
+        </enum>
+      </elements>
+    </policy>
+
+
+    <!-- Behavior -->
+
+    <policy name="DebugLogging"
+            class="Machine"
+            displayName="$(string.DebugLogging)"
+            explainText="$(string.DebugLogging_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            valueName="DebugLogging">
+      <parentCategory ref="Behavior" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="CimianIntegrationEnabled"
+            class="Machine"
+            displayName="$(string.CimianIntegrationEnabled)"
+            explainText="$(string.CimianIntegrationEnabled_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            valueName="CimianIntegrationEnabled">
+      <parentCategory ref="Behavior" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="SkipCertificateValidation"
+            class="Machine"
+            displayName="$(string.SkipCertificateValidation)"
+            explainText="$(string.SkipCertificateValidation_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            valueName="SkipCertificateValidation">
+      <parentCategory ref="Behavior" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="MaxRetryAttempts"
+            class="Machine"
+            displayName="$(string.MaxRetryAttempts)"
+            explainText="$(string.MaxRetryAttempts_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.MaxRetryAttempts)">
+      <parentCategory ref="Behavior" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <decimal id="MaxRetryAttempts_Value" valueName="MaxRetryAttempts" required="true" minValue="0" maxValue="10" />
+      </elements>
+    </policy>
+
+
+    <!-- Advanced -->
+
+    <policy name="DeviceId"
+            class="Machine"
+            displayName="$(string.DeviceId)"
+            explainText="$(string.DeviceId_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.DeviceId)">
+      <parentCategory ref="Advanced" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <text id="DeviceId_Value" valueName="DeviceId" />
+      </elements>
+    </policy>
+
+    <policy name="UserAgent"
+            class="Machine"
+            displayName="$(string.UserAgent)"
+            explainText="$(string.UserAgent_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.UserAgent)">
+      <parentCategory ref="Advanced" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <text id="UserAgent_Value" valueName="UserAgent" />
+      </elements>
+    </policy>
+
+    <policy name="ProxyUrl"
+            class="Machine"
+            displayName="$(string.ProxyUrl)"
+            explainText="$(string.ProxyUrl_Help)"
+            key="SOFTWARE\Policies\ReportMate"
+            presentation="$(presentation.ProxyUrl)">
+      <parentCategory ref="Advanced" />
+      <supportedOn ref="windows:SUPPORTED_Windows_10_0" />
+      <elements>
+        <text id="ProxyUrl_Value" valueName="ProxyUrl" />
+      </elements>
+    </policy>
+
+  </policies>
+</policyDefinitions>

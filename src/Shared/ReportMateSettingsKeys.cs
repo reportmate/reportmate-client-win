@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 
@@ -46,6 +47,46 @@ public static class ReportMateSettingsKeys
         ["ServerUrl"] = "ApiUrl",
         ["CollectionInterval"] = "CollectionIntervalSeconds",
     };
+
+    /// <summary>
+    /// Each Prefs setting and every value name under the policy key that sets it, current
+    /// name first. The app locks a field when any of its names is present under policy, and
+    /// the ADMX in resources/ writes the first name. Older spellings stay so a policy written
+    /// before a rename still counts.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string[]> PolicyValueNames =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["ApiUrl"]                    = ["ApiUrl", "ServerUrl"],
+            ["ApiKey"]                    = ["ApiKey"],
+            ["Passphrase"]                = ["Passphrase"],
+            ["DeviceId"]                  = ["DeviceId"],
+            ["CollectionIntervalSeconds"] = ["CollectionIntervalSeconds", "CollectionInterval"],
+            ["MaxDataAgeMinutes"]         = ["MaxDataAgeMinutes"],
+            ["ApiTimeoutSeconds"]         = ["ApiTimeoutSeconds"],
+            ["OsQueryPath"]               = ["OsQueryPath"],
+            ["StorageMode"]               = ["StorageMode"],
+            ["DebugLogging"]              = ["DebugLogging"],
+            ["CimianIntegrationEnabled"]  = ["CimianIntegrationEnabled"],
+            ["SkipCertificateValidation"] = ["SkipCertificateValidation"],
+            ["MaxRetryAttempts"]          = ["MaxRetryAttempts"],
+            ["UserAgent"]                 = ["UserAgent"],
+            ["ProxyUrl"]                  = ["ProxyUrl", "Proxy:Url"],
+        };
+
+    /// <summary>The storage analysis modes the hardware module accepts.</summary>
+    public static readonly string[] StorageModes = ["auto", "quick", "deep"];
+
+    /// <summary>
+    /// The storage mode for this run: an explicit --storage-mode wins, then the configured
+    /// StorageMode (policy, Prefs, legacy), then "auto". Unknown values fall back to "auto".
+    /// </summary>
+    public static string ResolveStorageMode(string? flagValue, bool flagGiven, string? configured)
+    {
+        var chosen = flagGiven && !string.IsNullOrWhiteSpace(flagValue) ? flagValue : configured;
+        var mode = chosen?.Trim().ToLowerInvariant();
+        return mode is not null && Array.IndexOf(StorageModes, mode) >= 0 ? mode : "auto";
+    }
 
     /// <summary>
     /// Maps a registry value name to the runner's configuration key. Every name maps

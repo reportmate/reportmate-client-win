@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using ReportMate.Shared;
 
 namespace ReportMate.App.Services;
 
@@ -9,29 +10,6 @@ namespace ReportMate.App.Services;
 public sealed class PolicyDetector
 {
     public static PolicyDetector Instance { get; } = new();
-
-    /// <summary>
-    /// Known key aliases — maps canonical key to all variant names that may appear in policy.
-    /// Matches ReportMateSettingsKeys.ValueNameAliases, which the runner uses.
-    /// </summary>
-    private static readonly Dictionary<string, string[]> KeyAliases = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["ApiUrl"]                    = ["ApiUrl", "ServerUrl"],
-        ["ApiKey"]                    = ["ApiKey"],
-        ["Passphrase"]               = ["Passphrase"],
-        ["DeviceId"]                  = ["DeviceId"],
-        ["CollectionIntervalSeconds"] = ["CollectionIntervalSeconds", "CollectionInterval"],
-        ["MaxDataAgeMinutes"]         = ["MaxDataAgeMinutes"],
-        ["ApiTimeoutSeconds"]         = ["ApiTimeoutSeconds"],
-        ["OsQueryPath"]               = ["OsQueryPath"],
-        ["StorageMode"]               = ["StorageMode"],
-        ["DebugLogging"]              = ["DebugLogging"],
-        ["CimianIntegrationEnabled"]  = ["CimianIntegrationEnabled"],
-        ["SkipCertificateValidation"] = ["SkipCertificateValidation"],
-        ["MaxRetryAttempts"]          = ["MaxRetryAttempts"],
-        ["UserAgent"]                 = ["UserAgent"],
-        ["ProxyUrl"]                  = ["ProxyUrl", "Proxy:Url"],
-    };
 
     private PolicyDetector() { }
 
@@ -53,7 +31,7 @@ public sealed class PolicyDetector
     public HashSet<string> AllManagedKeys()
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var key in KeyAliases.Keys)
+        foreach (var key in ReportMateSettingsKeys.PolicyValueNames.Keys)
         {
             if (IsManagedByPolicy(key))
                 result.Add(key);
@@ -62,7 +40,7 @@ public sealed class PolicyDetector
     }
 
     private static string[] GetAliases(string canonicalKey) =>
-        KeyAliases.TryGetValue(canonicalKey, out var aliases) ? aliases : [canonicalKey];
+        ReportMateSettingsKeys.PolicyValueNames.TryGetValue(canonicalKey, out var aliases) ? aliases : [canonicalKey];
 
     private static object? FindRegistryValue(string[] aliases)
     {
