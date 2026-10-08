@@ -106,6 +106,21 @@ namespace ReportMate.WindowsClient.Services.Modules
                 _logger.LogWarning(ex, "Managed log survey failed under {ProgramData}", programData);
             }
 
+            // BootstrapMate's run records, so the bootstrap phase is evidence rather than inference
+            try
+            {
+                data.Bootstrap = BootstrapRunReader.Read(programData);
+                if (data.Bootstrap != null)
+                {
+                    _logger.LogInformation("BootstrapMate last run: {Result}, completed {CompletedAt}, last clean version {LastRunVersion}",
+                        data.Bootstrap.Result ?? "unknown", data.Bootstrap.CompletedAt ?? "n/a", data.Bootstrap.LastRunVersion ?? "none");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "BootstrapMate run records could not be read");
+            }
+
             // Populate ownership type from dsregcmd join status
             if (string.IsNullOrEmpty(data.OwnershipType))
             {

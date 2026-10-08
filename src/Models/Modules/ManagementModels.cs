@@ -39,6 +39,12 @@ namespace ReportMate.WindowsClient.Models.Modules
         /// </summary>
         public ManagementLogs? Logs { get; set; }
 
+        /// <summary>
+        /// BootstrapMate's own record of its runs: last clean version, per-phase status and
+        /// the last run's outcome. Null when the tool has left no record or the read failed.
+        /// </summary>
+        public BootstrapRun? Bootstrap { get; set; }
+
         // --- Policy & configuration data (merged from deprecated profiles module) ---
         public List<ConfigurationProfile> ConfigurationProfiles { get; set; } = new();
         public List<RegistryPolicy> RegistryPolicies { get; set; } = new();
