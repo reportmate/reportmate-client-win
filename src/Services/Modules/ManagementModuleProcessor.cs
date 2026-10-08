@@ -538,13 +538,13 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var notValidAfterStr = GetStringValue(cert, "not_valid_after");
                     if (!string.IsNullOrEmpty(notValidAfterStr) && long.TryParse(notValidAfterStr, out var notValidAfterUnix))
                     {
-                        certificate["NotValidAfter"] = DateTimeOffset.FromUnixTimeSeconds(notValidAfterUnix).DateTime;
+                        certificate["NotValidAfter"] = DateTimeOffset.FromUnixTimeSeconds(notValidAfterUnix).UtcDateTime;
                     }
 
                     var notValidBeforeStr = GetStringValue(cert, "not_valid_before");
                     if (!string.IsNullOrEmpty(notValidBeforeStr) && long.TryParse(notValidBeforeStr, out var notValidBeforeUnix))
                     {
-                        certificate["NotValidBefore"] = DateTimeOffset.FromUnixTimeSeconds(notValidBeforeUnix).DateTime;
+                        certificate["NotValidBefore"] = DateTimeOffset.FromUnixTimeSeconds(notValidBeforeUnix).UtcDateTime;
                     }
 
                     certificateList.Add(certificate);
