@@ -102,7 +102,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var installDateStr = GetStringValue(os, "install_date");
                 if (!string.IsNullOrEmpty(installDateStr) && long.TryParse(installDateStr, out var installDateUnix))
                 {
-                    data.OperatingSystem.InstallDate = DateTimeOffset.FromUnixTimeSeconds(installDateUnix).DateTime;
+                    data.OperatingSystem.InstallDate = DateTimeOffset.FromUnixTimeSeconds(installDateUnix).UtcDateTime;
                 }
             }
 
@@ -334,14 +334,14 @@ namespace ReportMate.WindowsClient.Services.Modules
                     var lastRunTimeStr = GetStringValue(task, "last_run_time");
                     if (!string.IsNullOrEmpty(lastRunTimeStr) && long.TryParse(lastRunTimeStr, out var lastRunTimeUnix))
                     {
-                        scheduledTask.LastRunTime = DateTimeOffset.FromUnixTimeSeconds(lastRunTimeUnix).DateTime;
+                        scheduledTask.LastRunTime = DateTimeOffset.FromUnixTimeSeconds(lastRunTimeUnix).UtcDateTime;
                     }
 
                     // Parse next run time
                     var nextRunTimeStr = GetStringValue(task, "next_run_time");
                     if (!string.IsNullOrEmpty(nextRunTimeStr) && long.TryParse(nextRunTimeStr, out var nextRunTimeUnix))
                     {
-                        scheduledTask.NextRunTime = DateTimeOffset.FromUnixTimeSeconds(nextRunTimeUnix).DateTime;
+                        scheduledTask.NextRunTime = DateTimeOffset.FromUnixTimeSeconds(nextRunTimeUnix).UtcDateTime;
                     }
 
                     // Determine status based on enabled state and current state
@@ -471,7 +471,7 @@ namespace ReportMate.WindowsClient.Services.Modules
                 var bootTimeStr = GetStringValue(info, "boot_time");
                 if (!string.IsNullOrEmpty(bootTimeStr) && long.TryParse(bootTimeStr, out var bootTimeUnix))
                 {
-                    data.LastBootTime = DateTimeOffset.FromUnixTimeSeconds(bootTimeUnix).DateTime;
+                    data.LastBootTime = DateTimeOffset.FromUnixTimeSeconds(bootTimeUnix).UtcDateTime;
                     data.Uptime = DateTime.UtcNow - data.LastBootTime.Value;
                     data.UptimeString = FormatUptime(data.Uptime.Value);
                 }
