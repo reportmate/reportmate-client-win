@@ -315,14 +315,28 @@ try {
         Write-Host "ReportMate already in system PATH"
     }
     
-    # Run initial collection immediately so the device appears in ReportMate right away
-    Write-Host "Running initial inventory and system collection..."
-    $logDir = "C:\ProgramData\ManagedReports\logs"
-    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
-    Start-Process -FilePath "$InstallPath\managedreportsrunner.exe" `
-        -ArgumentList "--run-modules", "inventory,system" `
-        -WindowStyle Hidden `
-        -PassThru | Out-Null
+    # First check-in, in the background so the install is not held up: --hello
+    # sends the device envelope alone so the device is listed within seconds,
+    # then a forced run of every enabled module follows. The previous
+    # inventory,system run left identity unreported, so a device enrolled and
+    # then shelved before its first scheduled run never showed who uses it.
+    # Quick storage keeps that run short; the daily task does the deep walk.
+    # One hidden PowerShell runs the two steps in order, encoded so the
+    # spaces in the install path survive Start-Process.
+    Write-Host "Starting first check-in (hello, then full collection)..."
+    try {
+        $logDir = "C:\ProgramData\ManagedReports\logs"
+        if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+        $runnerExe = Join-Path $InstallPath "managedreportsrunner.exe"
+        $firstRun = "& '$runnerExe' --hello; & '$runnerExe' --force --storage-mode quick"
+        $encodedFirstRun = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($firstRun))
+        Start-Process -FilePath "powershell.exe" `
+            -ArgumentList "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", $encodedFirstRun `
+            -WindowStyle Hidden | Out-Null
+        $ReportMateFirstRunStarted = $true
+    } catch {
+        Write-Warning "Could not start the first check-in; the scheduled tasks will run it: $_"
+    }
 
 } catch {
     Write-Error "Failed to create scheduled tasks: $_"

@@ -25,6 +25,7 @@ namespace ReportMate.WindowsClient.Services
         Task<BaseModuleData?> CollectSingleModuleDataAsync(string moduleId);
         Task<UnifiedDevicePayload> CreateSingleModuleUnifiedPayloadAsync(BaseModuleData moduleData);
         Task<UnifiedDevicePayload> CreateUnifiedPayloadAsync(IReadOnlyList<BaseModuleData> modules);
+        Task<UnifiedDevicePayload> CreateHelloPayloadAsync();
         Task SaveModuleDataLocallyAsync<T>(string moduleId, T data) where T : BaseModuleData;
         Task<UnifiedDevicePayload> LoadCachedDataAsync();
         Task<bool> ValidateModuleDataAsync(string moduleId, object data);
@@ -486,6 +487,79 @@ namespace ReportMate.WindowsClient.Services
         public Task<UnifiedDevicePayload> CreateSingleModuleUnifiedPayloadAsync(BaseModuleData moduleData)
         {
             return CreateUnifiedPayloadAsync(new[] { moduleData });
+        }
+
+        /// <summary>
+        /// Build the device envelope alone, with no module data, for --hello.
+        /// </summary>
+        /// <remarks>
+        /// The installer sends this first so a new device is listed within
+        /// seconds, before the full collection that follows has finished. It
+        /// carries the same identity the unified payload does, plus the computer
+        /// name, which the server uses to name a device it has not seen before.
+        ///
+        /// It is deliberately not written to the event.json cache: that file is
+        /// what --transmit-only replays, and an empty envelope must never replace
+        /// the last real collection there.
+        /// </remarks>
+        public async Task<UnifiedDevicePayload> CreateHelloPayloadAsync()
+        {
+            var systemQueries = new Dictionary<string, object>
+            {
+                ["system_info"] = "SELECT uuid, hardware_serial, computer_name FROM system_info;"
+            };
+
+            var systemResults = await ExecuteModularQueriesAsync(systemQueries);
+            var serialNumber = ExtractSerialNumber(systemResults);
+            var deviceUuid = ExtractDeviceUuid(systemResults);
+
+            if (string.IsNullOrEmpty(deviceUuid))
+            {
+                _logger.LogError("Failed to extract device UUID for hello payload");
+                throw new InvalidOperationException("Device UUID is required for transmission");
+            }
+
+            var payload = new UnifiedDevicePayload();
+            payload.Metadata = new EventMetadata
+            {
+                DeviceId = deviceUuid,
+                SerialNumber = serialNumber,
+                CollectedAt = DateTime.UtcNow,
+                ClientVersion = GetClientVersion(),
+                Platform = "Windows",
+                // The server accepts only Full or Single, and an envelope with no
+                // modules is closer to neither than the other; Full is its default.
+                CollectionType = DetermineCollectionType(0),
+                EnabledModules = new List<string>()
+            };
+
+            var deviceName = ExtractComputerName(systemResults);
+            if (!string.IsNullOrEmpty(deviceName))
+            {
+                payload.Metadata.Additional["deviceName"] = deviceName;
+            }
+
+            _logger.LogInformation("Hello payload created for device {Serial}", serialNumber);
+            return payload;
+        }
+
+        /// <summary>
+        /// Computer name from osquery system_info, falling back to the NetBIOS name.
+        /// Used only to name the device; never as an identifier.
+        /// </summary>
+        private static string ExtractComputerName(Dictionary<string, List<Dictionary<string, object>>> osqueryResults)
+        {
+            if (osqueryResults.TryGetValue("system_info", out var systemInfo) && systemInfo.Count > 0
+                && systemInfo[0].TryGetValue("computer_name", out var name))
+            {
+                var value = name?.ToString()?.Trim();
+                if (!string.IsNullOrEmpty(value))
+                {
+                    return value;
+                }
+            }
+
+            return Environment.MachineName;
         }
 
         /// <summary>
