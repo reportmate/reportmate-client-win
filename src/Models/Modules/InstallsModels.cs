@@ -207,6 +207,15 @@ namespace ReportMate.WindowsClient.Models.Modules
 
     public class CimianItem
     {
+        /// <summary>
+        /// The state the API computed at ingest. It wins over everything the client
+        /// reports, so the device page and the web page classify an item the same way.
+        /// </summary>
+        public string ReportMateStatus { get; set; } = string.Empty;
+
+        /// <summary>Legacy Munki's presence field, which is not a verdict.</summary>
+        public string Status { get; set; } = string.Empty;
+
         public string Id { get; set; } = string.Empty;
         public string ItemName { get; set; } = string.Empty;
         public string DisplayName { get; set; } = string.Empty;
