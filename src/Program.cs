@@ -40,6 +40,12 @@ public class Program
     /// </summary>
     public static string CurrentStorageMode { get; private set; } = "auto";
 
+    /// <summary>
+    /// Set by --hello. Read through middleware, like the storage mode, because the
+    /// run handler already takes the most options SetHandler can bind.
+    /// </summary>
+    private static bool HelloRequested { get; set; }
+
     // Windows API for console attachment
     [DllImport("kernel32.dll")]
     static extern bool AttachConsole(int dwProcessId);
@@ -148,6 +154,13 @@ public class Program
                         {
                             CurrentStorageMode = storageModeResult.GetValueOrDefault<string>() ?? "auto";
                         }
+                    }
+
+                    var helloOption = context.ParseResult.CommandResult.Command.Options
+                        .FirstOrDefault(o => o.Name == "hello");
+                    if (helloOption is not null)
+                    {
+                        HelloRequested = context.ParseResult.FindResultFor(helloOption)?.GetValueOrDefault<bool>() ?? false;
                     }
                     await next(context);
                 })
@@ -423,6 +436,7 @@ public class Program
         var transmitOnlyOption = new Option<bool>("--transmit-only", "Transmit cached data only without collecting new data");
         var runModuleOption = new Option<string>("--run-module", "Run only a specific module (e.g., network, hardware, security). By default, this will collect and transmit the module data.");
         var runModulesOption = new Option<string>("--run-modules", "Run multiple specific modules separated by commas (e.g., hardware,installs,security). By default, this will collect and transmit the module data.");
+        var helloOption = new Option<bool>("--hello", "Send only the device envelope (serial, UUID, name, client version, platform) with no module data, so a new device is listed at once");
         var storageModeOption = new Option<string>("--storage-mode", () => "auto", "Storage analysis mode for hardware module: 'quick' (drive totals only), 'deep' (full directory analysis), or 'auto' (use cache if <24h old)");
         
         // Add global options to root command
@@ -435,6 +449,7 @@ public class Program
         rootCommand.AddOption(runModulesOption);
         rootCommand.AddOption(deviceIdOption);
         rootCommand.AddOption(apiUrlOption);
+        rootCommand.AddOption(helloOption);
 
         // Set default handler for root command (when no subcommand is specified)
         // This makes running the binary without any command default to data collection
@@ -449,7 +464,8 @@ public class Program
             runModuleOption,
             runModulesOption,
             deviceIdOption,
-            apiUrlOption
+            apiUrlOption,
+            helloOption
         };
         runCommand.SetHandler(HandleRunCommand, forceOption, collectOnlyOption, transmitOnlyOption, runModuleOption, runModulesOption, deviceIdOption, apiUrlOption, verboseOption);
 
@@ -560,6 +576,17 @@ public class Program
             
             _logger!.LogInformation("ReportMate v{Version} - Device Registration & Data Collection", versionString);
             
+            // --hello sends the envelope alone and ignores any module selection
+            if (HelloRequested)
+            {
+                if (collectOnly || transmitOnly)
+                {
+                    _logger!.LogError("--hello cannot be combined with --collect-only or --transmit-only");
+                    return 1;
+                }
+                return await HandleHelloCommand(verbose);
+            }
+
             // Handle single module data collection if specified
             if (!string.IsNullOrEmpty(runModule))
             {
@@ -1298,6 +1325,52 @@ public class Program
         }
     }
     
+    /// <summary>
+    /// Send the device envelope with no module data (--hello)
+    /// </summary>
+    /// <remarks>
+    /// The installer runs this before the full collection. Collecting every
+    /// module takes minutes; this takes one osquery call and one small POST, so
+    /// the device is listed while the full run is still going.
+    /// </remarks>
+    private static async Task<int> HandleHelloCommand(int verbose)
+    {
+        try
+        {
+            var modularService = _serviceProvider!.GetRequiredService<IModularDataCollectionService>();
+            var apiService = _serviceProvider!.GetRequiredService<IApiService>();
+
+            var payload = await modularService.CreateHelloPayloadAsync();
+            var sent = await apiService.SendUnifiedPayloadAsync(payload);
+
+            if (sent)
+            {
+                if (verbose > 0)
+                {
+                    Logger.Info("✅ Hello sent for device {0}", payload.Metadata.SerialNumber);
+                }
+                _logger!.LogInformation("Hello sent for device {Serial}", payload.Metadata.SerialNumber);
+                return 0;
+            }
+
+            if (verbose > 0)
+            {
+                Logger.Error("❌ Failed to send hello");
+            }
+            _logger!.LogError("Failed to send hello for device {Serial}", payload.Metadata.SerialNumber);
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            if (verbose > 0)
+            {
+                Logger.Error("Error sending hello: {0}", ex.Message);
+            }
+            _logger!.LogError(ex, "Error sending hello");
+            return 1;
+        }
+    }
+
     /// <summary>
     /// Handle transmit-only command - sends cached data without collecting new data
     /// </summary>
