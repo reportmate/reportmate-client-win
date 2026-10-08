@@ -918,70 +918,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             _logger.LogDebug("Processing printer device information (PRIORITY)");
             data.Printers = new PeripheralPrinterInfo { InstalledPrinters = new List<PeripheralInstalledPrinter>() };
 
-            // Build printer info from registry data (grouped by printer name)
-            var printersByName = new Dictionary<string, PeripheralInstalledPrinter>(StringComparer.OrdinalIgnoreCase);
-
             if (osqueryResults.TryGetValue("printers_registry", out var printerRegistry))
             {
-                foreach (var regEntry in printerRegistry)
-                {
-                    var printerName = GetStringValue(regEntry, "printer_name");
-                    var name = GetStringValue(regEntry, "name");
-                    var dataValue = GetStringValue(regEntry, "data");
-
-                    // Extract actual printer name from path (format: PrinterName\PropertyName)
-                    var pathParts = printerName.Split('\\');
-                    var actualPrinterName = pathParts.Length > 0 ? pathParts[0] : printerName;
-
-                    // Skip virtual printers
-                    if (actualPrinterName.Contains("Microsoft Print to PDF", StringComparison.OrdinalIgnoreCase) ||
-                        actualPrinterName.Contains("Microsoft XPS", StringComparison.OrdinalIgnoreCase) ||
-                        actualPrinterName.Contains("Fax", StringComparison.OrdinalIgnoreCase) ||
-                        actualPrinterName.Contains("OneNote", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    if (!printersByName.ContainsKey(actualPrinterName))
-                    {
-                        printersByName[actualPrinterName] = new PeripheralInstalledPrinter
-                        {
-                            Name = actualPrinterName,
-                            DisplayName = actualPrinterName,
-                            DeviceType = "Printer"
-                        };
-                    }
-
-                    var printer = printersByName[actualPrinterName];
-
-                    // Apply properties
-                    if (name == "Printer Driver" && !string.IsNullOrEmpty(dataValue))
-                    {
-                        printer.Driver = dataValue;
-                        ExtractManufacturerAndModel(dataValue, printer);
-                    }
-                    else if (name == "Port" && !string.IsNullOrEmpty(dataValue))
-                    {
-                        printer.PortName = dataValue;
-                        printer.ConnectionType = DetermineConnectionType(dataValue);
-                        printer.IsNetwork = dataValue.Contains("\\\\") || dataValue.Contains("WSD") || dataValue.Contains("IP_");
-                    }
-                    else if (name == "Share Name" && !string.IsNullOrEmpty(dataValue))
-                    {
-                        printer.ShareName = dataValue;
-                        printer.IsShared = true;
-                    }
-                    else if (name == "Location" && !string.IsNullOrEmpty(dataValue))
-                    {
-                        printer.Location = dataValue;
-                    }
-                    else if (name == "Description" && !string.IsNullOrEmpty(dataValue))
-                    {
-                        printer.Comment = dataValue;
-                    }
-                }
-
-                foreach (var printer in printersByName.Values)
+                foreach (var printer in BuildPrintersFromRegistry(printerRegistry))
                 {
                     data.Printers?.InstalledPrinters?.Add(printer);
                 }
@@ -1129,37 +1068,165 @@ namespace ReportMate.WindowsClient.Services.Modules
             });
         }
 
+        private const string PrintersRegistryKey = @"\Control\Print\Printers\";
+
+        /// <summary>
+        /// Group printers_registry rows into one printer per key under
+        /// HKLM\SYSTEM\CurrentControlSet\Control\Print\Printers.
+        ///
+        /// The query recurses (%%), because a single % matches one key level and returns
+        /// the printer keys but none of their values. Recursion also reaches the subkeys
+        /// under each printer (DsSpooler, PrinterDriverData, ...), so only values sitting
+        /// directly on a printer key - Printers\&lt;printer&gt;\&lt;value&gt; - are taken; anything
+        /// deeper belongs to a subkey and would misattribute a property.
+        /// </summary>
+        public static List<PeripheralInstalledPrinter> BuildPrintersFromRegistry(IEnumerable<Dictionary<string, object>> rows)
+        {
+            var printersByName = new Dictionary<string, PeripheralInstalledPrinter>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var regEntry in rows)
+            {
+                var relative = PrinterRelativePath(GetStringValue(regEntry, "registry_path"), GetStringValue(regEntry, "printer_name"));
+                var parts = relative.Split('\\');
+                if (parts.Length != 2 || string.IsNullOrWhiteSpace(parts[0])) continue;
+
+                var actualPrinterName = parts[0];
+                var name = GetStringValue(regEntry, "name");
+                if (string.IsNullOrEmpty(name)) name = parts[1];
+                var dataValue = GetStringValue(regEntry, "data");
+
+                if (IsVirtualPrinter(actualPrinterName)) continue;
+
+                if (!printersByName.TryGetValue(actualPrinterName, out var printer))
+                {
+                    printer = new PeripheralInstalledPrinter
+                    {
+                        Name = actualPrinterName,
+                        DisplayName = actualPrinterName,
+                        DeviceType = "Printer"
+                    };
+                    printersByName[actualPrinterName] = printer;
+                }
+
+                if (string.IsNullOrEmpty(dataValue)) continue;
+
+                if (name.Equals("Printer Driver", StringComparison.OrdinalIgnoreCase))
+                {
+                    printer.Driver = dataValue;
+                    ExtractManufacturerAndModel(dataValue, printer);
+                }
+                else if (name.Equals("Port", StringComparison.OrdinalIgnoreCase))
+                {
+                    printer.PortName = dataValue;
+                    printer.ConnectionType = DetermineConnectionType(dataValue);
+                    printer.IsNetwork = dataValue.Contains("\\\\") || dataValue.Contains("WSD") || dataValue.Contains("IP_");
+                }
+                else if (name.Equals("Share Name", StringComparison.OrdinalIgnoreCase))
+                {
+                    printer.ShareName = dataValue;
+                    printer.IsShared = true;
+                }
+                else if (name.Equals("Location", StringComparison.OrdinalIgnoreCase))
+                {
+                    printer.Location = dataValue;
+                }
+                else if (name.Equals("Description", StringComparison.OrdinalIgnoreCase))
+                {
+                    printer.Comment = dataValue;
+                }
+            }
+
+            return printersByName.Values.ToList();
+        }
+
+        /// <summary>
+        /// The part of a value's path below the Printers key, "&lt;printer&gt;\&lt;value&gt;" for a
+        /// value on a printer key. Taken from the full registry path when present, so it
+        /// does not depend on the query's REPLACE matching osquery's path casing.
+        /// </summary>
+        private static string PrinterRelativePath(string registryPath, string printerName)
+        {
+            if (!string.IsNullOrEmpty(registryPath))
+            {
+                var idx = registryPath.IndexOf(PrintersRegistryKey, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0) return registryPath.Substring(idx + PrintersRegistryKey.Length);
+            }
+            return printerName ?? "";
+        }
+
+        private static bool IsVirtualPrinter(string printerName) =>
+            printerName.Contains("Microsoft Print to PDF", StringComparison.OrdinalIgnoreCase) ||
+            printerName.Contains("Microsoft XPS", StringComparison.OrdinalIgnoreCase) ||
+            printerName.Contains("Fax", StringComparison.OrdinalIgnoreCase) ||
+            printerName.Contains("OneNote", StringComparison.OrdinalIgnoreCase);
+
         private void AddPrinterFromDictionary(PeripheralsModuleData data, Dictionary<string, object> dict, string source)
+        {
+            if (data.Printers?.InstalledPrinters == null) return;
+            MergeWmiPrinter(data.Printers.InstalledPrinters, dict);
+        }
+
+        /// <summary>
+        /// Add a Win32_Printer row, or enrich the registry entry of the same name. The
+        /// registry gives driver, port, share and location; only WMI knows status, the
+        /// default printer and the print server, so a registry hit must not drop them.
+        /// </summary>
+        public static void MergeWmiPrinter(List<PeripheralInstalledPrinter> printers, Dictionary<string, object> dict)
         {
             var printerName = GetStringValue(dict, "Name");
             if (string.IsNullOrEmpty(printerName)) return;
-            if (printerName.Contains("Microsoft Print to PDF", StringComparison.OrdinalIgnoreCase) ||
-                printerName.Contains("Microsoft XPS", StringComparison.OrdinalIgnoreCase) ||
-                printerName.Contains("Fax", StringComparison.OrdinalIgnoreCase) ||
-                printerName.Contains("OneNote", StringComparison.OrdinalIgnoreCase)) return;
-            if (data.Printers?.InstalledPrinters?.Any(p => p.Name?.Equals(printerName, StringComparison.OrdinalIgnoreCase) == true) == true) return;
+            if (IsVirtualPrinter(printerName)) return;
 
             var driverName = GetStringValue(dict, "DriverName");
             var portName = GetStringValue(dict, "PortName");
+            var shareName = GetStringValue(dict, "ShareName");
+
+            var existing = printers.FirstOrDefault(p => p.Name?.Equals(printerName, StringComparison.OrdinalIgnoreCase) == true);
+            if (existing != null)
+            {
+                if (string.IsNullOrEmpty(existing.Driver) && !string.IsNullOrEmpty(driverName))
+                {
+                    existing.Driver = driverName;
+                    ExtractManufacturerAndModel(driverName, existing);
+                }
+                if (string.IsNullOrEmpty(existing.PortName) && !string.IsNullOrEmpty(portName))
+                {
+                    existing.PortName = portName;
+                    existing.ConnectionType = DetermineConnectionType(portName);
+                }
+                if (string.IsNullOrEmpty(existing.Location)) existing.Location = GetStringValue(dict, "Location");
+                if (string.IsNullOrEmpty(existing.ShareName) && !string.IsNullOrEmpty(shareName))
+                {
+                    existing.ShareName = shareName;
+                    existing.IsShared = true;
+                }
+                if (string.IsNullOrEmpty(existing.Comment)) existing.Comment = GetStringValue(dict, "Comment");
+                if (string.IsNullOrEmpty(existing.ServerName)) existing.ServerName = GetStringValue(dict, "ServerName");
+                existing.Status = GetStringValue(dict, "Status");
+                existing.IsDefault = GetBoolValue(dict, "Default");
+                existing.IsNetwork = existing.IsNetwork || GetBoolValue(dict, "Network");
+                return;
+            }
+
             var printer = new PeripheralInstalledPrinter
             {
                 Name = printerName, DisplayName = printerName, Driver = driverName, PortName = portName,
-                Location = GetStringValue(dict, "Location"), ShareName = GetStringValue(dict, "ShareName"),
+                Location = GetStringValue(dict, "Location"), ShareName = shareName,
                 ServerName = GetStringValue(dict, "ServerName"), Comment = GetStringValue(dict, "Comment"),
                 Status = GetStringValue(dict, "Status"), IsDefault = GetBoolValue(dict, "Default"),
-                IsShared = !string.IsNullOrEmpty(GetStringValue(dict, "ShareName")),
+                IsShared = !string.IsNullOrEmpty(shareName),
                 IsNetwork = GetBoolValue(dict, "Network"),
                 ConnectionType = DetermineConnectionType(portName), DeviceType = "Printer"
             };
             ExtractManufacturerAndModel(driverName, printer);
-            data.Printers?.InstalledPrinters?.Add(printer);
+            printers.Add(printer);
         }
 
         /// <summary>
         /// Extract manufacturer and model from driver name - matches macOS PPD parsing behavior
         /// Removes manufacturer prefix from model (e.g., "HP LaserJet Pro" -> Manufacturer: "HP", Model: "LaserJet Pro")
         /// </summary>
-        private void ExtractManufacturerAndModel(string driverName, PeripheralInstalledPrinter printer)
+        private static void ExtractManufacturerAndModel(string driverName, PeripheralInstalledPrinter printer)
         {
             if (string.IsNullOrEmpty(driverName)) return;
 
@@ -1190,7 +1257,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// <summary>
         /// Determine connection type from port name
         /// </summary>
-        private string DetermineConnectionType(string? portName)
+        private static string DetermineConnectionType(string? portName)
         {
             if (string.IsNullOrEmpty(portName)) return "Unknown";
 
