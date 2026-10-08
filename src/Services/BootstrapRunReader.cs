@@ -5,7 +5,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
+using ReportMate.WindowsClient.Configuration;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Services
@@ -20,6 +22,12 @@ namespace ReportMate.WindowsClient.Services
     /// <c>ManagedBootstrap\status.json</c>, and, in newer builds, the run outcome in
     /// <c>ManagedBootstrap\last-run.json</c>. The manifest URL it also records is left out:
     /// it can carry a signed query string.
+    ///
+    /// The two files are only read when SYSTEM or Administrators own them and nobody else can
+    /// change them, the same bar the runner sets for its settings file: ProgramData lets
+    /// standard users create files, so an unchecked status.json would let anyone report a
+    /// clean bootstrap. Error text is redacted before it leaves the device, because installer
+    /// errors often quote the URL or credential that failed.
     ///
     /// Parsing is kept apart from the registry and file reads so it can be tested off Windows.
     /// </summary>
@@ -37,13 +45,15 @@ namespace ReportMate.WindowsClient.Services
         public static BootstrapRun? Read(string programData)
         {
             var root = Path.Combine(programData, "ManagedBootstrap");
-            var statusJson = ReadFile(Path.Combine(root, "status.json"));
-            var lastRunJson = ReadFile(Path.Combine(root, "last-run.json"));
 
+            string? statusJson = null;
+            string? lastRunJson = null;
             string? lastRunVersion = null;
             List<BootstrapPhase>? registryPhases = null;
             if (OperatingSystem.IsWindows())
             {
+                statusJson = ReadTrustedFile(Path.Combine(root, "status.json"));
+                lastRunJson = ReadTrustedFile(Path.Combine(root, "last-run.json"));
                 lastRunVersion = ReadLastRunVersion();
                 registryPhases = ReadRegistryPhases();
             }
@@ -278,22 +288,39 @@ namespace ReportMate.WindowsClient.Services
 
         private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
-        /// <summary>First line, at most 200 characters, matching how BootstrapMate cuts its own errors.</summary>
-        private static string? Shorten(string? value)
+        private static readonly Regex UrlQuery = new(@"(https?://[^\s?#""']+)[?#][^\s""']*", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex UrlUserInfo = new(@"(https?://)[^/\s@""']+@", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex BearerToken = new(@"\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex SecretPair = new(@"\b(password|passwd|pwd|secret|token|apikey|api_key|sig|signature|key)\s*[=:]\s*[^\s;&,""']+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// First line, at most 200 characters, matching how BootstrapMate cuts its own errors,
+        /// with URL query strings, URL credentials, auth headers and key=value secrets removed.
+        /// </summary>
+        internal static string? Shorten(string? value)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
                 return null;
             }
             var line = value.Split('\n')[0].TrimEnd('\r').Trim();
+            line = UrlQuery.Replace(line, "$1?[redacted]");
+            line = UrlUserInfo.Replace(line, "$1[redacted]@");
+            line = BearerToken.Replace(line, "$1 [redacted]");
+            line = SecretPair.Replace(line, "$1=[redacted]");
             return line.Length > MaxErrorLength ? line.Substring(0, MaxErrorLength) : line;
         }
 
-        private static string? ReadFile(string path)
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+        private static string? ReadTrustedFile(string path)
         {
             try
             {
-                return File.Exists(path) ? File.ReadAllText(path) : null;
+                if (!File.Exists(path) || TrustedSettingsFile.WhyUntrusted(path) != null)
+                {
+                    return null;
+                }
+                return File.ReadAllText(path);
             }
             catch (IOException)
             {

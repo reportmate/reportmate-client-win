@@ -162,15 +162,27 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Fact]
-        public void ReadPicksUpTheFilesUnderProgramData()
+        public void FilesAUserCanChangeAreNotTrusted()
         {
+            // The test account owns these and the temp folder lets it change them, which is
+            // exactly what a standard user forging a clean bootstrap would leave behind.
             File.WriteAllText(Path.Combine(_root, "ManagedBootstrap", "status.json"), StatusJson);
             File.WriteAllText(Path.Combine(_root, "ManagedBootstrap", "last-run.json"), LastRunJson);
 
-            var run = BootstrapRunReader.Read(_root)!;
+            var run = BootstrapRunReader.Read(_root);
 
-            Assert.Equal("partial_failure", run.Result);
-            Assert.Equal(3, run.Phases.Count);
+            Assert.True(run == null || (run.LastRun == null && run.PhaseSource != "status.json"));
+        }
+
+        [Theory]
+        [InlineData("GET https://cdn.example.org/pkg.msi?sv=2024&sig=abc123 failed", "GET https://cdn.example.org/pkg.msi?[redacted] failed")]
+        [InlineData("fetch https://user:hunter2@repo.example.org/x failed", "fetch https://[redacted]@repo.example.org/x failed")]
+        [InlineData("401 with Authorization: Bearer eyJhbGciOi.abc", "401 with Authorization: Bearer [redacted]")]
+        [InlineData("msiexec PASSWORD=hunter2 exited 1603", "msiexec PASSWORD=[redacted] exited 1603")]
+        [InlineData("Package not found", "Package not found")]
+        public void ErrorTextIsRedacted(string raw, string expected)
+        {
+            Assert.Equal(expected, BootstrapRunReader.Shorten(raw));
         }
 
         [Fact]
