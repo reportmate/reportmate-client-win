@@ -172,6 +172,9 @@ public partial class MainViewModel : ObservableObject
     /// <summary>The services and scheduled tasks the installer creates, with their live state.</summary>
     public ObservableCollection<FootprintRow> Services { get; } = [];
 
+    /// <summary>The card exists only when the installer creates at least one service or task.</summary>
+    public bool HasServices => InstallFootprint.Items.Count > 0;
+
     [ObservableProperty] private bool _isRefreshingServices;
 
     /// <summary>Re-reads the state of every install-footprint item off the UI thread.</summary>

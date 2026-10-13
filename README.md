@@ -168,7 +168,7 @@ The runner runs as SYSTEM, so the installer limits `C:\ProgramData\ManagedReport
 
 On the Prefs tab every setting that policy does not manage is editable. Edits stay pending until **Save**, which writes them to `HKLM\SOFTWARE\ReportMate\Settings`. When the app is not running as administrator, Save asks for administrator approval and writes the values in a separate elevated run of the app that opens no window. The values reach that run over a one-time named pipe that only the signed-in user, Administrators and SYSTEM can open, so nothing, credentials included, is written to disk. The elevated run re-reads policy and skips every managed setting. If approval is declined, the edits stay pending. **Discard** drops them.
 
-The Prefs tab also lists the scheduled tasks the installer registers, with each one's state, last result and schedule. Tasks that run as SYSTEM can be read only by an administrator, so they show as Unknown otherwise.
+The Prefs tab also lists the scheduled tasks the installer registers. Each row shows the task's schedule, last result and state; clicking it expands the start type, status, account, path and arguments, triggers, last run, last result and next run, with times in the user's regional format. Tasks that run as SYSTEM can be read only by an administrator, so they show as Unknown otherwise.
 
 - **Group Policy**: copy `ReportMate.admx` into `C:\Windows\PolicyDefinitions` (or the Central Store) and `ReportMate.adml` into its `en-US` folder. The settings appear under Computer Configuration > Administrative Templates > ReportMate.
 - **Intune**: Devices > Configuration > Import ADMX, upload both files, then create an Imported Administrative Templates profile.
