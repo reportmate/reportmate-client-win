@@ -24,6 +24,8 @@ public sealed partial class MainPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
-        ViewModel.Load();
+        // Coming back from another tab keeps unsaved edits; reloading would drop them.
+        if (!ViewModel.HasPendingChanges)
+            ViewModel.Load();
     }
 }

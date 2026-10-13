@@ -10,25 +10,24 @@ using System.Security.Principal;
 namespace ReportMate.Shared;
 
 /// <summary>
-/// Decisions behind the app's read-only Prefs tab, ported from BootstrapMate. Settings live
-/// in HKLM, so only an elevated process can change them: an unelevated app shows them
-/// read-only, and Unlock relaunches the app itself through UAC, opening on the Prefs tab.
+/// Decisions behind saving Prefs. Settings live in HKLM, so writing them needs
+/// administrator rights, but editing does not: every setting policy does not manage is
+/// editable in the normal app. Save writes directly when the app is already elevated;
+/// otherwise it relaunches the app's own executable through UAC in a headless
+/// --apply-settings mode that reads the pending values from a named pipe (see
+/// SettingsPipe), writes them and exits without a window.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class PrefsElevation
 {
-    /// <summary>Command-line switch that opens the app on the Prefs tab.</summary>
-    public const string PrefsArgument = "--prefs";
+    /// <summary>Command-line switch, followed by a pipe name, that writes pending settings headlessly and exits.</summary>
+    public const string ApplySettingsArgument = "--apply-settings";
 
     /// <summary>Win32 ERROR_CANCELLED: the user dismissed the UAC prompt.</summary>
     public const int ErrorCancelled = 1223;
 
-    /// <summary>True when the command line asks the app to open on the Prefs tab.</summary>
-    public static bool OpensOnPrefs(IEnumerable<string>? args)
-        => args?.Any(a => string.Equals(a?.Trim(), PrefsArgument, StringComparison.OrdinalIgnoreCase)) == true;
-
-    /// <summary>A setting can be edited only by an elevated process, and never when policy manages it.</summary>
-    public static bool CanEdit(bool isElevated, bool isPolicyManaged) => isElevated && !isPolicyManaged;
+    /// <summary>A setting is editable unless policy manages it; elevation is asked for at save time.</summary>
+    public static bool CanEdit(bool isPolicyManaged) => !isPolicyManaged;
 
     /// <summary>True when the exception is the user cancelling the UAC prompt, not a real failure.</summary>
     public static bool IsElevationCancelled(Exception? ex)
@@ -51,14 +50,23 @@ public static class PrefsElevation
         }
     }
 
-    /// <summary>Start info that relaunches <paramref name="exePath"/> elevated on the Prefs tab.</summary>
-    public static ProcessStartInfo BuildElevatedRelaunch(string exePath)
+    /// <summary>The settings pipe name when the command line asks for a headless apply.</summary>
+    public static string? ApplySettingsPipe(IEnumerable<string>? args)
+    {
+        var list = args?.ToList() ?? [];
+        var i = list.FindIndex(a => string.Equals(a?.Trim(), ApplySettingsArgument, StringComparison.OrdinalIgnoreCase));
+        return i >= 0 && i + 1 < list.Count && !string.IsNullOrWhiteSpace(list[i + 1]) ? list[i + 1] : null;
+    }
+
+    /// <summary>Start info that runs <paramref name="exePath"/> elevated to apply what <paramref name="pipeName"/> sends.</summary>
+    public static ProcessStartInfo BuildElevatedApply(string exePath, string pipeName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(exePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
         return new ProcessStartInfo
         {
             FileName = exePath,
-            Arguments = PrefsArgument,
+            Arguments = $"{ApplySettingsArgument} {pipeName}",
             UseShellExecute = true,
             Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(exePath) ?? string.Empty,
