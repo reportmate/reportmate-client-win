@@ -206,8 +206,9 @@ Configuration can also be set via environment variables with the `REPORTMATE_` p
 
 ```powershell
 $env:REPORTMATE_API_URL = "https://reportmate.example.edu"
-$env:REPORTMATE_PASSPHRASE = "your-passphrase"
 ```
+
+The passphrase and API key are never read from environment variables; set them through policy or the Settings registry key.
 
 ## Troubleshooting
 

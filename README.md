@@ -472,7 +472,8 @@ The build and installation scripts recognize these environment variables:
 
 - `REPORTMATE_API_URL` - Sets the default API endpoint
 - `REPORTMATE_DEVICE_ID` - Sets custom device identifier
-- `REPORTMATE_API_KEY` - Sets API authentication key
+
+The client never reads the passphrase or API key from environment variables; set them through policy or the Settings registry key.
 
 Example:
 ```bash
