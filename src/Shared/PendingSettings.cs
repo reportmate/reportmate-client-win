@@ -9,7 +9,7 @@ namespace ReportMate.Shared;
 
 /// <summary>
 /// The pending Prefs edits handed from the unelevated app to its elevated --apply-settings
-/// run, as a small JSON file, and the checks that run writes them through. The elevated side
+/// run, as a small JSON document sent over SettingsPipe, and the checks that run writes them through. The elevated side
 /// trusts nothing in the file: it re-reads policy, skips every managed setting, and applies
 /// the same limits the Prefs fields enforce.
 /// </summary>
@@ -39,7 +39,7 @@ public static class PendingSettings
     public static IReadOnlyList<(string Name, object Value)> Deserialize(string json)
     {
         var values = JsonNode.Parse(json)?["values"] as JsonObject
-            ?? throw new FormatException("The settings file has no values.");
+            ?? throw new FormatException("The settings payload has no values.");
         var result = new List<(string, object)>();
         foreach (var (name, node) in values)
         {

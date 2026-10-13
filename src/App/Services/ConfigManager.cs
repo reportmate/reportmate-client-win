@@ -91,14 +91,15 @@ public sealed class ConfigManager
     }
 
     /// <summary>
-    /// The elevated --apply-settings run: reads the pending-settings file, re-checks policy and
-    /// the Prefs limits, writes what passes, and returns the process exit code (0 on success).
+    /// The elevated --apply-settings run: reads the pending settings from the app's pipe,
+    /// re-checks policy and the Prefs limits, writes what passes, and returns the process exit
+    /// code (0 on success, 2 when a value fails the checks, 1 on any other failure).
     /// </summary>
-    public static int ApplySettingsFile(string path)
+    public static int ApplySettingsFromPipe(string pipeName)
     {
         try
         {
-            var values = PendingSettings.Deserialize(File.ReadAllText(path));
+            var values = PendingSettings.Deserialize(SettingsPipe.Receive(pipeName, TimeSpan.FromSeconds(30)));
             var (writes, problems) = PendingSettings.Plan(values, PolicyDetector.Instance.IsManagedByPolicy);
             if (problems.Count > 0) return 2;
             WriteSettings(writes);

@@ -14,12 +14,13 @@ namespace ReportMate.Shared;
 /// administrator rights, but editing does not: every setting policy does not manage is
 /// editable in the normal app. Save writes directly when the app is already elevated;
 /// otherwise it relaunches the app's own executable through UAC in a headless
-/// --apply-settings mode that writes the pending values and exits without a window.
+/// --apply-settings mode that reads the pending values from a named pipe (see
+/// SettingsPipe), writes them and exits without a window.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class PrefsElevation
 {
-    /// <summary>Command-line switch that writes a pending-settings file headlessly and exits.</summary>
+    /// <summary>Command-line switch, followed by a pipe name, that writes pending settings headlessly and exits.</summary>
     public const string ApplySettingsArgument = "--apply-settings";
 
     /// <summary>Win32 ERROR_CANCELLED: the user dismissed the UAC prompt.</summary>
@@ -49,23 +50,23 @@ public static class PrefsElevation
         }
     }
 
-    /// <summary>The pending-settings file path when the command line asks for a headless apply.</summary>
-    public static string? ApplySettingsPath(IEnumerable<string>? args)
+    /// <summary>The settings pipe name when the command line asks for a headless apply.</summary>
+    public static string? ApplySettingsPipe(IEnumerable<string>? args)
     {
         var list = args?.ToList() ?? [];
         var i = list.FindIndex(a => string.Equals(a?.Trim(), ApplySettingsArgument, StringComparison.OrdinalIgnoreCase));
         return i >= 0 && i + 1 < list.Count && !string.IsNullOrWhiteSpace(list[i + 1]) ? list[i + 1] : null;
     }
 
-    /// <summary>Start info that runs <paramref name="exePath"/> elevated to apply <paramref name="payloadPath"/>.</summary>
-    public static ProcessStartInfo BuildElevatedApply(string exePath, string payloadPath)
+    /// <summary>Start info that runs <paramref name="exePath"/> elevated to apply what <paramref name="pipeName"/> sends.</summary>
+    public static ProcessStartInfo BuildElevatedApply(string exePath, string pipeName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(exePath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(payloadPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pipeName);
         return new ProcessStartInfo
         {
             FileName = exePath,
-            Arguments = $"{ApplySettingsArgument} \"{payloadPath}\"",
+            Arguments = $"{ApplySettingsArgument} {pipeName}",
             UseShellExecute = true,
             Verb = "runas",
             WorkingDirectory = Path.GetDirectoryName(exePath) ?? string.Empty,

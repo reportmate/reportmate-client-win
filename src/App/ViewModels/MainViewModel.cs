@@ -298,20 +298,40 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    // The elevated run gets the values over a pipe only it (as this user or an administrator)
+    // can open; nothing is written to disk. The wait covers the UAC prompt.
+    private static readonly TimeSpan ElevatedConnectTimeout = TimeSpan.FromSeconds(60);
+
     private static async Task<string?> WriteElevatedAsync(IReadOnlyList<(string Name, object Value)> writes)
     {
         var exe = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(exe))
             return "Not saved: could not find the app's own executable.";
 
-        var payload = Path.Combine(Path.GetTempPath(), $"ReportMate-settings-{Guid.NewGuid():N}.json");
+        var pipeName = SettingsPipe.NewName();
         try
         {
-            await File.WriteAllTextAsync(payload, PendingSettings.Serialize(writes));
-            using var process = System.Diagnostics.Process.Start(PrefsElevation.BuildElevatedApply(exe, payload));
+            using var server = SettingsPipe.CreateServer(pipeName);
+            // ShellExecute with runas returns once the UAC prompt is answered, so keep it off the UI thread.
+            using var process = await Task.Run(() => System.Diagnostics.Process.Start(PrefsElevation.BuildElevatedApply(exe, pipeName)));
             if (process is null)
                 return "Not saved: the elevated save did not start.";
-            await process.WaitForExitAsync();
+
+            using var timeout = new CancellationTokenSource(ElevatedConnectTimeout);
+            var send = SettingsPipe.SendAsync(server, PendingSettings.Serialize(writes), timeout.Token);
+            var exited = process.WaitForExitAsync();
+            if (await Task.WhenAny(send, exited) == exited && !send.IsCompleted)
+            {
+                timeout.Cancel();
+                return $"Not saved: the elevated save ended early (exit code {process.ExitCode}).";
+            }
+            try { await send; }
+            catch (OperationCanceledException)
+            {
+                return "Not saved: the elevated save did not connect in time.";
+            }
+
+            await exited;
             return process.ExitCode switch
             {
                 0 => null,
@@ -326,10 +346,6 @@ public partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             return $"Not saved: {ex.Message}";
-        }
-        finally
-        {
-            try { File.Delete(payload); } catch { }
         }
     }
 

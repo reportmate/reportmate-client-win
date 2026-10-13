@@ -166,7 +166,7 @@ The runner runs as SYSTEM, so the installer limits `C:\ProgramData\ManagedReport
 
 `resources/ReportMate.admx` and `resources/en-US/ReportMate.adml` offer every setting on the app's Prefs tab as a machine policy under `HKLM\SOFTWARE\Policies\ReportMate`. The app disables each one it finds there, so it shows in gray, and the Prefs tab says that settings shown in gray have been configured by a policy.
 
-On the Prefs tab every setting that policy does not manage is editable. Edits stay pending until **Save**, which writes them to `HKLM\SOFTWARE\ReportMate\Settings`. When the app is not running as administrator, Save asks for administrator approval and writes the values in a separate elevated run of the app that opens no window; it re-reads policy and skips every managed setting. If approval is declined, the edits stay pending. **Discard** drops them.
+On the Prefs tab every setting that policy does not manage is editable. Edits stay pending until **Save**, which writes them to `HKLM\SOFTWARE\ReportMate\Settings`. When the app is not running as administrator, Save asks for administrator approval and writes the values in a separate elevated run of the app that opens no window. The values reach that run over a one-time named pipe that only the signed-in user, Administrators and SYSTEM can open, so nothing, credentials included, is written to disk. The elevated run re-reads policy and skips every managed setting. If approval is declined, the edits stay pending. **Discard** drops them.
 
 The Prefs tab also lists the scheduled tasks the installer registers, with each one's state, last result and schedule. Tasks that run as SYSTEM can be read only by an administrator, so they show as Unknown otherwise.
 

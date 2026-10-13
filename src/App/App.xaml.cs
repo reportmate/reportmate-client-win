@@ -26,9 +26,9 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         // Elevated save from Prefs: write the pending settings and exit, without a window.
-        if (ReportMate.Shared.PrefsElevation.ApplySettingsPath(Environment.GetCommandLineArgs().Skip(1)) is { } payload)
+        if (ReportMate.Shared.PrefsElevation.ApplySettingsPipe(Environment.GetCommandLineArgs().Skip(1)) is { } pipe)
         {
-            Environment.Exit(ReportMate.App.Services.ConfigManager.ApplySettingsFile(payload));
+            Environment.Exit(ReportMate.App.Services.ConfigManager.ApplySettingsFromPipe(pipe));
             return;
         }
 

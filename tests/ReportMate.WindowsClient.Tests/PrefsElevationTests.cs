@@ -1,6 +1,10 @@
 using System;
 using System.ComponentModel;
+using System.IO.Pipes;
 using System.Linq;
+using System.Security.Principal;
+using System.Threading;
+using System.Threading.Tasks;
 using ReportMate.Shared;
 using Xunit;
 
@@ -30,33 +34,88 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Theory]
-        [InlineData(@"--apply-settings|C:\Temp\s.json", @"C:\Temp\s.json")]
-        [InlineData(@"--APPLY-SETTINGS|C:\Temp\s.json", @"C:\Temp\s.json")]
+        [InlineData("--apply-settings|ReportMate-settings-0123456789abcdef0123456789abcdef", "ReportMate-settings-0123456789abcdef0123456789abcdef")]
+        [InlineData("--APPLY-SETTINGS|ReportMate-settings-0123456789abcdef0123456789abcdef", "ReportMate-settings-0123456789abcdef0123456789abcdef")]
         [InlineData("--apply-settings", null)]
         [InlineData("--apply-settings| ", null)]
         [InlineData("", null)]
         [InlineData("--prefs", null)]
-        public void TheApplySwitchCarriesThePayloadPath(string args, string? expected) =>
-            Assert.Equal(expected, PrefsElevation.ApplySettingsPath(Split(args)));
+        public void TheApplySwitchCarriesThePipeName(string args, string? expected) =>
+            Assert.Equal(expected, PrefsElevation.ApplySettingsPipe(Split(args)));
 
         [Fact]
         public void SaveRunsTheSameExeElevatedAndHeadless()
         {
             var exe = @"C:\Program Files\ReportMate\Managed Reports Runner.exe";
-            var info = PrefsElevation.BuildElevatedApply(exe, @"C:\Users\pat\AppData\Local\Temp\s.json");
+            var info = PrefsElevation.BuildElevatedApply(exe, "ReportMate-settings-0123456789abcdef0123456789abcdef");
 
             Assert.Equal(exe, info.FileName);
-            Assert.Equal(@"--apply-settings ""C:\Users\pat\AppData\Local\Temp\s.json""", info.Arguments);
+            Assert.Equal("--apply-settings ReportMate-settings-0123456789abcdef0123456789abcdef", info.Arguments);
             Assert.Equal("runas", info.Verb);
             Assert.True(info.UseShellExecute);
             Assert.Equal(@"C:\Program Files\ReportMate", info.WorkingDirectory);
         }
 
         [Fact]
-        public void SaveNeedsAnExeAndAPayload()
+        public void SaveNeedsAnExeAndAPipe()
         {
-            Assert.ThrowsAny<ArgumentException>(() => PrefsElevation.BuildElevatedApply(" ", "s.json"));
+            Assert.ThrowsAny<ArgumentException>(() => PrefsElevation.BuildElevatedApply(" ", "pipe"));
             Assert.ThrowsAny<ArgumentException>(() => PrefsElevation.BuildElevatedApply("app.exe", ""));
+        }
+    }
+
+    public class SettingsPipeTests
+    {
+        [Fact]
+        public void OnlyGeneratedNamesAreAccepted()
+        {
+            Assert.True(SettingsPipe.IsValidName(SettingsPipe.NewName()));
+            Assert.False(SettingsPipe.IsValidName(null));
+            Assert.False(SettingsPipe.IsValidName("ReportMate-settings-xyz"));
+            Assert.False(SettingsPipe.IsValidName(@"..\pipe\other"));
+            Assert.Throws<ArgumentException>(() => SettingsPipe.Receive("other", TimeSpan.FromSeconds(1)));
+        }
+
+        [Fact]
+        public async Task ThePayloadCrossesThePipeIntact()
+        {
+            var name = SettingsPipe.NewName();
+            var payload = PendingSettings.Serialize([("ApiKey", "s3cret"), ("MaxRetryAttempts", 3)]);
+            using var server = SettingsPipe.CreateServer(name);
+            var send = SettingsPipe.SendAsync(server, payload, CancellationToken.None);
+
+            var received = await Task.Run(() => SettingsPipe.Receive(name, TimeSpan.FromSeconds(10)));
+            await send;
+
+            Assert.Equal(payload, received);
+        }
+
+        [Fact]
+        public void OnlyTheUserAdministratorsAndSystemMayOpenThePipe()
+        {
+            using var server = SettingsPipe.CreateServer(SettingsPipe.NewName());
+            var sids = server.GetAccessControl()
+                .GetAccessRules(true, false, typeof(SecurityIdentifier))
+                .Cast<PipeAccessRule>()
+                .Select(r => r.IdentityReference.Value)
+                .ToHashSet();
+
+            using var me = WindowsIdentity.GetCurrent();
+            var expected = new[]
+            {
+                me.User!.Value,
+                new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null).Value,
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value,
+            }.ToHashSet();
+            Assert.Equal(expected, sids);
+        }
+
+        [Fact]
+        public void ASecondServerByTheSameNameIsRefused()
+        {
+            var name = SettingsPipe.NewName();
+            using var first = SettingsPipe.CreateServer(name);
+            Assert.ThrowsAny<Exception>(() => SettingsPipe.CreateServer(name));
         }
     }
 
