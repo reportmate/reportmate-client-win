@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
@@ -150,23 +151,10 @@ public partial class MainViewModel : ObservableObject
     partial void OnApiTimeoutSecondsChanged(int value) => OnPropertyChanged(nameof(ApiTimeoutValue));
     partial void OnMaxRetryAttemptsChanged(int value) => OnPropertyChanged(nameof(MaxRetryValue));
 
-    // ── Policy Lock Properties (for x:Bind) ─────────────────────
+    // ── Policy banner (for x:Bind) ───────────────────────────────
 
-    public bool IsApiUrlLocked => _managedKeys.Contains("ApiUrl");
-    public bool IsApiKeyLocked => _managedKeys.Contains("ApiKey");
-    public bool IsPassphraseLocked => _managedKeys.Contains("Passphrase");
-    public bool IsDeviceIdLocked => _managedKeys.Contains("DeviceId");
-    public bool IsCollectionIntervalLocked => _managedKeys.Contains("CollectionIntervalSeconds");
-    public bool IsMaxDataAgeLocked => _managedKeys.Contains("MaxDataAgeMinutes");
-    public bool IsApiTimeoutLocked => _managedKeys.Contains("ApiTimeoutSeconds");
-    public bool IsOsQueryPathLocked => _managedKeys.Contains("OsQueryPath");
-    public bool IsStorageModeLocked => _managedKeys.Contains("StorageMode");
-    public bool IsDebugLoggingLocked => _managedKeys.Contains("DebugLogging");
-    public bool IsCimianIntegrationLocked => _managedKeys.Contains("CimianIntegrationEnabled");
-    public bool IsSkipCertValidationLocked => _managedKeys.Contains("SkipCertificateValidation");
-    public bool IsMaxRetryLocked => _managedKeys.Contains("MaxRetryAttempts");
-    public bool IsUserAgentLocked => _managedKeys.Contains("UserAgent");
-    public bool IsProxyUrlLocked => _managedKeys.Contains("ProxyUrl");
+    /// <summary>True when any setting comes from the policy key; shows the one banner explaining gray fields.</summary>
+    public bool HasPolicySettings => _managedKeys.Count > 0;
 
     // ── Edit State (for x:Bind): elevated and not managed by policy ──
 
@@ -210,6 +198,32 @@ public partial class MainViewModel : ObservableObject
 
     public string AppVersion => ReportMateConstants.Version;
 
+    // ── Services card ────────────────────────────────────────────
+
+    /// <summary>The services and scheduled tasks the installer creates, with their live state.</summary>
+    public ObservableCollection<FootprintRow> Services { get; } = [];
+
+    [ObservableProperty] private bool _isRefreshingServices;
+
+    /// <summary>Re-reads the state of every install-footprint item off the UI thread.</summary>
+    [RelayCommand]
+    private async Task RefreshServicesAsync()
+    {
+        if (IsRefreshingServices) return;
+        IsRefreshingServices = true;
+        try
+        {
+            var rows = await InstallFootprintProbe.QueryAsync();
+            Services.Clear();
+            foreach (var row in rows)
+                Services.Add(row);
+        }
+        finally
+        {
+            IsRefreshingServices = false;
+        }
+    }
+
     // ── Load ─────────────────────────────────────────────────────
 
     public void Load()
@@ -221,6 +235,7 @@ public partial class MainViewModel : ObservableObject
         var config = configMgr.Config;
 
         _managedKeys = PolicyDetector.Instance.AllManagedKeys();
+        OnPropertyChanged(nameof(HasPolicySettings));
 
         ApiUrl = config.ApiUrl;
         HasExistingApiKey = !string.IsNullOrEmpty(config.ApiKey);
@@ -248,6 +263,8 @@ public partial class MainViewModel : ObservableObject
 
         _changedSettings.Clear();
         _isLoading = false;
+
+        _ = RefreshServicesAsync();
     }
 
     // ── Auto-Save ─────────────────────────────────────────────────
