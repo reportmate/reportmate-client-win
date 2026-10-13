@@ -229,10 +229,11 @@
                 </Border>
             </Grid>
 
-            <!-- ═══ Services: the scheduled tasks the installer creates, read-only ═══ -->
+            <!-- ═══ Services: what the installer creates, read-only; one expander per item ═══ -->
             <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="8" Padding="20">
+                    BorderThickness="1" CornerRadius="8" Padding="20"
+                    Visibility="{x:Bind ViewModel.HasServices, Converter={StaticResource BoolToVisibility}}">
             <StackPanel Spacing="8">
                 <Grid Margin="0,0,0,4">
                     <Grid.ColumnDefinitions>
@@ -253,49 +254,52 @@
                     </Button>
                 </Grid>
 
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="2*" />
-                        <ColumnDefinition Width="110" />
-                        <ColumnDefinition Width="100" />
-                        <ColumnDefinition Width="1.6*" />
-                        <ColumnDefinition Width="2*" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Name" Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Grid.Column="1" Text="Kind" Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Grid.Column="2" Text="State" Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Grid.Column="3" Text="Last result" Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock Grid.Column="4" Text="Schedule" Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                </Grid>
-
+                <!-- The Expander header is a full-width toggle button whose content stretches
+                     (ExpanderHeaderHorizontalContentAlignment is Stretch), so a click anywhere on
+                     the row, or Space/Enter when it has focus, expands and collapses it. -->
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Services}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="svc:FootprintRow">
-                            <Grid ColumnSpacing="12" Padding="0,8"
-                                  BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="2*" />
-                                    <ColumnDefinition Width="110" />
-                                    <ColumnDefinition Width="100" />
-                                    <ColumnDefinition Width="1.6*" />
-                                    <ColumnDefinition Width="2*" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" ToolTipService.ToolTip="{x:Bind Description}">
-                                    <TextBlock Text="{x:Bind FriendlyName}" TextWrapping="WrapWholeWords" />
-                                    <TextBlock Text="{x:Bind Name}" Style="{StaticResource CaptionTextBlockStyle}"
-                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                               TextWrapping="Wrap" IsTextSelectionEnabled="True" />
-                                </StackPanel>
-                                <TextBlock Grid.Column="1" Text="{x:Bind Kind}" TextWrapping="WrapWholeWords" />
-                                <TextBlock Grid.Column="2" Text="{x:Bind State}" TextWrapping="WrapWholeWords" />
-                                <TextBlock Grid.Column="3" Text="{x:Bind LastResult}" TextWrapping="WrapWholeWords" />
-                                <TextBlock Grid.Column="4" Text="{x:Bind Schedule}" TextWrapping="WrapWholeWords" />
-                            </Grid>
+                            <Expander Margin="0,4" IsExpanded="False"
+                                      HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                                <Expander.Header>
+                                    <Grid ColumnSpacing="12" Padding="0,8" HorizontalAlignment="Stretch">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="2">
+                                            <TextBlock Text="{x:Bind FriendlyName}" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                                       TextWrapping="WrapWholeWords" />
+                                            <TextBlock Text="{x:Bind Summary}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                       TextWrapping="WrapWholeWords" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                            <Ellipse Width="10" Height="10" VerticalAlignment="Center"
+                                                     Fill="{x:Bind Tone, Converter={StaticResource FootprintTone}}" />
+                                            <TextBlock Text="{x:Bind State}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Expander.Header>
+                                <ItemsControl ItemsSource="{x:Bind Details}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="svc:FootprintDetail">
+                                            <Grid ColumnSpacing="16" Margin="0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="150" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{x:Bind Label}"
+                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                <TextBlock Grid.Column="1" Text="{x:Bind Value}"
+                                                           TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Expander>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
