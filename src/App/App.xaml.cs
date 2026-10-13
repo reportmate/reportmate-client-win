@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using System;
 using System.IO;
+using System.Linq;
 
 namespace ReportMate.App;
 
@@ -24,6 +25,13 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // Elevated save from Prefs: write the pending settings and exit, without a window.
+        if (ReportMate.Shared.PrefsElevation.ApplySettingsPath(Environment.GetCommandLineArgs().Skip(1)) is { } payload)
+        {
+            Environment.Exit(ReportMate.App.Services.ConfigManager.ApplySettingsFile(payload));
+            return;
+        }
+
         try
         {
             _window = new MainWindow();

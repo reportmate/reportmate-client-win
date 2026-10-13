@@ -43,11 +43,8 @@ public sealed partial class MainWindow : Window
         // Apply Mica backdrop for modern Windows 11 look
         SystemBackdrop = new MicaBackdrop();
 
-        // Open on Prefs when asked to (the elevated relaunch from Unlock passes --prefs);
-        // Prefs is also the first tab, so this is the default either way.
-        NavView.SelectedItem = ReportMate.Shared.PrefsElevation.OpensOnPrefs(Environment.GetCommandLineArgs().Skip(1))
-            ? NavView.MenuItems.OfType<NavigationViewItem>().First(i => (string?)i.Tag == "prefs")
-            : NavView.MenuItems[0];
+        // Prefs is the first tab and the one the app opens on.
+        NavView.SelectedItem = NavView.MenuItems[0];
     }
 
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

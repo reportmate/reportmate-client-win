@@ -42,7 +42,7 @@ namespace ReportMate.WindowsClient.Tests
             ("ProxyUrl", null),
         ];
 
-        private static readonly IReadOnlySet<string> SkipWhenEmpty = new HashSet<string> { "ApiKey", "Passphrase", "DeviceId", "ProxyUrl" };
+        private static readonly IReadOnlySet<string> SkipWhenEmpty = PrefsSettingWrites.SkipWhenEmpty;
 
         private static IReadOnlyList<(string Name, object Value)> Select(IReadOnlySet<string> changed, Func<string, bool>? managed = null) =>
             PrefsSettingWrites.Select(AllValues, changed, managed ?? (_ => false), SkipWhenEmpty);

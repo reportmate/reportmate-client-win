@@ -63,11 +63,11 @@ namespace ReportMate.WindowsClient.Tests
         }
 
         [Theory]
-        [InlineData(false, false, CredentialStatus.UnlockToView)]
-        [InlineData(false, true, CredentialStatus.UnlockToView)]
+        [InlineData(false, false, CredentialStatus.NotReadable)]
+        [InlineData(false, true, CredentialStatus.NotReadable)]
         [InlineData(true, false, "Not saved")]
         [InlineData(true, true, "Saved — enter a new value to replace it")]
-        public void App_shows_saved_state_only_once_unlocked(bool elevated, bool saved, string expected)
+        public void App_shows_saved_state_only_when_elevated(bool elevated, bool saved, string expected)
         {
             Assert.Equal(expected, CredentialStatus.Describe(elevated, saved));
         }

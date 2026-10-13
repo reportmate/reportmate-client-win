@@ -8,15 +8,15 @@ using ReportMate.App.Services;
 namespace ReportMate.App.ViewModels;
 
 /// <summary>
-/// ViewModel for the Main tab. Loads from ConfigManager, saves non-policy settings,
-/// shows policy lock state for CSP/MDM-managed settings.
+/// ViewModel for the Prefs tab. Loads from ConfigManager and holds edits as pending until
+/// Save, which writes them to HKLM, through a UAC prompt when the app is not elevated.
+/// Settings managed by policy are disabled and never written.
 /// </summary>
 public partial class MainViewModel : ObservableObject
 {
     // Bound properties change only on the UI thread: x:Bind updates from any other thread
-    // throw RPC_E_WRONG_THREAD. The save timer and the status reset both run on it.
+    // throw RPC_E_WRONG_THREAD. The status reset runs on it.
     private readonly DispatcherQueue _dispatcher = DispatcherQueue.GetForCurrentThread();
-    private DispatcherQueueTimer? _autoSaveTimer;
     private bool _isLoading;
 
     // Settings the user changed since the last save; only these are written.
@@ -57,12 +57,18 @@ public partial class MainViewModel : ObservableObject
 
     public enum SaveState { Idle, Saving, Saved, Failed }
 
+    // Why the last save did not happen, shown while SaveStatus is Failed.
+    private string _saveError = "";
+
     partial void OnSaveStatusChanged(SaveState value)
     {
         OnPropertyChanged(nameof(SaveStatusGlyph));
         OnPropertyChanged(nameof(SaveStatusMessage));
         OnPropertyChanged(nameof(IsSaveStatusVisible));
     }
+
+    /// <summary>True while there are edits Save would write; shows Save and Discard.</summary>
+    public bool HasPendingChanges => _changedSettings.Count > 0;
 
     // ── Policy State ─────────────────────────────────────────────
 
@@ -78,48 +84,11 @@ public partial class MainViewModel : ObservableObject
 
     public string PassphrasePlaceholderText => CredentialStatus.Describe(IsElevated, HasExistingPassphrase);
 
-    // ── Unlock ───────────────────────────────────────────────────
-
     /// <summary>
-    /// Settings and credentials live in HKLM, so only an elevated app can change them or see
-    /// whether a credential is saved. Unelevated, Prefs is read-only and Unlock relaunches
-    /// the app through UAC on this tab.
+    /// Only an elevated process can see whether a credential is saved, and an elevated one
+    /// saves without a UAC prompt. Editing never depends on it.
     /// </summary>
     public bool IsElevated { get; } = PrefsElevation.IsProcessElevated();
-
-    public bool IsReadOnly => !IsElevated;
-
-    [ObservableProperty] private string _unlockError = "";
-
-    public bool HasUnlockError => !string.IsNullOrEmpty(UnlockError);
-
-    partial void OnUnlockErrorChanged(string value) => OnPropertyChanged(nameof(HasUnlockError));
-
-    /// <summary>Relaunches the app elevated on Prefs and closes this one; stays open if UAC is declined.</summary>
-    [RelayCommand]
-    private void Unlock()
-    {
-        UnlockError = "";
-        try
-        {
-            var exe = Environment.ProcessPath;
-            if (string.IsNullOrWhiteSpace(exe))
-            {
-                UnlockError = "Could not find the app's own executable to relaunch.";
-                return;
-            }
-            System.Diagnostics.Process.Start(PrefsElevation.BuildElevatedRelaunch(exe));
-            Microsoft.UI.Xaml.Application.Current.Exit();
-        }
-        catch (Exception ex) when (PrefsElevation.IsElevationCancelled(ex))
-        {
-            // UAC prompt dismissed: stay read-only.
-        }
-        catch (Exception ex)
-        {
-            UnlockError = $"Could not relaunch as administrator: {ex.Message}";
-        }
-    }
 
     partial void OnHasExistingApiKeyChanged(bool value) => OnPropertyChanged(nameof(ApiKeyPlaceholderText));
     partial void OnHasExistingPassphraseChanged(bool value) => OnPropertyChanged(nameof(PassphrasePlaceholderText));
@@ -156,23 +125,23 @@ public partial class MainViewModel : ObservableObject
     /// <summary>True when any setting comes from the policy key; shows the one banner explaining gray fields.</summary>
     public bool HasPolicySettings => _managedKeys.Count > 0;
 
-    // ── Edit State (for x:Bind): elevated and not managed by policy ──
+    // ── Edit State (for x:Bind): editable unless managed by policy ──
 
-    public bool CanEditApiUrl => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ApiUrl"));
-    public bool CanEditApiKey => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ApiKey"));
-    public bool CanEditPassphrase => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("Passphrase"));
-    public bool CanEditDeviceId => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("DeviceId"));
-    public bool CanEditCollectionInterval => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("CollectionIntervalSeconds"));
-    public bool CanEditMaxDataAge => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("MaxDataAgeMinutes"));
-    public bool CanEditApiTimeout => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ApiTimeoutSeconds"));
-    public bool CanEditOsQueryPath => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("OsQueryPath"));
-    public bool CanEditStorageMode => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("StorageMode"));
-    public bool CanEditDebugLogging => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("DebugLogging"));
-    public bool CanEditCimianIntegration => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("CimianIntegrationEnabled"));
-    public bool CanEditSkipCertValidation => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("SkipCertificateValidation"));
-    public bool CanEditMaxRetry => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("MaxRetryAttempts"));
-    public bool CanEditUserAgent => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("UserAgent"));
-    public bool CanEditProxyUrl => PrefsElevation.CanEdit(IsElevated, _managedKeys.Contains("ProxyUrl"));
+    public bool CanEditApiUrl => PrefsElevation.CanEdit(_managedKeys.Contains("ApiUrl"));
+    public bool CanEditApiKey => PrefsElevation.CanEdit(_managedKeys.Contains("ApiKey"));
+    public bool CanEditPassphrase => PrefsElevation.CanEdit(_managedKeys.Contains("Passphrase"));
+    public bool CanEditDeviceId => PrefsElevation.CanEdit(_managedKeys.Contains("DeviceId"));
+    public bool CanEditCollectionInterval => PrefsElevation.CanEdit(_managedKeys.Contains("CollectionIntervalSeconds"));
+    public bool CanEditMaxDataAge => PrefsElevation.CanEdit(_managedKeys.Contains("MaxDataAgeMinutes"));
+    public bool CanEditApiTimeout => PrefsElevation.CanEdit(_managedKeys.Contains("ApiTimeoutSeconds"));
+    public bool CanEditOsQueryPath => PrefsElevation.CanEdit(_managedKeys.Contains("OsQueryPath"));
+    public bool CanEditStorageMode => PrefsElevation.CanEdit(_managedKeys.Contains("StorageMode"));
+    public bool CanEditDebugLogging => PrefsElevation.CanEdit(_managedKeys.Contains("DebugLogging"));
+    public bool CanEditCimianIntegration => PrefsElevation.CanEdit(_managedKeys.Contains("CimianIntegrationEnabled"));
+    public bool CanEditSkipCertValidation => PrefsElevation.CanEdit(_managedKeys.Contains("SkipCertificateValidation"));
+    public bool CanEditMaxRetry => PrefsElevation.CanEdit(_managedKeys.Contains("MaxRetryAttempts"));
+    public bool CanEditUserAgent => PrefsElevation.CanEdit(_managedKeys.Contains("UserAgent"));
+    public bool CanEditProxyUrl => PrefsElevation.CanEdit(_managedKeys.Contains("ProxyUrl"));
 
     // ── Save Status Display (for x:Bind) ────────────────────────
 
@@ -188,7 +157,7 @@ public partial class MainViewModel : ObservableObject
     {
         SaveState.Saving => "Saving...",
         SaveState.Saved  => "Saved",
-        SaveState.Failed => "Save failed — run as administrator to change settings",
+        SaveState.Failed => _saveError,
         _ => ""
     };
 
@@ -262,54 +231,113 @@ public partial class MainViewModel : ObservableObject
         OnPropertyChanged(string.Empty);
 
         _changedSettings.Clear();
+        OnPropertyChanged(nameof(HasPendingChanges));
         _isLoading = false;
 
         _ = RefreshServicesAsync();
     }
 
-    // ── Auto-Save ─────────────────────────────────────────────────
+    // ── Pending edits, Save and Discard ──────────────────────────
 
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
 
-        // Read-only until unlocked: nothing is saved from an unelevated app.
-        if (_isLoading || !IsElevated) return;
+        if (_isLoading) return;
         if (PrefsSettingWrites.SettingFor(e.PropertyName) is not { } setting) return;
 
-        _changedSettings.Add(setting);
-        if (_autoSaveTimer is null)
-        {
-            _autoSaveTimer = _dispatcher.CreateTimer();
-            _autoSaveTimer.Interval = TimeSpan.FromMilliseconds(500);
-            _autoSaveTimer.IsRepeating = false;
-            _autoSaveTimer.Tick += (_, _) => SaveChanges();
-        }
-        _autoSaveTimer.Stop();
-        _autoSaveTimer.Start();
+        if (_changedSettings.Add(setting))
+            OnPropertyChanged(nameof(HasPendingChanges));
     }
 
-    private void SaveChanges()
+    /// <summary>
+    /// Writes the pending edits. Elevated, it writes them directly; otherwise it runs this
+    /// app elevated in its headless --apply-settings mode. Declined or failed, the edits stay
+    /// pending and the reason shows under Save.
+    /// </summary>
+    [RelayCommand]
+    private async Task SaveAsync()
     {
-        var changed = new HashSet<string>(_changedSettings, StringComparer.Ordinal);
-        _changedSettings.Clear();
+        if (!HasPendingChanges || SaveStatus == SaveState.Saving) return;
+
+        var writes = ConfigManager.PendingWrites(BuildConfig(), _changedSettings);
+        SaveStatus = SaveState.Saving;
+        var error = writes.Count == 0 ? null
+            : IsElevated ? WriteDirectly(writes)
+            : await WriteElevatedAsync(writes);
+
+        if (error is not null)
+        {
+            _saveError = error;
+            SetSaveStatus(SaveState.Failed);
+            return;
+        }
+
+        Load();
+        SetSaveStatus(SaveState.Saved);
+    }
+
+    /// <summary>Drops the pending edits and shows the saved settings again.</summary>
+    [RelayCommand]
+    private void Discard()
+    {
+        Load();
+        SaveStatus = SaveState.Idle;
+    }
+
+    private static string? WriteDirectly(IReadOnlyList<(string Name, object Value)> writes)
+    {
         try
         {
-            ConfigManager.SaveUserSettings(BuildConfig(), changed);
-            SetSaveStatus(SaveState.Saved);
+            ConfigManager.WriteSettings(writes);
+            return null;
         }
-        catch
+        catch (Exception ex)
         {
-            // Keep them, so the next edit tries them again.
-            _changedSettings.UnionWith(changed);
-            SetSaveStatus(SaveState.Failed);
+            return $"Not saved: {ex.Message}";
+        }
+    }
+
+    private static async Task<string?> WriteElevatedAsync(IReadOnlyList<(string Name, object Value)> writes)
+    {
+        var exe = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(exe))
+            return "Not saved: could not find the app's own executable.";
+
+        var payload = Path.Combine(Path.GetTempPath(), $"ReportMate-settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            await File.WriteAllTextAsync(payload, PendingSettings.Serialize(writes));
+            using var process = System.Diagnostics.Process.Start(PrefsElevation.BuildElevatedApply(exe, payload));
+            if (process is null)
+                return "Not saved: the elevated save did not start.";
+            await process.WaitForExitAsync();
+            return process.ExitCode switch
+            {
+                0 => null,
+                2 => "Not saved: a value is outside the allowed range.",
+                var code => $"Not saved: the elevated save failed (exit code {code}).",
+            };
+        }
+        catch (Exception ex) when (PrefsElevation.IsElevationCancelled(ex))
+        {
+            return "Not saved: administrator approval was declined.";
+        }
+        catch (Exception ex)
+        {
+            return $"Not saved: {ex.Message}";
+        }
+        finally
+        {
+            try { File.Delete(payload); } catch { }
         }
     }
 
     private void SetSaveStatus(SaveState state)
     {
         SaveStatus = state;
-        if (state is SaveState.Saved or SaveState.Failed)
+        // A failure stays up until the next save or discard; it explains why edits are still pending.
+        if (state is SaveState.Saved)
         {
             var reset = _dispatcher.CreateTimer();
             reset.Interval = TimeSpan.FromSeconds(3);

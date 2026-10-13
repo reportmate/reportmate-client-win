@@ -60,44 +60,18 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
 
-            <!-- ═══ Read-only banner: settings live in HKLM, so editing needs elevation ═══ -->
-            <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="8" Padding="16,12"
-                    Visibility="{x:Bind ViewModel.IsReadOnly, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-                <StackPanel Spacing="6">
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <FontIcon Grid.Column="0" Glyph="&#xE72E;" FontSize="16" VerticalAlignment="Center"
-                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBlock Grid.Column="1" VerticalAlignment="Center" TextWrapping="WrapWholeWords"
-                                   Text="Settings are read-only. Unlock to change them (requires administrator)." />
-                        <Button Grid.Column="2" Command="{x:Bind ViewModel.UnlockCommand}"
-                                ToolTipService.ToolTip="Relaunch as administrator to edit settings">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xEA18;" FontSize="14" />
-                                <TextBlock Text="Unlock" />
-                            </StackPanel>
-                        </Button>
-                    </Grid>
-                    <TextBlock Text="{x:Bind ViewModel.UnlockError, Mode=OneWay}"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                               TextWrapping="Wrap"
-                               Visibility="{x:Bind ViewModel.HasUnlockError, Mode=OneWay, Converter={StaticResource BoolToVisibility}}" />
-                </StackPanel>
-            </Border>
-
-            <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center"
-                        Visibility="{x:Bind ViewModel.IsElevated, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
-                <FontIcon Glyph="&#xEA18;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <TextBlock Text="Running as administrator. Changes save to this device's machine settings."
-                           Style="{StaticResource CaptionTextBlockStyle}"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <!-- ═══ Save / Discard: shown only while there are unsaved edits; Save asks for UAC when needed ═══ -->
+            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center"
+                        Visibility="{x:Bind ViewModel.HasPendingChanges, Mode=OneWay, Converter={StaticResource BoolToVisibility}}">
+                <Button Style="{StaticResource AccentButtonStyle}" Command="{x:Bind ViewModel.SaveCommand}"
+                        ToolTipService.ToolTip="Save these settings to this device (asks for administrator approval)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE74E;" FontSize="14" />
+                        <TextBlock Text="Save" />
+                    </StackPanel>
+                </Button>
+                <Button Content="Discard" Command="{x:Bind ViewModel.DiscardCommand}"
+                        ToolTipService.ToolTip="Drop the unsaved changes" />
             </StackPanel>
 
             <!-- ═══ Settings Grid: 2×2 card layout ═══ -->

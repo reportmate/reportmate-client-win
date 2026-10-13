@@ -158,13 +158,17 @@ Higher priority sources override lower priority ones. Registry keys are read in 
 
 MDM sets `HKLM\SOFTWARE\Policies\ReportMate`; the installer and local administrators use `HKLM\SOFTWARE\ReportMate\Settings`. On install or upgrade, any value in a legacy key that Settings lacks is copied into Settings and a deprecation warning is logged. Apart from credentials (below), nothing in the legacy keys is changed or deleted.
 
-Credentials (`Passphrase`, `ApiKey`) are kept in `HKLM\SOFTWARE\ReportMate\Secrets`, which only SYSTEM and Administrators can read. Set them by policy as usual. On each run the runner moves a credential it finds in the policy or Settings key into `Secrets` and blanks the readable copy. A blanked policy value still marks the setting as managed. On each run and on install, a `Passphrase` or `ApiKey` found in a legacy key is moved too. It is stored when nothing else supplies one, and the legacy value is deleted only after `Secrets` reads it back. Logs name the setting and key, never the value. The app shows a credential's saved state only after **Unlock**, which restarts it as administrator. Before that it shows "Unlock to view". It never shows the value.
+Credentials (`Passphrase`, `ApiKey`) are kept in `HKLM\SOFTWARE\ReportMate\Secrets`, which only SYSTEM and Administrators can read. Set them by policy as usual. On each run the runner moves a credential it finds in the policy or Settings key into `Secrets` and blanks the readable copy. A blanked policy value still marks the setting as managed. On each run and on install, a `Passphrase` or `ApiKey` found in a legacy key is moved too. It is stored when nothing else supplies one, and the legacy value is deleted only after `Secrets` reads it back. Logs name the setting and key, never the value. The app can show whether a credential is saved only when it runs as administrator; otherwise the field invites a new value. It never shows the value.
 
 The runner runs as SYSTEM, so the installer limits `C:\ProgramData\ManagedReports` to SYSTEM and Administrators (full control) and Users (read). If `appsettings.yaml` is owned by a non-administrator, or a non-administrator can change it, the runner ignores the file and logs why.
 
 ### Policy template (ADMX)
 
-`resources/ReportMate.admx` and `resources/en-US/ReportMate.adml` offer every setting on the app's Prefs tab as a machine policy under `HKLM\SOFTWARE\Policies\ReportMate`. The app shows each one it finds there as **Managed by Policy** and locks the field.
+`resources/ReportMate.admx` and `resources/en-US/ReportMate.adml` offer every setting on the app's Prefs tab as a machine policy under `HKLM\SOFTWARE\Policies\ReportMate`. The app disables each one it finds there, so it shows in gray, and the Prefs tab says that settings shown in gray have been configured by a policy.
+
+On the Prefs tab every setting that policy does not manage is editable. Edits stay pending until **Save**, which writes them to `HKLM\SOFTWARE\ReportMate\Settings`. When the app is not running as administrator, Save asks for administrator approval and writes the values in a separate elevated run of the app that opens no window; it re-reads policy and skips every managed setting. If approval is declined, the edits stay pending. **Discard** drops them.
+
+The Prefs tab also lists the scheduled tasks the installer registers, with each one's state, last result and schedule. Tasks that run as SYSTEM can be read only by an administrator, so they show as Unknown otherwise.
 
 - **Group Policy**: copy `ReportMate.admx` into `C:\Windows\PolicyDefinitions` (or the Central Store) and `ReportMate.adml` into its `en-US` folder. The settings appear under Computer Configuration > Administrative Templates > ReportMate.
 - **Intune**: Devices > Configuration > Import ADMX, upload both files, then create an Imported Administrative Templates profile.

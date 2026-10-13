@@ -28,6 +28,12 @@ public static class PrefsSettingWrites
         "DebugLogging", "CimianIntegrationEnabled", "SkipCertificateValidation",
     };
 
+    /// <summary>Settings where an empty field means "leave the saved value alone".</summary>
+    public static readonly IReadOnlySet<string> SkipWhenEmpty = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "ApiKey", "Passphrase", "DeviceId", "ProxyUrl",
+    };
+
     /// <summary>The registry value a changed property maps to, or null when it is not a setting.</summary>
     public static string? SettingFor(string? propertyName) =>
         propertyName is not null && SettingNames.Contains(propertyName) ? propertyName : null;

@@ -42,18 +42,11 @@ public sealed class ConfigManager
         Config = config;
     }
 
-    // An empty field for these means "leave the saved value alone".
-    private static readonly HashSet<string> SkipWhenEmpty = new(StringComparer.Ordinal)
-    {
-        "ApiKey", "Passphrase", "DeviceId", "ProxyUrl",
-    };
-
     /// <summary>
-    /// Save the settings the user changed to HKLM\SOFTWARE\ReportMate\Settings. Writes
-    /// nothing else, and skips any setting policy manages: policy wins anyway, and its
-    /// field is locked. Credentials go to the protected store instead.
+    /// The settings the user changed, ready to write: policy-managed settings and empty
+    /// credential or optional fields are left out.
     /// </summary>
-    public static void SaveUserSettings(ReportMateConfig config, IReadOnlySet<string> changed)
+    public static IReadOnlyList<(string Name, object Value)> PendingWrites(ReportMateConfig config, IReadOnlySet<string> changed)
     {
         var values = new (string Name, object? Value)[]
         {
@@ -74,8 +67,15 @@ public sealed class ConfigManager
             ("ProxyUrl", config.ProxyUrl),
         };
 
-        var policy = PolicyDetector.Instance;
-        var writes = PrefsSettingWrites.Select(values, changed, policy.IsManagedByPolicy, SkipWhenEmpty);
+        return PrefsSettingWrites.Select(values, changed, PolicyDetector.Instance.IsManagedByPolicy, PrefsSettingWrites.SkipWhenEmpty);
+    }
+
+    /// <summary>
+    /// Writes settings to HKLM\SOFTWARE\ReportMate\Settings; credentials go to the protected
+    /// store instead. Needs an elevated process.
+    /// </summary>
+    public static void WriteSettings(IReadOnlyList<(string Name, object Value)> writes)
+    {
         if (writes.Count == 0) return;
 
         using var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64);
@@ -87,6 +87,26 @@ public sealed class ConfigManager
                 SecretStore.Write(name, value.ToString());
             else
                 key.SetValue(name, value, PrefsSettingWrites.DwordValueNames.Contains(name) ? RegistryValueKind.DWord : RegistryValueKind.String);
+        }
+    }
+
+    /// <summary>
+    /// The elevated --apply-settings run: reads the pending-settings file, re-checks policy and
+    /// the Prefs limits, writes what passes, and returns the process exit code (0 on success).
+    /// </summary>
+    public static int ApplySettingsFile(string path)
+    {
+        try
+        {
+            var values = PendingSettings.Deserialize(File.ReadAllText(path));
+            var (writes, problems) = PendingSettings.Plan(values, PolicyDetector.Instance.IsManagedByPolicy);
+            if (problems.Count > 0) return 2;
+            WriteSettings(writes);
+            return 0;
+        }
+        catch
+        {
+            return 1;
         }
     }
 
