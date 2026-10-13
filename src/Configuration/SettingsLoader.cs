@@ -136,7 +136,9 @@ public static class SettingsLoader
     /// <summary>
     /// REPORTMATE_ReportMate__ApiUrl style variables, as the environment-variable
     /// configuration provider maps them, plus the older REPORTMATE_API_URL, API_URL
-    /// and SERVER_URL names for the API URL.
+    /// and SERVER_URL names for the API URL. The passphrase and API key are never taken
+    /// from the environment, under any spelling: they come only from the protected store,
+    /// policy or settings.
     /// </summary>
     internal static Dictionary<string, string?> FromEnvironment(IDictionary environment)
     {
@@ -153,6 +155,7 @@ public static class SettingsLoader
             var key = rest.Contains("__")
                 ? rest.Replace("__", ":")
                 : $"ReportMate:{rest.Replace("_", "")}";
+            if (IsSecretKey(key)) continue;
             result[key] = entry.Value?.ToString();
         }
 
@@ -169,6 +172,13 @@ public static class SettingsLoader
         }
 
         return result;
+    }
+
+    private static bool IsSecretKey(string key)
+    {
+        const string section = "ReportMate:";
+        return key.StartsWith(section, StringComparison.OrdinalIgnoreCase)
+            && SecretStore.IsSecret(key[section.Length..].Replace("_", ""));
     }
 
     internal static Dictionary<string, string?> FromRegistry(IDictionary<string, object> values)

@@ -47,9 +47,7 @@ ReportMate:
 
 ### Environment Variable
 
-```powershell
-$env:REPORTMATE_PASSPHRASE = "your-secure-passphrase"
-```
+The client does not read the passphrase from environment variables. `REPORTMATE_PASSPHRASE` and `REPORTMATE_ReportMate__Passphrase` are ignored at run time; the installer's postinstall script still reads `REPORTMATE_PASSPHRASE` once to seed the protected store.
 
 ### Registry (for MDM/GPO)
 

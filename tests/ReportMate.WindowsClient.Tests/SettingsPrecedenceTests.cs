@@ -69,15 +69,38 @@ namespace ReportMate.WindowsClient.Tests
         {
             var inputs = new SettingsInputs
             {
-                Policy = new Dictionary<string, object> { ["Passphrase"] = Marker("policy") },
+                Policy = new Dictionary<string, object> { ["ApiUrl"] = "https://policy" },
+                Environment = new Dictionary<string, string>
+                {
+                    ["REPORTMATE_API_URL"] = "https://env",
+                    ["REPORTMATE_ReportMate__ApiUrl"] = "https://env-nested",
+                },
+            };
+
+            Assert.Equal("https://policy", SettingsLoader.Build(inputs)["ReportMate:ApiUrl"]);
+        }
+
+        [Fact]
+        public void Environment_never_supplies_the_passphrase_or_api_key()
+        {
+            var inputs = new SettingsInputs
+            {
                 Environment = new Dictionary<string, string>
                 {
                     ["REPORTMATE_PASSPHRASE"] = Marker("env"),
                     ["REPORTMATE_ReportMate__Passphrase"] = Marker("env-nested"),
+                    ["reportmate_passphrase"] = Marker("env-lower"),
+                    ["REPORTMATE_API_KEY"] = Marker("env"),
+                    ["REPORTMATE_APIKEY"] = Marker("env"),
+                    ["REPORTMATE_ReportMate__ApiKey"] = Marker("env-nested"),
+                    ["REPORTMATE_DEVICE_ID"] = "env-device",
                 },
             };
 
-            Assert.Equal(Marker("policy"), SettingsLoader.Build(inputs)["ReportMate:Passphrase"]);
+            var config = SettingsLoader.Build(inputs);
+            Assert.Null(config["ReportMate:Passphrase"]);
+            Assert.Null(config["ReportMate:ApiKey"]);
+            Assert.Equal("env-device", config["ReportMate:DeviceId"]);
         }
 
         [Fact]
