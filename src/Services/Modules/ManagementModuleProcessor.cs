@@ -550,6 +550,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     certificateList.Add(certificate);
                 }
                 data.Metadata["Certificates"] = certificateList;
+
+                data.MdmEnrollment.EnrollmentDate ??= FindIntuneEnrollmentDate(mgmtCerts);
                 
                 // Extract Intune Device ID from certificates if not found in registry
                 ExtractIntuneDeviceIdFromCertificates(certificateList, data);
@@ -1058,6 +1060,47 @@ $providers | ConvertTo-Json -Compress
             }
 
             return isValid;
+        }
+
+        internal const string IntuneMdmDeviceCaIssuer = "Microsoft Intune MDM Device CA";
+
+        /// <summary>
+        /// The enrollment timestamp (UTC) from the management_certificates rows: the earliest
+        /// NotValidBefore among certificates issued by the Intune MDM Device CA. Earliest, because a
+        /// renewed certificate can sit beside the one issued at enrollment until the old one is
+        /// removed. Null when the device holds no such certificate.
+        /// </summary>
+        internal static DateTime? FindIntuneEnrollmentDate(IEnumerable<Dictionary<string, object>> certificates)
+        {
+            DateTime? earliest = null;
+            foreach (var cert in certificates)
+            {
+                if (!GetStringValue(cert, "issuer").Contains(IntuneMdmDeviceCaIssuer, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!long.TryParse(GetStringValue(cert, "not_valid_before"), out var unixSeconds) || unixSeconds <= 0)
+                {
+                    continue;
+                }
+
+                DateTime notValidBefore;
+                try
+                {
+                    notValidBefore = DateTimeOffset.FromUnixTimeSeconds(unixSeconds).UtcDateTime;
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    continue;
+                }
+
+                if (earliest == null || notValidBefore < earliest)
+                {
+                    earliest = notValidBefore;
+                }
+            }
+            return earliest;
         }
 
         private void ExtractIntuneDeviceIdFromCertificates(List<Dictionary<string, object>> certificateList, ManagementData data)

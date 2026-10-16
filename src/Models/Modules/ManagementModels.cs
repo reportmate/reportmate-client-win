@@ -61,6 +61,11 @@ namespace ReportMate.WindowsClient.Models.Modules
             public string? ServerUrl { get; set; }
             /// <summary>How the device was enrolled: Auto-Enrolled, User-Enrolled, Bulk Enrolled, Co-Managed</summary>
             public string? EnrollmentMethod { get; set; }
+            /// <summary>
+            /// When the device enrolled, in UTC: the NotValidBefore of its Microsoft Intune MDM Device CA
+            /// certificate. Intune renews that certificate, so after a renewal this is the renewal date.
+            /// </summary>
+            public DateTime? EnrollmentDate { get; set; }
         }
 
         [Obsolete("Use IntunePolicies instead. MdmProfile will be removed in a future version.")]
