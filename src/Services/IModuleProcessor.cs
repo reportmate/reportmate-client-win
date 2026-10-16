@@ -197,7 +197,7 @@ namespace ReportMate.WindowsClient.Services
                     {
                         try
                         {
-                            return DateTimeOffset.FromUnixTimeSeconds(unixTime).DateTime;
+                            return DateTimeOffset.FromUnixTimeSeconds(unixTime).UtcDateTime;
                         }
                         catch
                         {
