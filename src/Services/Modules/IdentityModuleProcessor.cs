@@ -1,7 +1,9 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -972,30 +974,38 @@ namespace ReportMate.WindowsClient.Services.Modules
 
         private async Task ProcessDirectoryServices(IdentityData data)
         {
+            bool? wmiPartOfDomain = null;
+            string wmiDomain = string.Empty;
+            string? dsregOutput = null;
+
             try
             {
-                // Get domain/workgroup info from WMI
+                // Domain/workgroup from WMI. A failure leaves PartOfDomain null (unknown) rather
+                // than false, so a slow or broken WMI provider never reads as "not joined".
+                // Win32_ComputerSystem.Domain is the DNS domain on a joined machine; the old
+                // $env:USERDNSDOMAIN is empty under SYSTEM, which is how the runner runs.
                 var domainScript = @"
                     $result = @{
-                        IsDomainJoined = $false
-                        DomainName = ''
-                        DnsDomainName = ''
+                        PartOfDomain = $null
+                        Domain = ''
                         Workgroup = ''
+                        Error = ''
                     }
                     try {
-                        $computerSystem = Get-WmiObject -Class Win32_ComputerSystem
-                        $result.IsDomainJoined = ($computerSystem.PartOfDomain -eq $true)
-                        if ($result.IsDomainJoined) {
-                            $result.DomainName = $computerSystem.Domain
-                            $result.DnsDomainName = $env:USERDNSDOMAIN
+                        $computerSystem = Get-WmiObject -Class Win32_ComputerSystem -ErrorAction Stop
+                        $result.PartOfDomain = [bool]$computerSystem.PartOfDomain
+                        if ($computerSystem.PartOfDomain) {
+                            $result.Domain = [string]$computerSystem.Domain
                         } else {
-                            $result.Workgroup = $computerSystem.Workgroup
+                            $result.Workgroup = [string]$computerSystem.Workgroup
                         }
-                    } catch { }
+                    } catch {
+                        $result.Error = $_.Exception.Message
+                    }
                     $result | ConvertTo-Json -Compress
                 ";
 
-                var domainResult = await _wmiHelperService.ExecutePowerShellCommandAsync(domainScript);
+                var domainResult = await _wmiHelperService.ExecutePowerShellCommandAsync(domainScript, TimeSpan.FromSeconds(60));
                 if (!string.IsNullOrEmpty(domainResult))
                 {
                     var trimmed = domainResult.Trim();
@@ -1004,15 +1014,60 @@ namespace ReportMate.WindowsClient.Services.Modules
                     {
                         using var document = JsonDocument.Parse(trimmed.Substring(jsonStart));
                         var root = document.RootElement;
-                        data.DirectoryServices.ActiveDirectory.IsDomainJoined = GetJsonBoolValue(root, "IsDomainJoined");
-                        data.DirectoryServices.ActiveDirectory.DomainName = GetJsonStringValue(root, "DomainName");
-                        data.DirectoryServices.ActiveDirectory.DnsDomainName = GetJsonStringValue(root, "DnsDomainName");
+                        if (root.TryGetProperty("PartOfDomain", out var pod))
+                        {
+                            if (pod.ValueKind == JsonValueKind.True) wmiPartOfDomain = true;
+                            else if (pod.ValueKind == JsonValueKind.False) wmiPartOfDomain = false;
+                        }
+                        wmiDomain = GetJsonStringValue(root, "Domain");
                         data.DirectoryServices.Workgroup = GetJsonStringValue(root, "Workgroup");
+                        var wmiError = GetJsonStringValue(root, "Error");
+                        if (!string.IsNullOrEmpty(wmiError))
+                            _logger.LogWarning("Win32_ComputerSystem query failed; domain join state from WMI is unknown: {Error}", wmiError);
                     }
                 }
+                else
+                {
+                    _logger.LogWarning("Win32_ComputerSystem query returned nothing; domain join state from WMI is unknown");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read domain join state from WMI");
+            }
 
+            try
+            {
                 // Get full dsregcmd output and parse all sections in C#
-                var dsregOutput = await _wmiHelperService.ExecutePowerShellCommandAsync("dsregcmd /status");
+                dsregOutput = await _wmiHelperService.ExecutePowerShellCommandAsync("dsregcmd /status");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "dsregcmd /status failed");
+            }
+
+            // dsregcmd's DomainJoined is the second witness: either one saying yes is enough.
+            var dsregDomainJoined = DomainTrustClassifier.ParseDsregDomainJoined(dsregOutput);
+            var ad = data.DirectoryServices.ActiveDirectory;
+            ad.IsDomainJoined = DomainTrustClassifier.CombineJoinState(wmiPartOfDomain, dsregDomainJoined);
+            if (ad.IsDomainJoined == true)
+            {
+                // dsregcmd only has the NetBIOS name, so it fills DomainName when WMI could
+                // not answer but never DnsDomainName.
+                ad.DomainName = !string.IsNullOrEmpty(wmiDomain)
+                    ? wmiDomain
+                    : ParseDsregString(ExtractDsregSection(dsregOutput ?? string.Empty, "Device State"), "DomainName");
+                ad.DnsDomainName = wmiDomain;
+                data.DirectoryServices.Workgroup = string.Empty;
+            }
+            if (wmiPartOfDomain != dsregDomainJoined && wmiPartOfDomain.HasValue && dsregDomainJoined.HasValue)
+            {
+                _logger.LogInformation("Domain join witnesses disagree: WMI PartOfDomain={Wmi}, dsregcmd DomainJoined={Dsreg}; reporting joined",
+                    wmiPartOfDomain, dsregDomainJoined);
+            }
+
+            try
+            {
                 if (string.IsNullOrEmpty(dsregOutput))
                 {
                     _logger.LogWarning("dsregcmd /status returned no output");
@@ -1088,92 +1143,224 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
         }
 
+        private static readonly TimeSpan TrustCommandTimeout = TimeSpan.FromSeconds(60);
+
+        private static readonly string RepairStampPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "ManagedReports", "cache", "domain_trust_repair.txt");
+
         private async Task ProcessDomainTrust(IdentityData data)
         {
-            if (!data.DirectoryServices.ActiveDirectory.IsDomainJoined)
+            var trust = data.DomainTrust;
+            var joined = data.DirectoryServices.ActiveDirectory.IsDomainJoined;
+
+            if (joined == false)
             {
-                data.DomainTrust.TrustStatus = "Not Applicable";
+                trust.TrustStatus = DomainTrustStatus.NotApplicable;
+                return;
+            }
+            if (joined is null)
+            {
+                trust.TrustStatus = DomainTrustStatus.Unknown;
+                trust.ErrorMessage = "Domain join state could not be determined";
                 return;
             }
 
             try
             {
                 _logger.LogDebug("Checking domain trust relationship");
-                data.DomainTrust.LastChecked = DateTime.UtcNow;
+                trust.LastChecked = DateTime.UtcNow;
 
-                var trustScript = @"
-try {
-    $cs = Get-WmiObject Win32_ComputerSystem
-    if ($cs.PartOfDomain) {
-        Write-Output ""DOMAIN:$($cs.Domain)""
-        try {
-            $dc = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().FindDomainController()
-            Write-Output ""DC:$($dc.Name)""
-        } catch {
-            Write-Output ""DC:Unknown""
-        }
-        $result = Test-ComputerSecureChannel -ErrorAction Stop
-        Write-Output ""TRUST:$result""
-    } else {
-        Write-Output ""TRUST:NotApplicable""
-    }
-} catch {
-    Write-Output ""ERROR:$($_.Exception.Message)""
-}
-";
-                var result = await _wmiHelperService.ExecutePowerShellCommandAsync(trustScript);
+                var domain = data.DirectoryServices.ActiveDirectory.DnsDomainName;
+                if (string.IsNullOrEmpty(domain)) domain = data.DirectoryServices.ActiveDirectory.DomainName;
+                trust.DomainName = domain;
 
-                if (!string.IsNullOrEmpty(result))
+                var secureChannel = await TestSecureChannelAsync();
+
+                string? dcName = null;
+                string? scQuery = null;
+                bool? machineKerberos = null;
+                if (!string.IsNullOrEmpty(domain))
                 {
-                    foreach (var line in result.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    // /force skips the locator cache, so a laptop off the network does not
+                    // look like it found the DC it last saw.
+                    var dsGetDc = await RunToolAsync("nltest.exe", $"/dsgetdc:{domain} /force");
+                    dcName = DomainTrustClassifier.ParseDsGetDc(dsGetDc?.Output);
+
+                    var scQueryRun = await RunToolAsync("nltest.exe", $"/sc_query:{domain}");
+                    scQuery = DomainTrustClassifier.ParseScQuery(scQueryRun?.Output);
+
+                    // The runner is SYSTEM, whose logon session (0x3e7) is the machine account's.
+                    var klist = await RunToolAsync("klist.exe", $"-li 0x3e7 get krbtgt/{domain}");
+                    machineKerberos = klist is null || klist.TimedOut
+                        ? null
+                        : DomainTrustClassifier.ParseKlistKrbtgt(klist.Output, klist.ExitCode);
+                }
+
+                var evidence = new DomainTrustEvidence
+                {
+                    SecureChannelValid = secureChannel.Valid,
+                    DcFound = !string.IsNullOrEmpty(dcName),
+                    ScQueryStatus = scQuery,
+                    MachineKerberos = machineKerberos,
+                    // Without a domain name none of the DC checks could run.
+                    ProbeFailed = string.IsNullOrEmpty(domain) && secureChannel.Valid != true,
+                };
+
+                if (DomainTrustClassifier.ShouldAttemptRepair(evidence))
+                {
+                    var lastAttempt = ReadRepairStamp();
+                    if (DomainTrustClassifier.RepairAllowed(lastAttempt, DateTime.UtcNow))
                     {
-                        if (line.StartsWith("DOMAIN:"))
+                        // Stamp first, so a run that dies mid-repair still counts against the throttle.
+                        WriteRepairStamp(DateTime.UtcNow);
+                        _logger.LogInformation("Secure channel is down while a DC answers and Kerberos works; re-establishing it with nltest /sc_verify");
+
+                        // Re-establishes the Netlogon channel only. Never resets the machine
+                        // password, rejoins or unjoins.
+                        var verify = await RunToolAsync("nltest.exe", $"/sc_verify:{domain}");
+                        var after = await TestSecureChannelAsync();
+                        evidence = evidence with
                         {
-                            var domainValue = line.Substring(7);
-                            if (domainValue != "WORKGROUP")
-                                data.DomainTrust.DomainName = domainValue;
-                        }
-                        else if (line.StartsWith("DC:"))
-                        {
-                            data.DomainTrust.DomainController = line.Substring(3);
-                        }
-                        else if (line.StartsWith("TRUST:"))
-                        {
-                            var trustValue = line.Substring(6).Trim();
-                            if (trustValue.Equals("True", StringComparison.OrdinalIgnoreCase))
-                            {
-                                data.DomainTrust.SecureChannelValid = true;
-                                data.DomainTrust.TrustStatus = "Healthy";
-                                data.DomainTrust.ComputerAccountExists = true;
-                            }
-                            else if (trustValue.Equals("False", StringComparison.OrdinalIgnoreCase))
-                            {
-                                data.DomainTrust.SecureChannelValid = false;
-                                data.DomainTrust.TrustStatus = "Broken";
-                            }
-                            else if (trustValue.Equals("NotApplicable", StringComparison.OrdinalIgnoreCase))
-                            {
-                                data.DomainTrust.TrustStatus = "Not Applicable";
-                            }
-                        }
-                        else if (line.StartsWith("ERROR:"))
-                        {
-                            data.DomainTrust.ErrorMessage = line.Substring(6);
-                            data.DomainTrust.TrustStatus = "Broken";
-                            data.DomainTrust.SecureChannelValid = false;
-                            _logger.LogWarning("Domain trust check failed: {Error}", data.DomainTrust.ErrorMessage);
-                        }
+                            RepairAttempted = true,
+                            ScVerifyStatus = DomainTrustClassifier.ParseScVerify(verify?.Output),
+                            SecureChannelValidAfterRepair = after.Valid,
+                        };
+                        if (after.Valid != true && !string.IsNullOrEmpty(after.Message))
+                            secureChannel = secureChannel with { Message = after.Message };
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Secure channel repair skipped: last attempt at {LastAttempt:u} is within {Hours}h",
+                            lastAttempt, DomainTrustClassifier.RepairInterval.TotalHours);
                     }
                 }
 
-                _logger.LogInformation("Domain trust: Status={TrustStatus}, Domain={Domain}, DC={DC}",
-                    data.DomainTrust.TrustStatus, data.DomainTrust.DomainName, data.DomainTrust.DomainController);
+                trust.TrustStatus = DomainTrustClassifier.Classify(evidence);
+                trust.SecureChannelValid = evidence.SecureChannelValid;
+                trust.DomainController = dcName ?? string.Empty;
+                trust.DcReachable = DomainTrustClassifier.IsDcReachable(evidence);
+                trust.ScQueryStatus = evidence.ScQueryStatus;
+                trust.MachineKerberos = evidence.MachineKerberos;
+                trust.RepairAttempted = evidence.RepairAttempted;
+                trust.ScVerifyStatus = evidence.ScVerifyStatus;
+                trust.Repaired = DomainTrustClassifier.Repaired(evidence);
+                if (trust.Repaired) trust.RepairedAt = DateTime.UtcNow;
+                trust.ComputerAccountExists = trust.TrustStatus == DomainTrustStatus.Healthy || evidence.MachineKerberos == true;
+                trust.ErrorMessage = trust.TrustStatus == DomainTrustStatus.Healthy ? string.Empty : secureChannel.Message ?? string.Empty;
+
+                if (!string.IsNullOrEmpty(dcName))
+                    data.DirectoryServices.ActiveDirectory.DomainController = dcName;
+
+                _logger.LogInformation(
+                    "Domain trust: Status={TrustStatus}, SecureChannel={SecureChannel}, DcReachable={DcReachable}, ScQuery={ScQuery}, MachineKerberos={Kerberos}, Repaired={Repaired}",
+                    trust.TrustStatus, trust.SecureChannelValid, trust.DcReachable, trust.ScQueryStatus, trust.MachineKerberos, trust.Repaired);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to check domain trust relationship");
-                data.DomainTrust.TrustStatus = "Unknown";
-                data.DomainTrust.ErrorMessage = ex.Message;
+                trust.TrustStatus = DomainTrustStatus.Unknown;
+                trust.ErrorMessage = ex.Message;
+            }
+        }
+
+        private sealed record SecureChannelResult(bool? Valid, string? Message);
+
+        /// <summary>
+        /// Test-ComputerSecureChannel, with its verbose stream captured: on a False result the
+        /// verbose message is the only explanation the cmdlet gives.
+        /// </summary>
+        private async Task<SecureChannelResult> TestSecureChannelAsync()
+        {
+            const string script = @"
+try {
+    $out = Test-ComputerSecureChannel -Verbose -ErrorAction Stop 4>&1
+    foreach ($o in $out) {
+        if ($o -is [System.Management.Automation.VerboseRecord]) {
+            Write-Output (""VERBOSE:"" + ($o.Message -replace '[\r\n]+', ' '))
+        } elseif ($o -is [bool]) {
+            Write-Output ""TRUST:$o""
+        }
+    }
+} catch {
+    Write-Output (""ERROR:"" + ($_.Exception.Message -replace '[\r\n]+', ' '))
+}
+";
+            var output = await _wmiHelperService.ExecutePowerShellCommandAsync(script, TimeSpan.FromSeconds(90));
+            if (string.IsNullOrEmpty(output)) return new SecureChannelResult(null, null);
+
+            bool? valid = null;
+            string? message = null;
+            foreach (var raw in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var line = raw.Trim();
+                if (line.StartsWith("TRUST:", StringComparison.Ordinal))
+                {
+                    var v = line.Substring(6).Trim();
+                    if (v.Equals("True", StringComparison.OrdinalIgnoreCase)) valid = true;
+                    else if (v.Equals("False", StringComparison.OrdinalIgnoreCase)) valid = false;
+                }
+                else if (line.StartsWith("VERBOSE:", StringComparison.Ordinal))
+                {
+                    message = line.Substring(8).Trim();
+                }
+                else if (line.StartsWith("ERROR:", StringComparison.Ordinal))
+                {
+                    // An exception is not evidence of a broken trust: leave the result unknown.
+                    message = line.Substring(6).Trim();
+                    _logger.LogWarning("Test-ComputerSecureChannel threw: {Error}", message);
+                }
+            }
+            return new SecureChannelResult(valid, message);
+        }
+
+        private async Task<BoundedProcessResult?> RunToolAsync(string fileName, string arguments)
+        {
+            try
+            {
+                var run = await BoundedProcess.RunAsync(new ProcessStartInfo(fileName, arguments), TrustCommandTimeout);
+                if (run.TimedOut)
+                {
+                    _logger.LogWarning("{FileName} {Arguments} did not finish within {Seconds:N0}s and was stopped",
+                        fileName, arguments, TrustCommandTimeout.TotalSeconds);
+                }
+                return run;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to run {FileName} {Arguments}", fileName, arguments);
+                return null;
+            }
+        }
+
+        private DateTime? ReadRepairStamp()
+        {
+            try
+            {
+                if (!File.Exists(RepairStampPath)) return null;
+                var text = File.ReadAllText(RepairStampPath).Trim();
+                return DateTime.TryParse(text, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var stamp)
+                    ? stamp
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Could not read the secure channel repair stamp");
+                return null;
+            }
+        }
+
+        private void WriteRepairStamp(DateTime whenUtc)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(RepairStampPath)!);
+                File.WriteAllText(RepairStampPath, whenUtc.ToString("o", CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not write the secure channel repair stamp");
             }
         }
 
@@ -1189,12 +1376,12 @@ try {
             data.Summary.DomainUsers = data.Users.Count(u => !u.IsLocal);
 
             // Determine domain status
-            if (data.DirectoryServices.ActiveDirectory.IsDomainJoined &&
+            if (data.DirectoryServices.ActiveDirectory.IsDomainJoined == true &&
                 data.DirectoryServices.EntraId.IsEntraJoined)
             {
                 data.Summary.DomainStatus = "Hybrid";
             }
-            else if (data.DirectoryServices.ActiveDirectory.IsDomainJoined)
+            else if (data.DirectoryServices.ActiveDirectory.IsDomainJoined == true)
             {
                 data.Summary.DomainStatus = "Domain";
             }

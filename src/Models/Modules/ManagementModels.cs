@@ -343,9 +343,11 @@ namespace ReportMate.WindowsClient.Models.Modules
     public class DomainTrust
     {
         /// <summary>
-        /// Whether the secure channel to the domain controller is working
+        /// Whether the Netlogon secure channel to the domain controller is working, as
+        /// Test-ComputerSecureChannel reports it before any repair. Null (and so omitted
+        /// from the payload) when the test could not run or gave no answer.
         /// </summary>
-        public bool SecureChannelValid { get; set; }
+        public bool? SecureChannelValid { get; set; }
 
         /// <summary>
         /// Domain name the computer is joined to
@@ -358,9 +360,49 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string DomainController { get; set; } = string.Empty;
 
         /// <summary>
-        /// Overall trust status: "Healthy", "Broken", "Unknown", or "Not Applicable"
+        /// Overall trust status: "Healthy", "Degraded", "Broken", "Unreachable", "Unknown",
+        /// or "Not Applicable". See DomainTrustClassifier for how each is decided.
         /// </summary>
         public string TrustStatus { get; set; } = "Unknown";
+
+        /// <summary>
+        /// Whether a domain controller could be reached: a forced DC locator query found one,
+        /// and Netlogon did not report ERROR_NO_LOGON_SERVERS without a working Kerberos ticket.
+        /// </summary>
+        public bool? DcReachable { get; set; }
+
+        /// <summary>
+        /// Symbolic status of the Netlogon secure channel from nltest /sc_query, as found
+        /// before any repair (e.g. "NERR_Success", "ERROR_NO_LOGON_SERVERS").
+        /// </summary>
+        public string? ScQueryStatus { get; set; }
+
+        /// <summary>
+        /// Whether the machine account could obtain a Kerberos TGT. A machine whose secure
+        /// channel is down but still gets tickets has a good password and a repairable channel.
+        /// </summary>
+        public bool? MachineKerberos { get; set; }
+
+        /// <summary>
+        /// Whether this run re-established the secure channel with nltest /sc_verify.
+        /// The repair never resets the machine password, rejoins or unjoins.
+        /// </summary>
+        public bool RepairAttempted { get; set; }
+
+        /// <summary>
+        /// Whether the repair brought the secure channel back.
+        /// </summary>
+        public bool Repaired { get; set; }
+
+        /// <summary>
+        /// When the repair succeeded.
+        /// </summary>
+        public DateTime? RepairedAt { get; set; }
+
+        /// <summary>
+        /// Symbolic trust verification status from nltest /sc_verify, when a repair was attempted.
+        /// </summary>
+        public string? ScVerifyStatus { get; set; }
 
         /// <summary>
         /// Last time the trust was verified
