@@ -28,8 +28,6 @@ public interface IApiService
     Task<bool> SendDeviceDataAsync(DeviceDataRequest deviceData);
     Task<bool> SendUnifiedPayloadAsync(UnifiedDevicePayload payload);
     Task<bool> TestConnectivityAsync();
-    Task<bool> RegisterDeviceAsync(DeviceInfo deviceInfo);
-    Task<bool> IsDeviceRegisteredAsync(string deviceId);
 }
 
 public class ApiService : IApiService
@@ -663,125 +661,6 @@ public class ApiService : IApiService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "API connectivity test failed");
-            return false;
-        }
-    }
-
-    public async Task<bool> RegisterDeviceAsync(DeviceInfo deviceInfo)
-    {
-        try
-        {
-            _logger.LogInformation("=== DEVICE REGISTRATION STARTING ===");
-            _logger.LogInformation("Registering device: {DeviceId} ({Name})", deviceInfo.DeviceId, deviceInfo.ComputerName);
-            _logger.LogInformation("This will create a 'New Client' event in ReportMate");
-
-            // Create a device registration payload (simple format)
-            var registrationPayload = new Dictionary<string, object>
-            {
-                { "device", deviceInfo.DeviceId }, // Use DeviceId as the primary identifier - API expects "device" field (lowercase)
-                { "deviceId", deviceInfo.DeviceId }, // Also include deviceId for API compatibility
-                { "serialNumber", deviceInfo.SerialNumber }, // Also include serial number
-                { "computerName", deviceInfo.ComputerName },
-                { "model", deviceInfo.Model },
-                { "os", deviceInfo.OperatingSystem },
-                { "manufacturer", deviceInfo.Manufacturer },
-                { "domain", deviceInfo.Domain },
-                { "platform", "windows" }
-            };
-
-            // Add passphrase to payload if configured
-            var passphrase = _configuration["ReportMate:Passphrase"];
-            if (!string.IsNullOrEmpty(passphrase))
-            {
-                registrationPayload["passphrase"] = passphrase;
-                _logger.LogInformation("Client passphrase included in registration payload");
-            }
-            else
-            {
-                _logger.LogInformation(" No client passphrase configured - registration may be rejected if authentication is required");
-            }
-
-            _logger.LogInformation("Registration payload created:");
-            _logger.LogInformation("  Device ID: {DeviceId}", deviceInfo.DeviceId);
-            _logger.LogInformation("  Computer Name: {ComputerName}", deviceInfo.ComputerName);
-            _logger.LogInformation("  Manufacturer: {Manufacturer}", deviceInfo.Manufacturer);
-            _logger.LogInformation("  Model: {Model}", deviceInfo.Model);
-            _logger.LogInformation("  OS: {OperatingSystem}", deviceInfo.OperatingSystem);
-
-            var jsonContent = JsonSerializer.Serialize(registrationPayload, ReportMateJsonContext.Default.DictionaryStringObject);
-            var httpContent = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json");
-
-            _logger.LogInformation("Sending registration request to /api/v1/device...");
-            var response = await PostWithIdentityAsync(
-                "/api/v1/device",
-                httpContent,
-                deviceInfo.SerialNumber,
-                deviceInfo.DeviceId,
-                deviceInfo.ComputerName,
-                deviceInfo.ClientVersion);
-
-            _logger.LogInformation("Registration response: {StatusCode}", response.StatusCode);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var responseContent = await response.Content.ReadAsStringAsync();
-                _logger.LogInformation("Device {DeviceId} registered successfully", deviceInfo.DeviceId);
-                _logger.LogInformation("New Client event should be visible in dashboard at /device/{SerialNumber}", deviceInfo.SerialNumber);
-                _logger.LogInformation("Response: {Response}", responseContent);
-                return true;
-            }
-            else
-            {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                _logger.LogError("Device registration failed with status {StatusCode}: {Error}", 
-                    response.StatusCode, errorContent);
-                return false;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error registering device: {DeviceId}", deviceInfo.DeviceId);
-            return false;
-        }
-    }
-
-    public async Task<bool> IsDeviceRegisteredAsync(string deviceId)
-    {
-        try
-        {
-            _logger.LogInformation("=== DEVICE REGISTRATION CHECK ===");
-            _logger.LogInformation("Checking if device is registered: {DeviceId}", deviceId);
-            _logger.LogInformation("API endpoint: GET /api/v1/device/{DeviceId}", deviceId);
-
-            var response = await _httpClient.GetAsync($"/api/v1/device/{deviceId}");
-            _logger.LogInformation("Registration check response: {StatusCode}", response.StatusCode);
-
-            if (response.IsSuccessStatusCode)
-            {
-                var responseContent = await response.Content.ReadAsStringAsync();
-                _logger.LogInformation("Device {DeviceId} is registered", deviceId);
-                _logger.LogDebug("Device info: {DeviceInfo}", responseContent);
-                return true;
-            }
-            else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-            {
-                _logger.LogInformation("Device {DeviceId} is not registered (404 Not Found)", deviceId);
-                _logger.LogInformation("   Device needs to be registered before sending data");
-                return false;
-            }
-            else
-            {
-                var errorContent = await response.Content.ReadAsStringAsync();
-                _logger.LogWarning(" Error checking device registration status {StatusCode}: {Error}", 
-                    response.StatusCode, errorContent);
-                _logger.LogWarning("   Assuming device is not registered due to API error");
-                return false;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error checking device registration: {DeviceId}", deviceId);
-            _logger.LogError("   Assuming device is not registered due to exception");
             return false;
         }
     }
