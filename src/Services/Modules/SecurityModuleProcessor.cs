@@ -3392,7 +3392,7 @@ try {
                 SigningAlgorithm = GetStringValue(cert, "signing_algorithm"),
                 IsSelfSigned = GetStringValue(cert, "self_signed") == "1",
                 IsCA = ParseOsqueryFlag(GetStringValue(cert, "ca")),
-                KeyUsage = GetStringValue(cert, "key_usage")
+                KeyUsage = NullIfEmpty(GetStringValue(cert, "key_usage"))
             };
 
             var keyStrength = GetStringValue(cert, "key_strength");
@@ -3426,6 +3426,8 @@ try {
 
             return certInfo;
         }
+
+        private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
         private static DateTime? ParseOsqueryDate(string value)
         {

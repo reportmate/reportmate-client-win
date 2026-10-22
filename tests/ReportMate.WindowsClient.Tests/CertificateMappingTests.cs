@@ -44,7 +44,7 @@ namespace ReportMate.WindowsClient.Tests
             Assert.False(device.IsCA);
             Assert.Equal("Digital Signature, Key Encipherment", device.KeyUsage);
             Assert.Null(legacy.IsCA);
-            Assert.Equal(string.Empty, legacy.KeyUsage);
+            Assert.Null(legacy.KeyUsage);
         }
 
         [Fact]
@@ -156,8 +156,29 @@ namespace ReportMate.WindowsClient.Tests
             using var doc = JsonDocument.Parse(json);
 
             Assert.False(doc.RootElement.TryGetProperty("hasPrivateKey", out _));
+            Assert.False(doc.RootElement.TryGetProperty("friendlyName", out _));
+            Assert.False(doc.RootElement.TryGetProperty("enhancedKeyUsages", out _));
+            Assert.False(doc.RootElement.TryGetProperty("class", out _));
+            Assert.False(doc.RootElement.TryGetProperty("displayName", out _));
+            Assert.False(doc.RootElement.TryGetProperty("issuerName", out _));
+            Assert.False(doc.RootElement.TryGetProperty("notAfterEpoch", out _));
             Assert.False(doc.RootElement.TryGetProperty("templateName", out _));
             Assert.True(doc.RootElement.GetProperty("isCA").GetBoolean());
+        }
+
+        [Fact]
+        public void ReadsApiStampedFieldsBack()
+        {
+            const string json = "{\"commonName\":\"SAMPLE-DEVICE-01\",\"class\":\"actionable\",\"displayName\":\"SAMPLE-DEVICE-01\",\"issuerName\":\"SAMPLE Issuing CA\",\"notAfterEpoch\":2524608000}";
+
+            var info = JsonSerializer.Deserialize(json, ReportMateJsonContext.Default.CertificateInfo)!;
+
+            Assert.Equal("actionable", info.Class);
+            Assert.Equal("SAMPLE-DEVICE-01", info.DisplayName);
+            Assert.Equal("SAMPLE Issuing CA", info.IssuerName);
+            Assert.Equal(2524608000, info.NotAfterEpoch);
+            Assert.Null(info.HasPrivateKey);
+            Assert.Null(info.IsCA);
         }
 
         private static X509Certificate2 SampleCertificate(bool includeV1Template)
