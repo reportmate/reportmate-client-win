@@ -33,6 +33,8 @@ The project includes a unified PowerShell 7 build script that handles all packag
 
 See [BUILD.md](BUILD.md) for detailed build instructions and troubleshooting.
 
+Development guide: [wiki](wiki/README.md)
+
 ## Directory Structure
 
 The project uses a unified package structure that supports all deployment formats:
