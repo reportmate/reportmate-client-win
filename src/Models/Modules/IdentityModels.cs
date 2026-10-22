@@ -272,7 +272,12 @@ namespace ReportMate.WindowsClient.Models.Modules
     /// </summary>
     public class ActiveDirectoryInfo
     {
-        public bool IsDomainJoined { get; set; }
+        /// <summary>
+        /// Joined to an on-premises AD domain. True when WMI's PartOfDomain or dsregcmd's
+        /// DomainJoined says so; null (omitted from the payload) when neither could answer,
+        /// so a failed query is never reported as "not joined".
+        /// </summary>
+        public bool? IsDomainJoined { get; set; }
         public string DomainName { get; set; } = string.Empty;
         public string DomainController { get; set; } = string.Empty;
         public string OrganizationalUnit { get; set; } = string.Empty;
