@@ -1,0 +1,55 @@
+// SAMPLE rows shaped like the osquery certificates table on Windows (every value a string,
+// as osquery returns them). Names, serials and thumbprints are invented.
+[
+  {
+    "common_name": "SAMPLE Root CA",
+    "subject": "SAMPLE Root CA",
+    "issuer": "SAMPLE Root CA",
+    "serial": "01",
+    "store": "Root",
+    "store_location": "LocalMachine",
+    "not_valid_before": "1577836800",
+    "not_valid_after": "2524608000",
+    "key_algorithm": "RSA",
+    "signing_algorithm": "sha256RSA",
+    "key_strength": "4096",
+    "key_usage": "Certificate Sign, CRL Sign",
+    "ca": "1",
+    "self_signed": "1",
+    "sha1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "common_name": "SAMPLE-DEVICE-01",
+    "subject": "SAMPLE-DEVICE-01",
+    "issuer": "SAMPLE Root CA, SAMPLE Issuing CA",
+    "serial": "02",
+    "store": "Personal",
+    "store_location": "LocalMachine",
+    "not_valid_before": "1577836800",
+    "not_valid_after": "2524608000",
+    "key_algorithm": "RSA",
+    "signing_algorithm": "sha256RSA",
+    "key_strength": "2048",
+    "key_usage": "Digital Signature, Key Encipherment",
+    "ca": "0",
+    "self_signed": "0",
+    "sha1": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  {
+    "common_name": "SAMPLE Legacy",
+    "subject": "SAMPLE Legacy",
+    "issuer": "SAMPLE Legacy",
+    "serial": "03",
+    "store": "My",
+    "store_location": "CurrentUser",
+    "not_valid_before": "",
+    "not_valid_after": "946684800",
+    "key_algorithm": "",
+    "signing_algorithm": "",
+    "key_strength": "",
+    "key_usage": "",
+    "ca": "-1",
+    "self_signed": "1",
+    "sha1": "cccccccccccccccccccccccccccccccccccccccc"
+  }
+]

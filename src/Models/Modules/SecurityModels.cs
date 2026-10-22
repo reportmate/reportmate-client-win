@@ -198,7 +198,14 @@ namespace ReportMate.WindowsClient.Models.Modules
         public bool IsExpiringSoon { get; set; } // Within 30 days
         public int DaysUntilExpiry { get; set; }
         public string Status { get; set; } = string.Empty; // Valid, Expired, ExpiringSoon
-        public bool IsOsTrustedRoot { get; set; } // OS-bundled root CA cert (LocalMachine Root/AuthRoot stores)
+        public bool IsOsTrustedRoot { get; set; } // OS-bundled root CA cert (LocalMachine Root/AuthRoot stores); the API now classifies certificates itself
+        public bool? IsCA { get; set; } // Basic constraints CA flag from osquery; null when not reported
+        public string KeyUsage { get; set; } = string.Empty; // osquery key_usage, e.g. "Digital Signature, Key Encipherment"
+        // Read from the Personal stores (LocalMachine\My, the runner's CurrentUser\My) by thumbprint; absent otherwise
+        public string? FriendlyName { get; set; }
+        public bool? HasPrivateKey { get; set; }
+        public string? TemplateName { get; set; }
+        public List<string>? EnhancedKeyUsages { get; set; }
     }
 
     /// <summary>
