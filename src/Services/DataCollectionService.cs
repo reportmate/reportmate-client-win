@@ -60,7 +60,6 @@ public class DataCollectionService : IDataCollectionService
             _logger.LogInformation("=== REPORTMATE WINDOWS CLIENT DATA COLLECTION STARTING ===");
             _logger.LogInformation("Client Version: {Version}", System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown");
             _logger.LogInformation("Execution Mode: {Mode}", forceCollection ? "Forced" : "Normal");
-            _logger.LogInformation("Expected Policy: STRICT device registration enforcement");
 
             // Validate configuration before proceeding
             _logger.LogInformation("=== STEP 1: CONFIGURATION VALIDATION ===");
@@ -112,51 +111,17 @@ public class DataCollectionService : IDataCollectionService
                 return true;
             }
 
-            // DEVICE REGISTRATION CHECK AND AUTO-REGISTRATION
-            // Check if device is registered, if not, register it via "new_client" event
-            _logger.LogInformation("=== STEP 3: DEVICE REGISTRATION CHECK ===");
-            _logger.LogInformation("Checking if device {DeviceId} is registered...", deviceId);
-            
-            var isRegistered = await _apiService.IsDeviceRegisteredAsync(deviceId);
-            _logger.LogInformation("Device {DeviceId} registration status: {Status}", 
-                deviceId, isRegistered ? "REGISTERED" : "NOT REGISTERED");
-            
-            if (!isRegistered)
-            {
-                _logger.LogInformation(" UNREGISTERED DEVICE - Initiating auto-registration");
-                _logger.LogInformation(" Registering device {DeviceId} as 'New Client'", deviceId);
-                
-                // Create minimal device info for registration
-                var minimalDeviceInfo = new DeviceInfo
-                {
-                    DeviceId = deviceId,
-                    SerialNumber = serialNumber, // Use actual serial number for URL routing
-                    ComputerName = computerName,
-                    Domain = domain
-                };
-                
-                var registrationSuccess = await _apiService.RegisterDeviceAsync(minimalDeviceInfo);
-                _logger.LogInformation("Registration attempt result: {Success}", registrationSuccess);
-                
-                if (!registrationSuccess)
-                {
-                    _logger.LogError("Device registration failed for {DeviceId}", deviceId);
-                    _logger.LogError(" Proceeding with data collection anyway - device may register on next run");
-                }
-                else
-                {
-                    _logger.LogInformation("Device {DeviceId} registered successfully", deviceId);
-                    _logger.LogInformation("New Client event should be visible in dashboard at /device/{SerialNumber}", serialNumber);
-                }
-            }
-            else
-            {
-                _logger.LogInformation("Device {DeviceId} is already registered", deviceId);
-            }
+            // No separate registration step. POST /api/v1/events creates the device
+            // row the first time a serial reports, so the submission below registers
+            // a new device on its own. The runner used to ask GET /api/v1/device/{id}
+            // first, but that is a fleet read route: an ingest-only API key is refused
+            // it (403), which logged an error on every run, and the follow-up
+            // POST /api/v1/device it fell back to does not exist on the API. A device
+            // credential is meant to send telemetry, not read the fleet, so the runner
+            // makes no read calls beyond the unauthenticated health check.
 
             // Data already collected during device identification - skip redundant collection
             _logger.LogInformation("=== STEP 4: MODULAR DATA COLLECTION ===");
-            _logger.LogInformation(" AUTHORIZED: Device registration verified, proceeding with modular data collection");
             _logger.LogInformation("COLLECTING: Modular device data with individual cache files");
             
             // Reuse the modular payload from device identification step (no need to collect again)
