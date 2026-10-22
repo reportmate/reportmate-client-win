@@ -1,7 +1,10 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Formats.Asn1;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -3335,93 +3338,12 @@ try {
 
             _logger.LogDebug("Processing {Count} certificates", certificates.Count);
 
+            var now = DateTime.UtcNow;
             foreach (var cert in certificates)
             {
                 try
                 {
-                    var certInfo = new CertificateInfo
-                    {
-                        CommonName = GetStringValue(cert, "common_name"),
-                        Subject = GetStringValue(cert, "subject"),
-                        Issuer = GetStringValue(cert, "issuer"),
-                        SerialNumber = GetStringValue(cert, "serial"),
-                        Thumbprint = GetStringValue(cert, "sha1"),
-                        StoreLocation = GetStringValue(cert, "store_location"),
-                        StoreName = GetStringValue(cert, "store"),
-                        KeyAlgorithm = GetStringValue(cert, "key_algorithm"),
-                        SigningAlgorithm = GetStringValue(cert, "signing_algorithm"),
-                        IsSelfSigned = GetStringValue(cert, "self_signed") == "1"
-                    };
-
-                    // Parse key strength
-                    var keyStrength = GetStringValue(cert, "key_strength");
-                    if (!string.IsNullOrEmpty(keyStrength) && int.TryParse(keyStrength, out var keyLen))
-                    {
-                        certInfo.KeyLength = keyLen;
-                    }
-
-                    // Parse dates - osquery returns Unix timestamps
-                    var notBefore = GetStringValue(cert, "not_valid_before");
-                    var notAfter = GetStringValue(cert, "not_valid_after");
-
-                    if (!string.IsNullOrEmpty(notBefore))
-                    {
-                        if (long.TryParse(notBefore, out var beforeTimestamp))
-                        {
-                            certInfo.NotBefore = DateTimeOffset.FromUnixTimeSeconds(beforeTimestamp).UtcDateTime;
-                        }
-                        else if (DateTime.TryParse(notBefore, out var beforeDate))
-                        {
-                            certInfo.NotBefore = beforeDate;
-                        }
-                    }
-
-                    if (!string.IsNullOrEmpty(notAfter))
-                    {
-                        if (long.TryParse(notAfter, out var afterTimestamp))
-                        {
-                            certInfo.NotAfter = DateTimeOffset.FromUnixTimeSeconds(afterTimestamp).UtcDateTime;
-                        }
-                        else if (DateTime.TryParse(notAfter, out var afterDate))
-                        {
-                            certInfo.NotAfter = afterDate;
-                        }
-                    }
-
-                    // Calculate expiry status
-                    if (certInfo.NotAfter.HasValue)
-                    {
-                        var now = DateTime.UtcNow;
-                        var daysUntilExpiry = (certInfo.NotAfter.Value - now).Days;
-                        certInfo.DaysUntilExpiry = daysUntilExpiry;
-                        certInfo.IsExpired = daysUntilExpiry < 0;
-                        certInfo.IsExpiringSoon = daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
-
-                        if (certInfo.IsExpired)
-                        {
-                            certInfo.Status = "Expired";
-                        }
-                        else if (certInfo.IsExpiringSoon)
-                        {
-                            certInfo.Status = "ExpiringSoon";
-                        }
-                        else
-                        {
-                            certInfo.Status = "Valid";
-                        }
-                    }
-                    else
-                    {
-                        certInfo.Status = "Unknown";
-                    }
-
-                    // Tag OS-bundled root CA certificates
-                    var storeNameLower = certInfo.StoreName.ToLowerInvariant();
-                    certInfo.IsOsTrustedRoot = 
-                        certInfo.StoreLocation.Equals("LocalMachine", StringComparison.OrdinalIgnoreCase) &&
-                        (storeNameLower.Contains("root") || storeNameLower == "authroot" || storeNameLower == "ca");
-
-                    data.Certificates.Add(certInfo);
+                    data.Certificates.Add(MapCertificateRow(cert, now));
                 }
                 catch (Exception ex)
                 {
@@ -3429,7 +3351,10 @@ try {
                 }
             }
 
-            // Compute certificate summary
+            EnrichPersonalCertificates(data.Certificates);
+
+            // The API now classifies certificates itself (actionable, system-managed, trust-store);
+            // IsOsTrustedRoot and this summary stay only for older API versions that read them.
             data.CertificateSummary = new CertificateSummary
             {
                 TotalCount = data.Certificates.Count,
@@ -3447,6 +3372,253 @@ try {
                 data.CertificateSummary.UserExpiredCount,
                 data.CertificateSummary.ExpiringSoonCount,
                 data.CertificateSummary.ValidCount);
+        }
+
+        /// <summary>
+        /// Map one row of the osquery certificates table to a CertificateInfo.
+        /// </summary>
+        internal static CertificateInfo MapCertificateRow(Dictionary<string, object> cert, DateTime now)
+        {
+            var certInfo = new CertificateInfo
+            {
+                CommonName = GetStringValue(cert, "common_name"),
+                Subject = GetStringValue(cert, "subject"),
+                Issuer = GetStringValue(cert, "issuer"),
+                SerialNumber = GetStringValue(cert, "serial"),
+                Thumbprint = GetStringValue(cert, "sha1"),
+                StoreLocation = GetStringValue(cert, "store_location"),
+                StoreName = GetStringValue(cert, "store"),
+                KeyAlgorithm = GetStringValue(cert, "key_algorithm"),
+                SigningAlgorithm = GetStringValue(cert, "signing_algorithm"),
+                IsSelfSigned = GetStringValue(cert, "self_signed") == "1",
+                IsCA = ParseOsqueryFlag(GetStringValue(cert, "ca")),
+                KeyUsage = NullIfEmpty(GetStringValue(cert, "key_usage"))
+            };
+
+            var keyStrength = GetStringValue(cert, "key_strength");
+            if (!string.IsNullOrEmpty(keyStrength) && int.TryParse(keyStrength, out var keyLen))
+            {
+                certInfo.KeyLength = keyLen;
+            }
+
+            // osquery returns Unix timestamps
+            certInfo.NotBefore = ParseOsqueryDate(GetStringValue(cert, "not_valid_before"));
+            certInfo.NotAfter = ParseOsqueryDate(GetStringValue(cert, "not_valid_after"));
+
+            if (certInfo.NotAfter.HasValue)
+            {
+                var daysUntilExpiry = (certInfo.NotAfter.Value - now).Days;
+                certInfo.DaysUntilExpiry = daysUntilExpiry;
+                certInfo.IsExpired = daysUntilExpiry < 0;
+                certInfo.IsExpiringSoon = daysUntilExpiry >= 0 && daysUntilExpiry <= 30;
+                certInfo.Status = certInfo.IsExpired ? "Expired" : certInfo.IsExpiringSoon ? "ExpiringSoon" : "Valid";
+            }
+            else
+            {
+                certInfo.Status = "Unknown";
+            }
+
+            // Tag OS-bundled root CA certificates
+            var storeNameLower = certInfo.StoreName.ToLowerInvariant();
+            certInfo.IsOsTrustedRoot =
+                certInfo.StoreLocation.Equals("LocalMachine", StringComparison.OrdinalIgnoreCase) &&
+                (storeNameLower.Contains("root") || storeNameLower == "authroot" || storeNameLower == "ca");
+
+            return certInfo;
+        }
+
+        private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+        private static DateTime? ParseOsqueryDate(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return null;
+            if (long.TryParse(value, out var timestamp))
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime;
+            }
+            return DateTime.TryParse(value, out var date) ? date : null;
+        }
+
+        /// <summary>
+        /// osquery reports booleans as "1"/"0"; anything else (missing, -1) means it did not say.
+        /// </summary>
+        internal static bool? ParseOsqueryFlag(string value) => value?.Trim() switch
+        {
+            "1" or "true" or "True" => true,
+            "0" or "false" or "False" => false,
+            _ => null
+        };
+
+        /// <summary>
+        /// The Personal store as osquery names it: the short name or the display name.
+        /// </summary>
+        internal static bool IsPersonalStore(string storeName) =>
+            storeName.Equals("My", StringComparison.OrdinalIgnoreCase) ||
+            storeName.Equals("Personal", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// osquery cannot see private keys, friendly names, templates or extended key usages,
+        /// so read them from the Personal stores the runner can open (LocalMachine\My and its
+        /// own CurrentUser\My) and match by thumbprint. Best effort: never fails the module.
+        /// </summary>
+        private void EnrichPersonalCertificates(List<CertificateInfo> certificates)
+        {
+            foreach (var location in new[] { StoreLocation.LocalMachine, StoreLocation.CurrentUser })
+            {
+                var targets = certificates
+                    .Where(c => IsPersonalStore(c.StoreName) &&
+                                c.StoreLocation.Equals(location.ToString(), StringComparison.OrdinalIgnoreCase) &&
+                                !string.IsNullOrEmpty(c.Thumbprint))
+                    .ToList();
+                if (targets.Count == 0) continue;
+
+                try
+                {
+                    using var store = new X509Store(StoreName.My, location);
+                    store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+                    var byThumbprint = new Dictionary<string, X509Certificate2>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var storeCert in store.Certificates)
+                    {
+                        byThumbprint.TryAdd(storeCert.Thumbprint, storeCert);
+                    }
+
+                    var enriched = 0;
+                    foreach (var info in targets)
+                    {
+                        if (!byThumbprint.TryGetValue(info.Thumbprint, out var storeCert)) continue;
+                        try
+                        {
+                            ApplyStoreDetails(info, storeCert);
+                            enriched++;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Could not read store details for a {Location} personal certificate", location);
+                        }
+                    }
+
+                    foreach (var storeCert in store.Certificates)
+                    {
+                        storeCert.Dispose();
+                    }
+
+                    _logger.LogDebug("Enriched {Enriched} of {Count} {Location}\\My certificates", enriched, targets.Count, location);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Could not open the {Location}\\My certificate store", location);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Copy what only the certificate store knows onto a certificate osquery reported.
+        /// </summary>
+        internal static void ApplyStoreDetails(CertificateInfo info, X509Certificate2 cert)
+        {
+            if (!string.IsNullOrWhiteSpace(cert.FriendlyName))
+            {
+                info.FriendlyName = cert.FriendlyName;
+            }
+
+            try
+            {
+                info.HasPrivateKey = cert.HasPrivateKey;
+            }
+            catch (CryptographicException)
+            {
+                info.HasPrivateKey = null;
+            }
+
+            var template = ReadTemplateName(cert);
+            if (!string.IsNullOrEmpty(template))
+            {
+                info.TemplateName = template;
+            }
+
+            var ekus = ReadEnhancedKeyUsages(cert);
+            if (ekus.Count > 0)
+            {
+                info.EnhancedKeyUsages = ekus;
+            }
+        }
+
+        private const string CertificateTemplateNameOid = "1.3.6.1.4.1.311.20.2";
+        private const string CertificateTemplateInfoOid = "1.3.6.1.4.1.311.21.7";
+
+        /// <summary>
+        /// The enrollment template: the v1 template name extension (a BMP string) when present,
+        /// otherwise the v2 template information extension's OID, resolved to a name when the
+        /// OS knows it.
+        /// </summary>
+        internal static string ReadTemplateName(X509Certificate2 cert)
+        {
+            foreach (var ext in cert.Extensions)
+            {
+                if (ext.Oid?.Value != CertificateTemplateNameOid) continue;
+                try
+                {
+                    var reader = new AsnReader(ext.RawData, AsnEncodingRules.DER);
+                    var tag = reader.PeekTag();
+                    if (tag.TagClass == TagClass.Universal)
+                    {
+                        var name = reader.ReadCharacterString((UniversalTagNumber)tag.TagValue);
+                        if (!string.IsNullOrWhiteSpace(name)) return name.Trim();
+                    }
+                }
+                catch (Exception)
+                {
+                    // Malformed or unexpected encoding: fall through to the template info extension.
+                }
+            }
+
+            foreach (var ext in cert.Extensions)
+            {
+                if (ext.Oid?.Value != CertificateTemplateInfoOid) continue;
+                try
+                {
+                    var reader = new AsnReader(ext.RawData, AsnEncodingRules.DER);
+                    var sequence = reader.ReadSequence();
+                    var templateOid = sequence.ReadObjectIdentifier();
+                    string? friendly = null;
+                    try
+                    {
+                        friendly = new Oid(templateOid).FriendlyName;
+                    }
+                    catch (Exception)
+                    {
+                        // The OS does not know this template; report the OID.
+                    }
+                    return string.IsNullOrWhiteSpace(friendly) ? templateOid : friendly!;
+                }
+                catch (Exception)
+                {
+                    return string.Empty;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// Extended key usages by friendly name, or by OID when the OS has no name for one.
+        /// </summary>
+        internal static List<string> ReadEnhancedKeyUsages(X509Certificate2 cert)
+        {
+            var usages = new List<string>();
+            foreach (var ext in cert.Extensions)
+            {
+                if (ext is not X509EnhancedKeyUsageExtension eku) continue;
+                foreach (var oid in eku.EnhancedKeyUsages)
+                {
+                    var name = string.IsNullOrWhiteSpace(oid.FriendlyName) ? oid.Value : oid.FriendlyName;
+                    if (!string.IsNullOrWhiteSpace(name) && !usages.Contains(name))
+                    {
+                        usages.Add(name);
+                    }
+                }
+            }
+            return usages;
         }
 
         private async Task ProcessBitLockerRecoveryKeyEscrowAsync(SecurityData data)
