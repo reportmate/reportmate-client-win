@@ -26,9 +26,11 @@ public sealed record UserSessionRunResult(
 /// per user, so the same command run as SYSTEM always reports AzureAdPrt NO.
 ///
 /// The runner takes the session user's primary token (WTSQueryUserToken, which
-/// LocalSystem may call) and starts the tool with CreateProcessAsUser, reading its
-/// output over a pipe. Nothing is written to disk and no scheduled task is left
-/// behind, so there is no file a user could edit for SYSTEM to read back.
+/// LocalSystem may call) and starts a fixed System32 tool with CreateProcessAsUser,
+/// reading its output over a pipe. The child inherits only the pipe's write end
+/// (PROC_THREAD_ATTRIBUTE_HANDLE_LIST), never the runner's other handles, and its output
+/// is capped. Nothing is written to disk and no scheduled task is left behind, so there
+/// is no file a user could edit for SYSTEM to read back.
 /// </remarks>
 public static class UserSessionProcess
 {
@@ -41,10 +43,15 @@ public static class UserSessionProcess
     private const int StartfUseShowWindow = 0x1;
     private const uint CreateNoWindow = 0x08000000;
     private const uint CreateUnicodeEnvironment = 0x00000400;
+    private const uint ExtendedStartupInfoPresent = 0x00080000;
+    private static readonly IntPtr ProcThreadAttributeHandleList = (IntPtr)0x00020002;
     private const uint WaitTimeout = 0x102;
     private const int ErrorNoToken = 1008;
 
     private static readonly TimeSpan DrainAfterExit = TimeSpan.FromSeconds(5);
+
+    /// <summary>Output beyond this is discarded; the tools run here print a few kilobytes.</summary>
+    public const int MaxOutputBytes = 1024 * 1024;
 
     /// <summary>True when this process runs as LocalSystem.</summary>
     public static bool IsLocalSystem()
@@ -90,13 +97,24 @@ public static class UserSessionProcess
     }
 
     /// <summary>
-    /// Runs <paramref name="commandLine"/> as the user of <paramref name="sessionId"/>.
-    /// Returns null when that session has no user token (the user signed out).
-    /// Throws <see cref="Win32Exception"/> when the process cannot be started.
+    /// Runs a tool from the System32 directory, by file name, as the user of
+    /// <paramref name="sessionId"/>. Only a SYSTEM-owned binary can be started: the path is
+    /// fixed to System32 and passed as the application name, so neither the user's PATH
+    /// nor the working directory is searched. Returns null when that session has no user
+    /// token (the user signed out). Throws <see cref="Win32Exception"/> when the process
+    /// cannot be started.
     /// </summary>
-    public static async Task<UserSessionRunResult?> RunAsync(
-        uint sessionId, string userName, string commandLine, TimeSpan timeout)
+    public static async Task<UserSessionRunResult?> RunSystemToolAsync(
+        uint sessionId, string userName, string toolFileName, string arguments, TimeSpan timeout)
     {
+        if (string.IsNullOrWhiteSpace(toolFileName) || toolFileName != Path.GetFileName(toolFileName)
+            || toolFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            throw new ArgumentException("A System32 tool is named by file name only", nameof(toolFileName));
+        var application = Path.Combine(Environment.SystemDirectory, toolFileName);
+        if (!File.Exists(application))
+            throw new FileNotFoundException("System tool not found", application);
+        var commandLine = $"\"{application}\" {arguments}";
+
         if (!WTSQueryUserToken(sessionId, out var token))
         {
             var error = Marshal.GetLastWin32Error();
@@ -107,6 +125,8 @@ public static class UserSessionProcess
 
         IntPtr environment = IntPtr.Zero;
         IntPtr readPipe = IntPtr.Zero, writePipe = IntPtr.Zero;
+        IntPtr attributeList = IntPtr.Zero, handleArray = IntPtr.Zero;
+        var attributeListReady = false;
         var processInfo = default(ProcessInformation);
         try
         {
@@ -120,21 +140,42 @@ public static class UserSessionProcess
             };
             if (!CreatePipe(out readPipe, out writePipe, ref attributes, 0))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe failed");
-            // Only the write end goes to the child.
-            SetHandleInformation(readPipe, HandleFlagInherit, 0);
+            // The parent's read end is never inheritable.
+            if (!SetHandleInformation(readPipe, HandleFlagInherit, 0))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "SetHandleInformation failed");
 
-            var startup = new StartupInfo
+            // The child crosses from SYSTEM to the user, so it must inherit exactly one
+            // handle, the pipe write end, and none of the runner's other inheritable
+            // handles. PROC_THREAD_ATTRIBUTE_HANDLE_LIST restricts inheritance to that list.
+            var listSize = IntPtr.Zero;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref listSize);
+            attributeList = Marshal.AllocHGlobal(listSize);
+            if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref listSize))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed");
+            attributeListReady = true;
+            handleArray = Marshal.AllocHGlobal(IntPtr.Size);
+            Marshal.WriteIntPtr(handleArray, writePipe);
+            if (!UpdateProcThreadAttribute(attributeList, 0, ProcThreadAttributeHandleList, handleArray,
+                    (IntPtr)IntPtr.Size, IntPtr.Zero, IntPtr.Zero))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed");
+
+            var startup = new StartupInfoEx
             {
-                Size = Marshal.SizeOf<StartupInfo>(),
-                Desktop = @"winsta0\default",
-                Flags = StartfUseStdHandles | StartfUseShowWindow,
-                ShowWindow = 0,
-                StdOutput = writePipe,
-                StdError = writePipe,
+                StartupInfo = new StartupInfo
+                {
+                    Size = Marshal.SizeOf<StartupInfoEx>(),
+                    Desktop = @"winsta0\default",
+                    Flags = StartfUseStdHandles | StartfUseShowWindow,
+                    ShowWindow = 0,
+                    StdOutput = writePipe,
+                    StdError = writePipe,
+                },
+                AttributeList = attributeList,
             };
-            var flags = CreateNoWindow | (environment != IntPtr.Zero ? CreateUnicodeEnvironment : 0);
+            var flags = CreateNoWindow | ExtendedStartupInfoPresent
+                | (environment != IntPtr.Zero ? CreateUnicodeEnvironment : 0);
             var command = new StringBuilder(commandLine);
-            if (!CreateProcessAsUser(token, null, command, IntPtr.Zero, IntPtr.Zero, true, flags,
+            if (!CreateProcessAsUser(token, application, command, IntPtr.Zero, IntPtr.Zero, true, flags,
                     environment, Environment.SystemDirectory, ref startup, out processInfo))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcessAsUser failed");
 
@@ -168,10 +209,17 @@ public static class UserSessionProcess
             if (writePipe != IntPtr.Zero) CloseHandle(writePipe);
             if (readPipe != IntPtr.Zero) CloseHandle(readPipe);
             if (environment != IntPtr.Zero) DestroyEnvironmentBlock(environment);
+            if (attributeListReady) DeleteProcThreadAttributeList(attributeList);
+            if (attributeList != IntPtr.Zero) Marshal.FreeHGlobal(attributeList);
+            if (handleArray != IntPtr.Zero) Marshal.FreeHGlobal(handleArray);
             CloseHandle(token);
         }
     }
 
+    /// <summary>
+    /// Reads the child's output up to <see cref="MaxOutputBytes"/>. Past the cap the read
+    /// stops; a child still writing then blocks and is ended by the timeout.
+    /// </summary>
     private static async Task<byte[]> ReadAllAsync(FileStream stream)
     {
         using (stream)
@@ -179,7 +227,11 @@ public static class UserSessionProcess
         {
             try
             {
-                await stream.CopyToAsync(buffer);
+                var chunk = new byte[16 * 1024];
+                int read;
+                while (buffer.Length < MaxOutputBytes
+                       && (read = await stream.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, MaxOutputBytes - buffer.Length)))) > 0)
+                    buffer.Write(chunk, 0, read);
             }
             catch (IOException)
             {
@@ -265,6 +317,13 @@ public static class UserSessionProcess
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfoEx
+    {
+        public StartupInfo StartupInfo;
+        public IntPtr AttributeList;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ProcessInformation
     {
         public IntPtr Process;
@@ -303,7 +362,17 @@ public static class UserSessionProcess
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessAsUser(IntPtr token, string? application, StringBuilder commandLine,
         IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags,
-        IntPtr environment, string? currentDirectory, ref StartupInfo startupInfo, out ProcessInformation processInformation);
+        IntPtr environment, string? currentDirectory, ref StartupInfoEx startupInfo, out ProcessInformation processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool InitializeProcThreadAttributeList(IntPtr attributeList, int attributeCount, int flags, ref IntPtr size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(IntPtr attributeList, uint flags, IntPtr attribute,
+        IntPtr value, IntPtr size, IntPtr previousValue, IntPtr returnSize);
+
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr attributeList);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);

@@ -1122,9 +1122,8 @@ namespace ReportMate.WindowsClient.Services.Modules
                     state.UserName = session.Value.UserName;
                     state.SessionId = session.Value.SessionId;
                     state.Context = "userSession";
-                    var dsregcmd = System.IO.Path.Combine(Environment.SystemDirectory, "dsregcmd.exe");
-                    var run = await UserSessionProcess.RunAsync(
-                        session.Value.SessionId, session.Value.UserName, $"\"{dsregcmd}\" /status", TimeSpan.FromSeconds(60));
+                    var run = await UserSessionProcess.RunSystemToolAsync(
+                        session.Value.SessionId, session.Value.UserName, "dsregcmd.exe", "/status", TimeSpan.FromSeconds(60));
                     if (run == null)
                     {
                         state.Status = "notAvailable";
