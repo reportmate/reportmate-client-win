@@ -15,12 +15,23 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<SystemUpdate> Updates { get; set; } = new();
         public List<PendingWindowsUpdate> PendingWindowsUpdates { get; set; } = new();
         public int PendingWindowsUpdatesCount { get; set; }
+        // Outcome of the Windows Update search behind PendingWindowsUpdates. An empty
+        // pending list means "nothing pending" only when this says the search succeeded.
+        public UpdateSearchInfo? UpdateSearch { get; set; }
         public List<SystemService> Services { get; set; } = new();
         public List<EnvironmentVariable> Environment { get; set; } = new();
         public List<ScheduledTask> ScheduledTasks { get; set; } = new();
         public DateTime? LastBootTime { get; set; }
         public TimeSpan? Uptime { get; set; }
         public string UptimeString { get; set; } = string.Empty;
+    }
+
+    public class UpdateSearchInfo
+    {
+        // "succeeded" or "failed"
+        public string Status { get; set; } = "failed";
+        public string? Error { get; set; }
+        public DateTime? CheckedAt { get; set; }
     }
 
     public class OperatingSystemInfo

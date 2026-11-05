@@ -17,6 +17,9 @@ namespace ReportMate.WindowsClient.Models.Modules
         public List<SessionHistoryEntry> SessionHistory { get; set; } = new();
         public DirectoryServicesInfo DirectoryServices { get; set; } = new();
         public SsoState SsoState { get; set; } = new();
+        // SSO State as the signed-in user sees it. SsoState above is read as SYSTEM,
+        // which has no primary refresh token, so it reports no PRT on every device.
+        public UserSsoState UserSsoState { get; set; } = new();
         public DomainTrust DomainTrust { get; set; } = new();
         public WindowsHelloInfo WindowsHello { get; set; } = new();
         // Sign-in / access posture. These were previously collected by the Security
@@ -47,10 +50,43 @@ namespace ReportMate.WindowsClient.Models.Modules
     /// </summary>
     public class LapsInfo
     {
-        public bool WindowsLapsConfigured { get; set; } // Windows LAPS (built-in, Win11+)
-        public bool LegacyLapsInstalled { get; set; }   // Legacy Microsoft LAPS msi
-        public string BackupDirectory { get; set; } = string.Empty; // "Active Directory" / "Azure AD" / ""
+        public bool WindowsLapsConfigured { get; set; } // Windows LAPS backs up a password (any policy root)
+        public bool LegacyLapsInstalled { get; set; }   // Legacy Microsoft LAPS: policy enabled or client extension installed
+        public string BackupDirectory { get; set; } = string.Empty; // "Active Directory" / "Azure AD" / "Disabled" / ""
         public string AdminAccountName { get; set; } = string.Empty;
+        // Where the policy in force comes from: "csp" (MDM), "gpo" (Windows LAPS Group
+        // Policy), "local" (local configuration), "legacyGpo" (legacy AdmPwd policy), or "none".
+        public string PolicySource { get; set; } = string.Empty;
+        public bool? LegacyPolicyEnabled { get; set; }
+        public bool? LegacyClientInstalled { get; set; }
+        // Last successful Windows LAPS password backup, from the LAPS event log.
+        public DateTime? LastPasswordRotation { get; set; }
+        public string? LastPasswordRotationDirectory { get; set; }
+    }
+
+    /// <summary>
+    /// Entra and Kerberos SSO state for the signed-in user (dsregcmd /status, "SSO State"),
+    /// collected in that user's logon session.
+    /// </summary>
+    public class UserSsoState
+    {
+        // "collected", "notAvailable" (no user signed in) or "failed"
+        public string Status { get; set; } = "failed";
+        public string? Reason { get; set; }
+        // Account the state was collected for, as DOMAIN\user
+        public string? UserName { get; set; }
+        public uint? SessionId { get; set; }
+        // "userSession" when run as the session user from SYSTEM, "currentProcess" when the
+        // runner itself was started by that user.
+        public string? Context { get; set; }
+        public DateTime? CollectedAt { get; set; }
+        public bool? EntraPrt { get; set; }
+        public DateTime? EntraPrtUpdateTime { get; set; }
+        public DateTime? EntraPrtExpiryTime { get; set; }
+        public string? EntraPrtAuthority { get; set; }
+        public bool? EnterprisePrt { get; set; }
+        public bool? CloudTgt { get; set; }
+        public bool? OnPremTgt { get; set; }
     }
 
     /// <summary>
