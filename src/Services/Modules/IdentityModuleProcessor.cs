@@ -62,6 +62,9 @@ namespace ReportMate.WindowsClient.Services.Modules
             // Process directory services, SSO state, and device identity from dsregcmd
             await ProcessDirectoryServices(data);
 
+            // Entra PRT and Kerberos tickets as the signed-in user holds them
+            await ProcessUserSsoState(data);
+
             // Process domain trust relationship
             await ProcessDomainTrust(data);
 
@@ -1088,6 +1091,73 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
         }
 
+        /// <summary>
+        /// SSO State (PRT, cloud and on-prem TGT) as the signed-in user sees it. The runner
+        /// normally runs as SYSTEM, which holds no PRT, so dsregcmd is run in the user's
+        /// session. With nobody signed in the state is "notAvailable", never false.
+        /// </summary>
+        private async Task ProcessUserSsoState(IdentityData data)
+        {
+            var state = data.UserSsoState;
+            state.CollectedAt = DateTime.UtcNow;
+            try
+            {
+                string? output;
+                if (!UserSessionProcess.IsLocalSystem())
+                {
+                    using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+                    state.UserName = identity.Name;
+                    state.Context = "currentProcess";
+                    output = await _wmiHelperService.ExecutePowerShellCommandAsync("dsregcmd /status");
+                }
+                else
+                {
+                    var session = UserSessionProcess.FindSignedInSession();
+                    if (session == null)
+                    {
+                        state.Status = "notAvailable";
+                        state.Reason = "No user is signed in";
+                        return;
+                    }
+                    state.UserName = session.Value.UserName;
+                    state.SessionId = session.Value.SessionId;
+                    state.Context = "userSession";
+                    var dsregcmd = System.IO.Path.Combine(Environment.SystemDirectory, "dsregcmd.exe");
+                    var run = await UserSessionProcess.RunAsync(
+                        session.Value.SessionId, session.Value.UserName, $"\"{dsregcmd}\" /status", TimeSpan.FromSeconds(60));
+                    if (run == null)
+                    {
+                        state.Status = "notAvailable";
+                        state.Reason = "The signed-in session has no user token";
+                        return;
+                    }
+                    if (run.TimedOut)
+                    {
+                        state.Status = "failed";
+                        state.Reason = "dsregcmd did not finish within 60 seconds";
+                        return;
+                    }
+                    output = run.Output;
+                }
+
+                if (string.IsNullOrWhiteSpace(output) || !DsregStatus.ReadSsoState(output, state))
+                {
+                    state.Status = "failed";
+                    state.Reason = "dsregcmd reported no SSO State";
+                    return;
+                }
+                state.Status = "collected";
+                _logger.LogInformation("User SSO state: Prt={Prt} CloudTgt={CloudTgt} OnPremTgt={OnPremTgt} Expires={Expiry}",
+                    state.EntraPrt, state.CloudTgt, state.OnPremTgt, state.EntraPrtExpiryTime);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "User SSO state collection failed");
+                state.Status = "failed";
+                state.Reason = ex.Message;
+            }
+        }
+
         private async Task ProcessDomainTrust(IdentityData data)
         {
             if (!data.DirectoryServices.ActiveDirectory.IsDomainJoined)
@@ -1819,42 +1889,84 @@ if ($null -ne $lua) {
         }
 
         /// <summary>
-        /// Windows LAPS / legacy LAPS configuration state.
+        /// Windows LAPS / legacy LAPS configuration state, and which policy root it comes from.
+        /// Windows LAPS reads its policy from the first root that sets BackupDirectory, in
+        /// this order: the LAPS CSP (MDM), Windows LAPS Group Policy, local configuration.
+        /// Legacy Microsoft LAPS has its own Group Policy key and client-side extension.
         /// </summary>
         private async Task ProcessLapsState(IdentityData data)
         {
             try
             {
                 const string script = @"
-$winLaps = $false; $legacyLaps = $false; $backupDir = ''; $adminName = ''
-# Windows LAPS (built-in, Win11+ / Server 2022+)
+function Read-Root($path) {
+    try {
+        $p = Get-ItemProperty $path -ErrorAction Stop
+        if ($null -ne $p.BackupDirectory) {
+            return @{ backup = [int]$p.BackupDirectory; admin = [string]$p.AdministratorAccountName }
+        }
+    } catch {}
+    return $null
+}
+$source = 'none'; $backup = $null; $admin = ''
+foreach ($root in @(
+    @('csp',   'HKLM:\SOFTWARE\Microsoft\Policies\LAPS'),
+    @('gpo',   'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\LAPS'),
+    @('local', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\Config'))) {
+    $r = Read-Root $root[1]
+    if ($r) { $source = $root[0]; $backup = $r.backup; $admin = $r.admin; break }
+}
+$legacyPolicy = $false
 try {
-    $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Policies\LAPS' -ErrorAction Stop
-    $winLaps = $true
-    switch ([int]$p.BackupDirectory) {
-        1 { $backupDir = 'Active Directory' }
-        2 { $backupDir = 'Azure AD' }
-        default { $backupDir = 'Configured' }
-    }
-    if ($p.AdministratorAccountName) { $adminName = [string]$p.AdministratorAccountName }
+    $l = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft Services\AdmPwd' -ErrorAction Stop
+    $legacyPolicy = ([int]$l.AdmPwdEnabled -eq 1)
+    if ($legacyPolicy -and $source -eq 'none') { $source = 'legacyGpo'; if ($l.AdminAccountName) { $admin = [string]$l.AdminAccountName } }
 } catch {}
-# Legacy LAPS (msi)
-try {
-    $p2 = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft Services\AdmPwd' -ErrorAction Stop
-    if ($p2) { $legacyLaps = $true }
-} catch {}
-@{ winLaps = [bool]$winLaps; legacyLaps = [bool]$legacyLaps; backupDir = $backupDir; adminName = $adminName } | ConvertTo-Json -Compress
+$legacyCse = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\GPExtensions\{D76B9641-3288-4f75-942D-087DE603E3EA}'
+$rotated = $null; $rotatedTo = $null
+if ($backup -eq 1 -or $backup -eq 2) {
+    try {
+        $e = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-LAPS/Operational'; Id = 10018, 10020 } -MaxEvents 1 -ErrorAction Stop
+        if ($e) {
+            $rotated = $e.TimeCreated.ToUniversalTime().ToString('o')
+            $rotatedTo = if ($e.Id -eq 10018) { 'Azure AD' } else { 'Active Directory' }
+        }
+    } catch {}
+}
+@{ source = $source; backup = $backup; admin = $admin; legacyPolicy = [bool]$legacyPolicy; legacyCse = [bool]$legacyCse; rotated = $rotated; rotatedTo = $rotatedTo } | ConvertTo-Json -Compress
 ";
                 var result = await _wmiHelperService.ExecutePowerShellCommandAsync(script);
                 if (string.IsNullOrWhiteSpace(result)) return;
                 using var doc = JsonDocument.Parse(result);
                 var root = doc.RootElement;
-                data.Laps.WindowsLapsConfigured = ParseNullableBool(root, "winLaps") == true;
-                data.Laps.LegacyLapsInstalled = ParseNullableBool(root, "legacyLaps") == true;
-                data.Laps.BackupDirectory = GetJsonStringValue(root, "backupDir");
-                data.Laps.AdminAccountName = GetJsonStringValue(root, "adminName");
-                _logger.LogInformation("LAPS: Windows={Win} Legacy={Legacy} Backup={Backup}",
-                    data.Laps.WindowsLapsConfigured, data.Laps.LegacyLapsInstalled, data.Laps.BackupDirectory);
+                var source = GetJsonStringValue(root, "source");
+                var backup = ParseNullableInt(root, "backup");
+                var legacyPolicy = ParseNullableBool(root, "legacyPolicy");
+                var legacyCse = ParseNullableBool(root, "legacyCse");
+                data.Laps.PolicySource = string.IsNullOrEmpty(source) ? "none" : source;
+                data.Laps.WindowsLapsConfigured = backup is 1 or 2;
+                data.Laps.BackupDirectory = backup switch
+                {
+                    1 => "Azure AD",
+                    2 => "Active Directory",
+                    0 => "Disabled",
+                    null => legacyPolicy == true ? "Active Directory" : string.Empty,
+                    _ => "Configured",
+                };
+                data.Laps.AdminAccountName = GetJsonStringValue(root, "admin");
+                data.Laps.LegacyPolicyEnabled = legacyPolicy;
+                data.Laps.LegacyClientInstalled = legacyCse;
+                data.Laps.LegacyLapsInstalled = legacyPolicy == true || legacyCse == true;
+                var rotated = GetJsonStringValue(root, "rotated");
+                if (DateTime.TryParse(rotated, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal, out var rotatedAt))
+                {
+                    data.Laps.LastPasswordRotation = DateTime.SpecifyKind(rotatedAt, DateTimeKind.Utc);
+                    var rotatedTo = GetJsonStringValue(root, "rotatedTo");
+                    data.Laps.LastPasswordRotationDirectory = string.IsNullOrEmpty(rotatedTo) ? null : rotatedTo;
+                }
+                _logger.LogInformation("LAPS: Source={Source} Windows={Win} Legacy={Legacy} Backup={Backup} LastRotation={Rotation}",
+                    data.Laps.PolicySource, data.Laps.WindowsLapsConfigured, data.Laps.LegacyLapsInstalled,
+                    data.Laps.BackupDirectory, data.Laps.LastPasswordRotation);
             }
             catch (Exception ex)
             {
@@ -1891,13 +2003,47 @@ try {
                     else if (key.StartsWith("lockout threshold")) data.PasswordPolicy.LockoutThreshold = TryParsePolicyInt(val);
                     else if (key.StartsWith("lockout duration")) data.PasswordPolicy.LockoutDurationMinutes = TryParsePolicyInt(val);
                 }
-                _logger.LogInformation("Password policy: minLen={Min} maxAge={Age} lockout={Lock}",
-                    data.PasswordPolicy.MinPasswordLength, data.PasswordPolicy.MaxPasswordAgeDays, data.PasswordPolicy.LockoutThreshold);
+                data.PasswordPolicy.ComplexityRequired = await ReadPasswordComplexity();
+                _logger.LogInformation("Password policy: minLen={Min} maxAge={Age} lockout={Lock} complexity={Complexity}",
+                    data.PasswordPolicy.MinPasswordLength, data.PasswordPolicy.MaxPasswordAgeDays, data.PasswordPolicy.LockoutThreshold,
+                    data.PasswordPolicy.ComplexityRequired);
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Password policy collection failed");
                 data.PasswordPolicy.ErrorMessage = ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// "Password must meet complexity requirements", which net accounts does not print.
+        /// Read from the effective local security policy (secedit), which includes any
+        /// domain policy applied to the device. Null when it cannot be read.
+        /// </summary>
+        private async Task<bool?> ReadPasswordComplexity()
+        {
+            try
+            {
+                const string script = @"
+$f = [IO.Path]::GetTempFileName()
+try {
+    secedit.exe /export /cfg $f /areas SECURITYPOLICY /quiet | Out-Null
+    $m = Select-String -Path $f -Pattern '^\s*PasswordComplexity\s*=\s*(\d+)' | Select-Object -First 1
+    if ($m) { $m.Matches[0].Groups[1].Value }
+} finally { Remove-Item $f -Force -ErrorAction SilentlyContinue }
+";
+                var result = (await _wmiHelperService.ExecutePowerShellCommandAsync(script))?.Trim();
+                return result switch
+                {
+                    "1" => true,
+                    "0" => false,
+                    _ => null,
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Password complexity read failed");
+                return null;
             }
         }
 

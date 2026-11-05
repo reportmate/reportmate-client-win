@@ -496,14 +496,18 @@ namespace ReportMate.WindowsClient.Services.Modules
             }
 
             // Collect pending Windows Updates via Windows Update Agent API
+            var searchStarted = DateTime.UtcNow;
             try
             {
-                await CollectPendingWindowsUpdatesAsync(data);
+                await CollectPendingWindowsUpdatesAsync(data, searchStarted);
                 _logger.LogDebug("Pending Windows Updates: {Count}", data.PendingWindowsUpdatesCount);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to collect pending Windows Updates");
+                data.PendingWindowsUpdates.Clear();
+                data.PendingWindowsUpdatesCount = 0;
+                data.UpdateSearch = new UpdateSearchInfo { Status = "failed", Error = ex.Message, CheckedAt = searchStarted };
             }
 
             _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}, Activation: {Activation}, Services: {ServiceCount}, ScheduledTasks: {TaskCount}, PendingUpdates: {PendingCount}", 
@@ -568,7 +572,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         /// Collects pending (not yet installed) Windows Updates using the Windows Update Agent COM API.
         /// This queries ALL pending updates, not just security updates.
         /// </summary>
-        private async Task CollectPendingWindowsUpdatesAsync(SystemData data)
+        private async Task CollectPendingWindowsUpdatesAsync(SystemData data, DateTime searchStarted)
         {
             var script = @"
                 try {
@@ -631,20 +635,32 @@ namespace ReportMate.WindowsClient.Services.Modules
                     @{
                         PendingCount = $SearchResult.Updates.Count
                         Updates = @($updates)
+                        ResultCode = [int]$SearchResult.ResultCode
                     } | ConvertTo-Json -Depth 4
                 } catch {
-                    @{ PendingCount = 0; Updates = @(); Error = $_.Exception.Message } | ConvertTo-Json
+                    $hr = ''
+                    if ($_.Exception.HResult) { $hr = ' (0x{0:X8})' -f $_.Exception.HResult }
+                    @{ PendingCount = 0; Updates = @(); Error = ($_.Exception.Message + $hr) } | ConvertTo-Json
                 }
             ";
 
             var result = await PowerShellRunner.ExecuteAsync(script, _logger);
+            var failed = new UpdateSearchInfo { Status = "failed", CheckedAt = searchStarted };
             if (string.IsNullOrEmpty(result))
+            {
+                failed.Error = "The update search returned no output or did not finish";
+                data.UpdateSearch = failed;
                 return;
+            }
 
             var trimmed = result.Trim();
             var jsonStart = trimmed.IndexOf('{');
             if (jsonStart < 0)
+            {
+                failed.Error = "The update search returned unreadable output";
+                data.UpdateSearch = failed;
                 return;
+            }
 
             var jsonContent = trimmed.Substring(jsonStart);
             using var doc = JsonDocument.Parse(jsonContent);
@@ -692,10 +708,43 @@ namespace ReportMate.WindowsClient.Services.Modules
                 }
             }
 
+            data.UpdateSearch = UpdateSearchOutcome(root, searchStarted);
+            if (data.UpdateSearch.Status != "succeeded")
+            {
+                _logger.LogWarning("Windows Update search failed: {Error}", data.UpdateSearch.Error);
+            }
+        }
+
+        /// <summary>
+        /// Whether the Windows Update search behind the pending list succeeded. The search
+        /// result codes are 2 (succeeded) and 3 (succeeded with errors); anything else, or an
+        /// exception from the agent, is a failed search whose empty list proves nothing.
+        /// </summary>
+        internal static UpdateSearchInfo UpdateSearchOutcome(JsonElement root, DateTime checkedAt)
+        {
+            var outcome = new UpdateSearchInfo { Status = "failed", CheckedAt = checkedAt };
             if (root.TryGetProperty("Error", out var errProp) && errProp.ValueKind == JsonValueKind.String)
             {
-                _logger.LogWarning("Windows Update search returned error: {Error}", errProp.GetString());
+                outcome.Error = errProp.GetString();
+                return outcome;
             }
+            if (!root.TryGetProperty("ResultCode", out var codeProp) || !codeProp.TryGetInt32(out var code))
+            {
+                outcome.Error = "The update search reported no result code";
+                return outcome;
+            }
+            if (code is 2 or 3)
+            {
+                outcome.Status = "succeeded";
+                return outcome;
+            }
+            outcome.Error = code switch
+            {
+                4 => "The update search failed (result code 4)",
+                5 => "The update search was aborted (result code 5)",
+                _ => $"The update search did not complete (result code {code})",
+            };
+            return outcome;
         }
 
         /// <summary>
