@@ -24,6 +24,28 @@ namespace ReportMate.WindowsClient.Models.Modules
         public DateTime? LastBootTime { get; set; }
         public TimeSpan? Uptime { get; set; }
         public string UptimeString { get; set; } = string.Empty;
+        public List<SystemBinary> Binaries { get; set; } = new();
+    }
+
+    /// <summary>
+    /// A versioned system binary such as a web server, language runtime or TLS library.
+    /// Optional values are left out when they are not known rather than guessed.
+    /// </summary>
+    public class SystemBinary
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty; // server, database, library, runtime, tool
+        public string Path { get; set; } = string.Empty;
+        public string Source { get; set; } = "unknown"; // os, package, chocolatey, unknown
+        public string? Package { get; set; }
+        public string? PackageVersion { get; set; }
+        public string? Publisher { get; set; }
+        public string? Version { get; set; }
+        public string? VersionString { get; set; }
+        public string? VersionSource { get; set; } // fileVersion, or null when the file carries none
+        public bool? Running { get; set; }
+        public int? ProcessCount { get; set; }
+        public string? ServiceName { get; set; }
     }
 
     public class UpdateSearchInfo

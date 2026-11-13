@@ -510,6 +510,16 @@ namespace ReportMate.WindowsClient.Services.Modules
                 data.UpdateSearch = new UpdateSearchInfo { Status = "failed", Error = ex.Message, CheckedAt = searchStarted };
             }
 
+            try
+            {
+                data.Binaries = SystemBinaryInventory.Collect(data.Services, _logger);
+                _logger.LogDebug("System binaries: {Count}", data.Binaries.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to collect system binaries");
+            }
+
             _logger.LogInformation("System module processed - OS: {OS} {Version}, Edition: {Edition}, DisplayVersion: {DisplayVersion}, Locale: {Locale}, TimeZone: {TimeZone}, Uptime: {Uptime}, Activation: {Activation}, Services: {ServiceCount}, ScheduledTasks: {TaskCount}, PendingUpdates: {PendingCount}", 
                 data.OperatingSystem.Name, data.OperatingSystem.Version, data.OperatingSystem.Edition, 
                 data.OperatingSystem.DisplayVersion, data.OperatingSystem.Locale, data.OperatingSystem.TimeZone, 
