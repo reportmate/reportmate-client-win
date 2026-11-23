@@ -42,6 +42,8 @@ namespace ReportMate.WindowsClient.Models.Modules
         public string ServerLocation { get; set; } = string.Empty;
         public string Error { get; set; } = string.Empty;
         public string Source { get; set; } = "speedtest";
+        /// <summary>When this result was measured; Speedtest runs at most once a day.</summary>
+        public string MeasuredAt { get; set; } = string.Empty;
     }
 
     public class ActiveConnectionInfo
