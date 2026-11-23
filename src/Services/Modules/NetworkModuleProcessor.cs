@@ -2677,8 +2677,9 @@ try {
             {
                 NetworkQualitySchedule.Save(NetworkQualityStatePath, state);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex)
             {
+                // The schedule is an optimisation; failing to store it must not lose the network module.
                 _logger.LogWarning(ex, "Could not save the Speedtest schedule");
             }
         }

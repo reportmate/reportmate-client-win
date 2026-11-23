@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Models.Modules;
 using ReportMate.WindowsClient.Services;
+using ReportMate.WindowsClient.Services.Modules;
 using ReportMate.WindowsClient.DataProcessing;
 
 namespace ReportMate.WindowsClient.Models;
@@ -82,6 +83,7 @@ namespace ReportMate.WindowsClient.Models;
 [JsonSerializable(typeof(List<Modules.CimianEvent>))]
 [JsonSerializable(typeof(ManagementData), TypeInfoPropertyName = "ModularManagementData")]
 [JsonSerializable(typeof(NetworkData), TypeInfoPropertyName = "ModularNetworkData")]
+[JsonSerializable(typeof(NetworkQualityState))]
 [JsonSerializable(typeof(PeripheralsModuleData))]
 [JsonSerializable(typeof(PrinterData))]
 [JsonSerializable(typeof(ProfilesData))]
