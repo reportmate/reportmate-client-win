@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using ReportMate.WindowsClient.Models;
 using ReportMate.WindowsClient.Models.Modules;
 
 namespace ReportMate.WindowsClient.Services.Modules
@@ -43,7 +44,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             try
             {
                 return File.Exists(path)
-                    ? JsonSerializer.Deserialize<NetworkQualityState>(File.ReadAllText(path))
+                    ? JsonSerializer.Deserialize(File.ReadAllText(path), ReportMateJsonContext.Default.NetworkQualityState)
                     : null;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -56,7 +57,7 @@ namespace ReportMate.WindowsClient.Services.Modules
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var temp = path + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(state));
+            File.WriteAllText(temp, JsonSerializer.Serialize(state, ReportMateJsonContext.Default.NetworkQualityState));
             File.Move(temp, path, overwrite: true);
         }
 

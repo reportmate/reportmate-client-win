@@ -49,6 +49,13 @@ namespace ReportMate.WindowsClient.Tests
             Directory.Delete(Path.GetDirectoryName(path)!, recursive: true);
         }
 
+        [Fact]
+        public void StateUsesTheSourceGeneratedContext()
+        {
+            // Release builds disable reflection-based JSON, so this type must be in the context.
+            Assert.NotNull(ReportMate.WindowsClient.Models.ReportMateJsonContext.Default.NetworkQualityState);
+        }
+
         [Theory]
         [InlineData("[error] Limit reached: too many requests", true)]
         [InlineData("[error] Cannot open socket", false)]
