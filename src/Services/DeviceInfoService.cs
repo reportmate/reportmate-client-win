@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
 using System.Text.Json;
+using ReportMate.WindowsClient.Services.Modules;
+using ReportMate.WindowsClient.Models;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -126,6 +128,12 @@ namespace ReportMate.WindowsClient.Services
                     var simpleQueries = new Dictionary<string, string>();
                     foreach (var kvp in queriesDict)
                     {
+                        // The recursive storage scans belong to the daily hardware analysis.
+                        if (StorageQueryPolicy.IsDeepQuery(kvp.Key))
+                        {
+                            continue;
+                        }
+
                         if (kvp.Value is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Object)
                         {
                             if (jsonElement.TryGetProperty("query", out var queryElement))
@@ -139,7 +147,7 @@ namespace ReportMate.WindowsClient.Services
                         }
                     }
 
-                    await File.WriteAllTextAsync(tempFile, JsonSerializer.Serialize(simpleQueries, new JsonSerializerOptions { WriteIndented = true }));
+                    await File.WriteAllTextAsync(tempFile, JsonSerializer.Serialize(simpleQueries, ReportMateJsonContext.Default.DictionaryStringString));
 
                     // Execute all queries using existing method
                     osqueryData = await _osQueryService.ExecuteQueriesFromFileAsync(tempFile);
