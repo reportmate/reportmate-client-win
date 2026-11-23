@@ -147,6 +147,10 @@ namespace ReportMate.WindowsClient.Services
                         // Log completion with checkmark
                         _logger.LogInformation("✓ Module {ModuleId} completed", processor.ModuleId);
                     }
+                    catch (ModuleSkippedException ex)
+                    {
+                        _logger.LogInformation("Module {ModuleId} skipped: {Reason}", processor.ModuleId, ex.Message);
+                    }
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error processing module {ModuleId}", processor.ModuleId);

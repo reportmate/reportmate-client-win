@@ -232,6 +232,10 @@ namespace ReportMate.WindowsClient.Services
                 
                 return (BaseModuleData)result!;
             }
+            catch (ModuleSkippedException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 throw new InvalidOperationException($"Error invoking ProcessModuleAsync on {_processorType.Name}", ex);
