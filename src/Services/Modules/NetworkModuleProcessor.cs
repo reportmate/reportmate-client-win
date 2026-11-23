@@ -78,7 +78,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             CollectNetbiosInformation(data, osqueryResults);
 
             // Collect network quality via Speedtest CLI
-            await CollectNetworkQualityAsync(data);
+            await CollectNetworkQualityAsync(data, deviceId);
 
             // Set primary interface based on active connection
             if (!string.IsNullOrEmpty(data.ActiveConnection.InterfaceName))
@@ -2644,7 +2644,46 @@ try {
         /// <summary>
         /// Collect network quality metrics using bundled Speedtest CLI
         /// </summary>
-        private async Task CollectNetworkQualityAsync(NetworkData data)
+        private async Task CollectNetworkQualityAsync(NetworkData data, string deviceId)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var state = NetworkQualitySchedule.Load(NetworkQualityStatePath)
+                ?? NetworkQualitySchedule.Initial(now, deviceId);
+            if (!NetworkQualitySchedule.IsDue(state, now))
+            {
+                data.NetworkQuality = state.LastResult;
+                SaveNetworkQualityState(state);
+                _logger.LogDebug("Speedtest not due until {NextDue}", state.NextDue);
+                return;
+            }
+
+            await MeasureNetworkQualityAsync(data, state);
+            state.NextDue = now + NetworkQualitySchedule.Interval;
+            if (data.NetworkQuality != null && string.IsNullOrEmpty(data.NetworkQuality.Error))
+            {
+                data.NetworkQuality.MeasuredAt = now.ToString("o");
+                state.LastResult = data.NetworkQuality;
+            }
+            SaveNetworkQualityState(state);
+        }
+
+        private static string NetworkQualityStatePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "ManagedReports", "cache", "network-quality-state.json");
+
+        private void SaveNetworkQualityState(NetworkQualityState state)
+        {
+            try
+            {
+                NetworkQualitySchedule.Save(NetworkQualityStatePath, state);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Could not save the Speedtest schedule");
+            }
+        }
+
+        private async Task MeasureNetworkQualityAsync(NetworkData data, NetworkQualityState state)
         {
             try
             {
@@ -2688,6 +2727,13 @@ try {
 
                 var output = await outputTask;
                 var error = await errorTask;
+
+                if (process.ExitCode != 0 && NetworkQualitySchedule.IsRateLimited(error))
+                {
+                    _logger.LogInformation("Speedtest rate limit reached; keeping the last measurement until the next daily attempt");
+                    data.NetworkQuality = state.LastResult;
+                    return;
+                }
 
                 if (process.ExitCode != 0)
                 {
