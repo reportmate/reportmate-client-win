@@ -263,11 +263,6 @@
       "interval": 14400,
       "description": "Windows directory analysis with accurate recursive size calculation (dirs > 1MB)"
     },
-    "storage_other_directories_analysis": {
-      "query": "SELECT 'C:\\Autodesk' as path, 'Autodesk' as filename, 12540000000 as size, 'directory' as type, 'C:\\' as directory, 1 as depth;",
-      "interval": 14400,
-      "description": "Other directories test - single hardcoded Autodesk directory"
-    },
     "storage_large_files": {
       "query": "SELECT path, filename, size, directory, mtime as last_modified FROM file WHERE path LIKE 'C:\\%' AND type = 'regular' AND size > 1073741824 AND path NOT LIKE '%hiberfil.sys%' AND path NOT LIKE '%pagefile.sys%' AND path NOT LIKE '%swapfile.sys%' ORDER BY size DESC LIMIT 50;",
       "interval": 14400,
