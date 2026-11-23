@@ -781,11 +781,20 @@ namespace ReportMate.WindowsClient.Services
             {
                 var results = new Dictionary<string, List<Dictionary<string, object>>>();
                 var current = 0;
+                var runDeepStorage = StorageQueryPolicy.ShouldRunDeepQueries(
+                    Program.CurrentStorageMode, StorageQueryPolicy.LastAnalysisTime(), DateTime.UtcNow);
                 
                 foreach (var kvp in modularQueries)
                 {
                     current++;
                     string? queryString = null;
+
+                    var isDeepStorageQuery = StorageQueryPolicy.IsDeepQuery(kvp.Key);
+                    if (isDeepStorageQuery && !runDeepStorage)
+                    {
+                        results[kvp.Key] = new List<Dictionary<string, object>>();
+                        continue;
+                    }
                     
                     try
                     {
@@ -811,7 +820,8 @@ namespace ReportMate.WindowsClient.Services
                         // Show progress with cool progress bar for osquery execution
                         ConsoleFormatter.WriteQueryProgress(kvp.Key, current, modularQueries.Count);
                         
-                        var queryResult = await _osQueryService.ExecuteQueryAsync(queryString);
+                        var queryResult = await _osQueryService.ExecuteQueryAsync(
+                            queryString, isDeepStorageQuery ? StorageQueryPolicy.DeepQueryTimeout : null);
                         
                         if (queryResult != null && queryResult.Count > 0)
                         {
