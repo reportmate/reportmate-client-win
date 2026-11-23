@@ -130,8 +130,7 @@ namespace ReportMate.WindowsClient.Services.Modules
             if (!BypassRunningCheck && IsManagedSoftwareUpdateRunning())
             {
                 var msg = "Cimian managedsoftwareupdate is currently running. Skipping Installs module collection to avoid race conditions.";
-                _logger.LogWarning(msg);
-                throw new InvalidOperationException(msg);
+                throw new ModuleSkippedException(msg);
             }
 
             _logger.LogDebug("Processing Installs module for device {DeviceId}", deviceId);
